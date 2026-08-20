@@ -4,12 +4,33 @@ from decimal import Decimal
 from enum import Enum
 from typing import Optional
 
-from sqlalchemy import Column, DateTime, Numeric, Text, UniqueConstraint
+from sqlalchemy import Column, Numeric, Text, UniqueConstraint
+from sqlalchemy.types import TypeDecorator
 from sqlmodel import Field, SQLModel
 
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+class UTCDateTime(TypeDecorator[datetime]):
+    impl = Text
+    cache_ok = True
+
+    def process_bind_param(self, value: datetime | None, dialect: object) -> str | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc).isoformat()
+
+    def process_result_value(self, value: str | None, dialect: object) -> datetime | None:
+        if value is None:
+            return None
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed
 
 
 class DocType(str, Enum):
@@ -29,7 +50,7 @@ class Ticker(SQLModel, table=True):
     active: bool = Field(default=True)
     added_at: datetime = Field(
         default_factory=utcnow,
-        sa_column=Column(DateTime(timezone=True), nullable=False),
+        sa_column=Column(UTCDateTime(), nullable=False),
     )
 
 
@@ -46,10 +67,10 @@ class RawDocument(SQLModel, table=True):
     url: Optional[str] = None
     title: Optional[str] = None
     raw_text: str = Field(sa_column=Column(Text, nullable=False))
-    published_at: datetime = Field(sa_column=Column(DateTime(timezone=True), nullable=False))
+    published_at: datetime = Field(sa_column=Column(UTCDateTime(), nullable=False))
     ingested_at: datetime = Field(
         default_factory=utcnow,
-        sa_column=Column(DateTime(timezone=True), nullable=False),
+        sa_column=Column(UTCDateTime(), nullable=False),
     )
 
 
