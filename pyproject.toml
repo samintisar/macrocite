@@ -15,6 +15,9 @@ dependencies = [
   "pydantic-settings>=2.6",
 ]
 
+[project.scripts]
+signalbench = "signalbench.cli:app"
+
 [dependency-groups]
 dev = [
   "pytest>=8.3",
