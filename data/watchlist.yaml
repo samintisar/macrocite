@@ -1,0 +1,21 @@
+tickers:
+  - {symbol: AAPL, company_name: Apple Inc.}
+  - {symbol: MSFT, company_name: Microsoft Corporation}
+  - {symbol: GOOGL, company_name: Alphabet Inc. Class A}
+  - {symbol: AMZN, company_name: Amazon.com Inc.}
+  - {symbol: NVDA, company_name: NVIDIA Corporation}
+  - {symbol: META, company_name: Meta Platforms Inc.}
+  - {symbol: TSLA, company_name: Tesla Inc.}
+  - {symbol: JPM, company_name: JPMorgan Chase & Co.}
+  - {symbol: V, company_name: Visa Inc.}
+  - {symbol: UNH, company_name: UnitedHealth Group Inc.}
+  - {symbol: XOM, company_name: Exxon Mobil Corporation}
+  - {symbol: JNJ, company_name: Johnson & Johnson}
+  - {symbol: WMT, company_name: Walmart Inc.}
+  - {symbol: PG, company_name: Procter & Gamble Company}
+  - {symbol: MA, company_name: Mastercard Inc.}
+  - {symbol: HD, company_name: Home Depot Inc.}
+  - {symbol: COST, company_name: Costco Wholesale Corporation}
+  - {symbol: AVGO, company_name: Broadcom Inc.}
+  - {symbol: LLY, company_name: Eli Lilly and Company}
+  - {symbol: NFLX, company_name: Netflix Inc.}
