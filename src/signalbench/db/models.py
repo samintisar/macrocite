@@ -4,7 +4,7 @@ from decimal import Decimal
 from enum import Enum
 from typing import Optional
 
-from sqlalchemy import Column, Numeric, Text, UniqueConstraint
+from sqlalchemy import Column, DateTime, Numeric, Text, UniqueConstraint
 from sqlalchemy.types import TypeDecorator
 from sqlmodel import Field, SQLModel
 
@@ -50,7 +50,7 @@ class Ticker(SQLModel, table=True):
     active: bool = Field(default=True)
     added_at: datetime = Field(
         default_factory=utcnow,
-        sa_column=Column(UTCDateTime(), nullable=False),
+        sa_column=Column(DateTime(timezone=True), nullable=False),
     )
 
 
@@ -70,7 +70,7 @@ class RawDocument(SQLModel, table=True):
     published_at: datetime = Field(sa_column=Column(UTCDateTime(), nullable=False))
     ingested_at: datetime = Field(
         default_factory=utcnow,
-        sa_column=Column(UTCDateTime(), nullable=False),
+        sa_column=Column(DateTime(timezone=True), nullable=False),
     )
 
 
