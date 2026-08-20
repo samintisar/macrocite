@@ -1,5 +1,6 @@
 import json
-from datetime import date, datetime, time, timezone
+from datetime import UTC, date, datetime, time
+from typing import Any, cast
 
 import httpx
 from sqlmodel import Session, select
@@ -62,7 +63,7 @@ def ingest_eight_ks_for_symbol(
             published_at=datetime.combine(
                 date.fromisoformat(filing_date),
                 time.min,
-                tzinfo=timezone.utc,
+                tzinfo=UTC,
             ),
         )
         session.add(document)
@@ -83,10 +84,10 @@ def _lookup_cik_for_symbol(client: httpx.Client, headers: dict[str, str], symbol
     raise ValueError(f"Ticker not found in SEC company_tickers.json: {symbol}")
 
 
-def _get_json(client: httpx.Client, url: str, headers: dict[str, str]) -> dict:
+def _get_json(client: httpx.Client, url: str, headers: dict[str, str]) -> dict[str, Any]:
     response = client.get(url, headers=headers)
     response.raise_for_status()
-    return json.loads(response.text)
+    return cast(dict[str, Any], json.loads(response.text))
 
 
 def _get_text(client: httpx.Client, url: str, headers: dict[str, str]) -> str:

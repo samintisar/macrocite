@@ -1,8 +1,7 @@
 import uuid
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Optional
 
 from sqlalchemy import Column, DateTime, Numeric, Text, UniqueConstraint
 from sqlalchemy.types import TypeDecorator
@@ -10,7 +9,7 @@ from sqlmodel import Field, SQLModel
 
 
 def utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class UTCDateTime(TypeDecorator[datetime]):
@@ -21,14 +20,14 @@ class UTCDateTime(TypeDecorator[datetime]):
         if value is None:
             return None
         if value.tzinfo is None:
-            value = value.replace(tzinfo=timezone.utc)
-        return value.astimezone(timezone.utc)
+            value = value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
 
     def process_result_value(self, value: datetime | None, dialect: object) -> datetime | None:
         if value is None:
             return None
         if value.tzinfo is None:
-            return value.replace(tzinfo=timezone.utc)
+            return value.replace(tzinfo=UTC)
         return value
 
 
@@ -45,7 +44,7 @@ class Ticker(SQLModel, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     symbol: str = Field(unique=True, index=True)
     company_name: str
-    sector: Optional[str] = None
+    sector: str | None = None
     active: bool = Field(default=True)
     added_at: datetime = Field(
         default_factory=utcnow,
@@ -63,8 +62,8 @@ class RawDocument(SQLModel, table=True):
     source: str
     external_id: str
     doc_type: DocType
-    url: Optional[str] = None
-    title: Optional[str] = None
+    url: str | None = None
+    title: str | None = None
     raw_text: str = Field(sa_column=Column(Text, nullable=False))
     published_at: datetime = Field(sa_column=Column(UTCDateTime(), nullable=False))
     ingested_at: datetime = Field(
@@ -92,7 +91,7 @@ class Price(SQLModel, table=True):
     __tablename__ = "prices"
     __table_args__ = (UniqueConstraint("ticker_id", "date", name="uq_prices_ticker_date"),)
 
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
     ticker_id: uuid.UUID = Field(foreign_key="tickers.id", ondelete="RESTRICT")
     date: date
     open: Decimal = Field(sa_column=Column(Numeric(12, 4), nullable=False))

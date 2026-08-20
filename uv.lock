@@ -1774,9 +1774,9 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "mypy", specifier = ">=1.13" },
+    { name = "mypy", specifier = "==2.3.1" },
     { name = "pytest", specifier = ">=8.3" },
-    { name = "ruff", specifier = ">=0.8" },
+    { name = "ruff", specifier = "==0.16.4" },
     { name = "types-pyyaml", specifier = ">=6.0" },
 ]
 

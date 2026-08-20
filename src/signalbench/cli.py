@@ -11,7 +11,7 @@ from signalbench.ingest.edgar import ingest_eight_ks_for_symbol
 from signalbench.ingest.prices import fetch_yfinance_daily, ingest_daily_prices
 from signalbench.ingest.seed import seed_watchlist as seed_watchlist_from_yaml
 
-WATCHLIST_PATH = Path("data/watchlist.yaml")
+WATCHLIST_PATH = Path(__file__).resolve().parents[2] / "data" / "watchlist.yaml"
 
 app = typer.Typer()
 ingest_app = typer.Typer()
@@ -26,7 +26,7 @@ def seed_watchlist() -> None:
 
 @ingest_app.command()
 def filings() -> None:
-    with get_session() as session, httpx.Client() as client:
+    with get_session() as session, httpx.Client(timeout=30.0) as client:
         for ticker in _active_tickers(session):
             ingest_eight_ks_for_symbol(
                 session,

@@ -51,7 +51,7 @@ def ingest_daily_prices(
 def fetch_yfinance_daily(symbol: str) -> list[DailyBar]:
     import yfinance as yf
 
-    frame = yf.Ticker(symbol).history(period="max", auto_adjust=False)
+    frame = yf.Ticker(symbol).history(period="max", auto_adjust=False, timeout=30)
     bars: list[DailyBar] = []
     for idx, row in frame.iterrows():
         adj = row["Adj Close"] if "Adj Close" in row.index else row["Close"]

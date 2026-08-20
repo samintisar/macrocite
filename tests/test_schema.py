@@ -1,9 +1,10 @@
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import pytest
 from sqlalchemy import DateTime
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.types import TypeDecorator
 from sqlmodel import Session, select
 
 from signalbench.db.models import DocumentTicker, Price, RawDocument, Ticker
@@ -14,7 +15,8 @@ def test_document_has_no_ticker_id_column() -> None:
 
 
 def test_published_at_uses_timezone_aware_datetime_column() -> None:
-    published_at_type = RawDocument.__table__.c.published_at.type
+    published_at_type = RawDocument.metadata.tables["raw_documents"].c.published_at.type
+    assert isinstance(published_at_type, TypeDecorator)
     assert isinstance(published_at_type.impl, DateTime)
     assert published_at_type.impl.timezone is True
 
@@ -27,7 +29,7 @@ def test_unique_source_external_id_rejects_duplicate(session: Session) -> None:
         url="https://www.sec.gov/example",
         title="Item 2.02",
         raw_text="<html>8-K</html>",
-        published_at=datetime(2024, 1, 15, tzinfo=timezone.utc),
+        published_at=datetime(2024, 1, 15, tzinfo=UTC),
     )
     session.add(doc)
     session.commit()
@@ -39,7 +41,7 @@ def test_unique_source_external_id_rejects_duplicate(session: Session) -> None:
             url="https://www.sec.gov/example-2",
             title="dup",
             raw_text="x",
-            published_at=datetime(2024, 1, 16, tzinfo=timezone.utc),
+            published_at=datetime(2024, 1, 16, tzinfo=UTC),
         )
     )
     with pytest.raises(IntegrityError):
@@ -59,7 +61,7 @@ def test_one_document_can_link_two_tickers(session: Session) -> None:
         external_id="0000320193-24-000002",
         doc_type="eight_k",
         raw_text="mentions both",
-        published_at=datetime(2024, 2, 1, tzinfo=timezone.utc),
+        published_at=datetime(2024, 2, 1, tzinfo=UTC),
     )
     session.add(doc)
     session.commit()
