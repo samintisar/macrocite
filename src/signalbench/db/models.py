@@ -14,23 +14,22 @@ def utcnow() -> datetime:
 
 
 class UTCDateTime(TypeDecorator[datetime]):
-    impl = Text
+    impl = DateTime(timezone=True)
     cache_ok = True
 
-    def process_bind_param(self, value: datetime | None, dialect: object) -> str | None:
+    def process_bind_param(self, value: datetime | None, dialect: object) -> datetime | None:
         if value is None:
             return None
         if value.tzinfo is None:
             value = value.replace(tzinfo=timezone.utc)
-        return value.astimezone(timezone.utc).isoformat()
+        return value.astimezone(timezone.utc)
 
-    def process_result_value(self, value: str | None, dialect: object) -> datetime | None:
+    def process_result_value(self, value: datetime | None, dialect: object) -> datetime | None:
         if value is None:
             return None
-        parsed = datetime.fromisoformat(value)
-        if parsed.tzinfo is None:
-            return parsed.replace(tzinfo=timezone.utc)
-        return parsed
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value
 
 
 class DocType(str, Enum):

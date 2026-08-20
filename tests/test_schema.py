@@ -2,6 +2,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import DateTime
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
@@ -10,6 +11,12 @@ from signalbench.db.models import DocumentTicker, Price, RawDocument, Ticker
 
 def test_document_has_no_ticker_id_column() -> None:
     assert "ticker_id" not in RawDocument.model_fields
+
+
+def test_published_at_uses_timezone_aware_datetime_column() -> None:
+    published_at_type = RawDocument.__table__.c.published_at.type
+    assert isinstance(published_at_type.impl, DateTime)
+    assert published_at_type.impl.timezone is True
 
 
 def test_unique_source_external_id_rejects_duplicate(session: Session) -> None:
