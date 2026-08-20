@@ -70,7 +70,7 @@ def ingest_eight_ks_for_symbol(
         session.add(DocumentTicker(document_id=document.id, ticker_id=ticker.id))
         created += 1
 
-    session.flush()
+    session.commit()
     return created
 
 

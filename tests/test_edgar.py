@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import httpx
-from sqlmodel import Session, select
+from sqlmodel import Session, SQLModel, create_engine, select
 
 from signalbench.db.models import DocumentTicker, RawDocument, Ticker
 from signalbench.ingest.edgar import ingest_eight_ks_for_symbol
@@ -61,3 +61,30 @@ def test_second_ingest_is_noop(session: Session) -> None:
     ingest_eight_ks_for_symbol(session, "AAPL", client, "SignalBench/0.1 (test@example.com)")
     docs = session.exec(select(RawDocument)).all()
     assert len(docs) == 1
+
+
+def test_ingest_commits_so_filings_survive_session_close() -> None:
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False})
+    SQLModel.metadata.create_all(engine)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if url.endswith("company_tickers.json"):
+            return httpx.Response(200, text=(FIXTURES / "company_tickers.json").read_text())
+        if "submissions" in url:
+            return httpx.Response(200, text=(FIXTURES / "edgar_submissions.json").read_text())
+        return httpx.Response(200, text=(FIXTURES / "edgar_8k.html").read_text())
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    with Session(engine) as session:
+        session.add(Ticker(symbol="AAPL", company_name="Apple Inc.", active=True))
+        session.commit()
+        ingest_eight_ks_for_symbol(
+            session, "AAPL", client, "SignalBench/0.1 (test@example.com)"
+        )
+
+    with Session(engine) as session:
+        docs = session.exec(select(RawDocument)).all()
+        links = session.exec(select(DocumentTicker)).all()
+        assert len(docs) == 1
+        assert len(links) == 1
