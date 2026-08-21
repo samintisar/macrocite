@@ -7,9 +7,9 @@ Create Date: 2026-08-20 16:00:00
 
 from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
+from sqlalchemy.dialects import postgresql
 
 revision: str = "0001_phase0"
 down_revision: str | None = None
@@ -18,7 +18,15 @@ depends_on: Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    doctype = sa.Enum("news", "eight_k", "ten_k", "ten_q", name="doctype")
+    doctype = postgresql.ENUM(
+        "news",
+        "eight_k",
+        "ten_k",
+        "ten_q",
+        name="doctype",
+        create_type=False,
+    )
+    doctype.create(op.get_bind(), checkfirst=True)
 
     op.create_table(
         "raw_documents",
@@ -92,7 +100,11 @@ def downgrade() -> None:
     op.drop_index(op.f("ix_tickers_symbol"), table_name="tickers")
     op.drop_table("tickers")
     op.drop_table("raw_documents")
-    sa.Enum("news", "eight_k", "ten_k", "ten_q", name="doctype").drop(
-        op.get_bind(),
-        checkfirst=True,
-    )
+    postgresql.ENUM(
+        "news",
+        "eight_k",
+        "ten_k",
+        "ten_q",
+        name="doctype",
+        create_type=False,
+    ).drop(op.get_bind(), checkfirst=True)

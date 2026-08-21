@@ -7,9 +7,9 @@ Create Date: 2026-08-20 17:31:00
 
 from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
+from sqlalchemy.dialects import postgresql
 
 revision: str = "0002_signals"
 down_revision: str | None = "0001_phase0"
@@ -18,7 +18,7 @@ depends_on: Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    eventtype = sa.Enum(
+    eventtype = postgresql.ENUM(
         "earnings",
         "guidance",
         "leadership",
@@ -27,7 +27,9 @@ def upgrade() -> None:
         "macro",
         "other",
         name="eventtype",
+        create_type=False,
     )
+    eventtype.create(op.get_bind(), checkfirst=True)
 
     op.create_table(
         "signals",
@@ -65,7 +67,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_table("signals")
-    sa.Enum(
+    postgresql.ENUM(
         "earnings",
         "guidance",
         "leadership",
@@ -74,7 +76,5 @@ def downgrade() -> None:
         "macro",
         "other",
         name="eventtype",
-    ).drop(
-        op.get_bind(),
-        checkfirst=True,
-    )
+        create_type=False,
+    ).drop(op.get_bind(), checkfirst=True)
