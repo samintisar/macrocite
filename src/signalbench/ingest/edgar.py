@@ -1,4 +1,5 @@
 import json
+import time as time_module
 from datetime import UTC, date, datetime, time
 from typing import Any, cast
 
@@ -53,6 +54,7 @@ def ingest_eight_ks_for_symbol(
             primary_document=primary_document,
         )
         raw_text = _get_text(client, archive_url, headers)
+        time_module.sleep(0.15)
         document = RawDocument(
             source="sec_edgar",
             external_id=accession_number,
@@ -69,14 +71,14 @@ def ingest_eight_ks_for_symbol(
         session.add(document)
         session.flush()
         session.add(DocumentTicker(document_id=document.id, ticker_id=ticker.id))
+        session.commit()
         created += 1
 
-    session.commit()
     return created
 
 
 def _lookup_cik_for_symbol(client: httpx.Client, headers: dict[str, str], symbol: str) -> str:
-    payload = _get_json(client, COMPANY_TICKERS_URL, headers)
+    payload = _company_tickers(client, headers)
     normalized_symbol = symbol.upper()
     for company in payload.values():
         if company["ticker"].upper() == normalized_symbol:
@@ -84,13 +86,48 @@ def _lookup_cik_for_symbol(client: httpx.Client, headers: dict[str, str], symbol
     raise ValueError(f"Ticker not found in SEC company_tickers.json: {symbol}")
 
 
+_COMPANY_TICKERS: dict[str, Any] | None = None
+
+
+def _company_tickers(client: httpx.Client, headers: dict[str, str]) -> dict[str, Any]:
+    global _COMPANY_TICKERS
+    if _COMPANY_TICKERS is None:
+        _COMPANY_TICKERS = _get_json(client, COMPANY_TICKERS_URL, headers)
+    return _COMPANY_TICKERS
+
+
 def _get_json(client: httpx.Client, url: str, headers: dict[str, str]) -> dict[str, Any]:
-    response = client.get(url, headers=headers)
-    response.raise_for_status()
-    return cast(dict[str, Any], json.loads(response.text))
+    return cast(dict[str, Any], json.loads(_get(client, url, headers).text))
 
 
 def _get_text(client: httpx.Client, url: str, headers: dict[str, str]) -> str:
-    response = client.get(url, headers=headers)
-    response.raise_for_status()
-    return response.text
+    return _get(client, url, headers).text
+
+
+def _get(
+    client: httpx.Client,
+    url: str,
+    headers: dict[str, str],
+    retries: int = 5,
+) -> httpx.Response:
+    last_error: httpx.HTTPStatusError | None = None
+    for attempt in range(retries):
+        response = client.get(url, headers=headers)
+        if response.status_code != 429:
+            response.raise_for_status()
+            return response
+        last_error = httpx.HTTPStatusError(
+            f"429 Too Many Requests for {url}",
+            request=response.request,
+            response=response,
+        )
+        retry_after = response.headers.get("Retry-After")
+        try:
+            delay = max(10.0, float(retry_after)) if retry_after is not None else 10.0
+        except ValueError:
+            delay = 10.0
+        if retry_after == "0":
+            delay = 0.0
+        time_module.sleep(delay)
+    assert last_error is not None
+    raise last_error

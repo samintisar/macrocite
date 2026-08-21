@@ -44,6 +44,36 @@ def test_ingest_stores_one_8k_and_issuer_link(session: Session) -> None:
     assert links[0].ticker_id == ticker.id
 
 
+def test_ingest_retries_archive_on_429(session: Session) -> None:
+    ticker = Ticker(symbol="AAPL", company_name="Apple Inc.", active=True)
+    session.add(ticker)
+    session.commit()
+    hits = {"archive": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if url.endswith("company_tickers.json"):
+            return httpx.Response(200, text=(FIXTURES / "company_tickers.json").read_text())
+        if "submissions/CIK0000320193.json" in url:
+            return httpx.Response(200, text=(FIXTURES / "edgar_submissions.json").read_text())
+        if url.endswith("aapl-20240115.htm"):
+            hits["archive"] += 1
+            if hits["archive"] == 1:
+                return httpx.Response(429, headers={"Retry-After": "0"})
+            return httpx.Response(200, text=(FIXTURES / "edgar_8k.html").read_text())
+        return httpx.Response(404)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    created = ingest_eight_ks_for_symbol(
+        session,
+        symbol="AAPL",
+        client=client,
+        user_agent="SignalBench/0.1 (test@example.com)",
+    )
+    assert created == 1
+    assert hits["archive"] == 2
+
+
 def test_second_ingest_is_noop(session: Session) -> None:
     session.add(Ticker(symbol="AAPL", company_name="Apple Inc.", active=True))
     session.commit()

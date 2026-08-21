@@ -28,7 +28,6 @@ def upgrade() -> None:
         "other",
         name="eventtype",
     )
-    eventtype.create(op.get_bind(), checkfirst=True)
 
     op.create_table(
         "signals",

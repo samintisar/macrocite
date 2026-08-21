@@ -19,7 +19,6 @@ depends_on: Sequence[str] | None = None
 
 def upgrade() -> None:
     doctype = sa.Enum("news", "eight_k", "ten_k", "ten_q", name="doctype")
-    doctype.create(op.get_bind(), checkfirst=True)
 
     op.create_table(
         "raw_documents",
