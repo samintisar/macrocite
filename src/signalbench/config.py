@@ -6,6 +6,8 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+psycopg://signalbench:signalbench@localhost:5432/signalbench"
     sec_user_agent: str = "SignalBench/0.1 (dev@example.com)"
+    model_version: str = "claude-sonnet-4-6"
+    prompt_version: str = "v1"
 
 
 settings = Settings()
