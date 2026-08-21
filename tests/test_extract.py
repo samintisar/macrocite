@@ -94,3 +94,45 @@ def test_same_key_does_not_duplicate(session: Session) -> None:
     extract_document(session, doc, FakeLLM(result), "claude-sonnet-4-6", "v1")
     extract_document(session, doc, FakeLLM(result), "claude-sonnet-4-6", "v1")
     assert len(session.exec(select(Signal)).all()) == 1
+
+
+def test_one_document_two_ticker_signals(session: Session) -> None:
+    aapl = Ticker(symbol="AAPL", company_name="Apple Inc.", active=True)
+    msft = Ticker(symbol="MSFT", company_name="Microsoft Corporation", active=True)
+    session.add(aapl)
+    session.add(msft)
+    session.commit()
+    doc = RawDocument(
+        source="sec_edgar",
+        external_id="acc-multi",
+        doc_type="eight_k",
+        raw_text="Apple and Microsoft announced a partnership.",
+        published_at=datetime(2024, 3, 1, tzinfo=UTC),
+    )
+    session.add(doc)
+    session.commit()
+    session.refresh(doc)
+    result = ExtractionResult(
+        claims=[
+            ExtractedClaim(
+                ticker="AAPL",
+                sentiment=0.3,
+                event_type=EventTypeName.product,
+                confidence=0.6,
+                rationale="Partnership named.",
+            ),
+            ExtractedClaim(
+                ticker="MSFT",
+                sentiment=0.3,
+                event_type=EventTypeName.product,
+                confidence=0.6,
+                rationale="Partnership named.",
+            ),
+        ]
+    )
+    created = extract_document(
+        session, doc, FakeLLM(result), "claude-sonnet-4-6", "v1"
+    )
+    assert created == 2
+    rows = session.exec(select(Signal).where(Signal.document_id == doc.id)).all()
+    assert {row.ticker_id for row in rows} == {aapl.id, msft.id}
