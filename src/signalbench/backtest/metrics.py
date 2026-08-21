@@ -77,13 +77,20 @@ def _sharpe_ratio(equity_curve: np.ndarray) -> float:
     return float(np.sqrt(252.0) * mean / std)
 
 
-def _max_drawdown(equity_curve: np.ndarray) -> float:
-    if len(equity_curve) == 0:
+def _max_drawdown(equity_curve: list[Decimal]) -> float:
+    if not equity_curve:
         return 0.0
 
-    peak = np.maximum.accumulate(equity_curve)
-    drawdowns = (peak - equity_curve) / peak
-    return float(np.min(drawdowns))
+    peak = Decimal(0)
+    max_drawdown = Decimal(0)
+
+    for value in equity_curve:
+        peak = max(peak, value)
+        if peak > 0:
+            drawdown = (peak - value) / peak
+            max_drawdown = max(max_drawdown, drawdown)
+
+    return float(max_drawdown)
 
 
 def compute_metrics(
@@ -115,6 +122,6 @@ def compute_metrics(
         total_return=total_return,
         win_rate=win_rate,
         benchmark_return=benchmark_return,
-        max_drawdown=_max_drawdown(equity_curve),
+        max_drawdown=_max_drawdown(equity_curve_decimal),
         sharpe_ratio=_sharpe_ratio(equity_curve),
     )
