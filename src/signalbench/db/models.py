@@ -149,3 +149,24 @@ class Signal(SQLModel, table=True):
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),
     )
+
+
+class EvalRun(SQLModel, table=True):
+    __tablename__ = "eval_runs"
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    model_version: str
+    prompt_version: str
+    git_commit_sha: str | None = None
+    label_set_git_sha: str | None = None
+    n_examples: int
+    sentiment_accuracy: float
+    event_type_metrics: dict[str, object] = Field(sa_column=Column(JSON, nullable=False))
+    confidence_calibration: dict[str, object] | None = Field(
+        default=None, sa_column=Column(JSON)
+    )
+    passed_ci_gate: bool
+    run_at: datetime = Field(
+        default_factory=utcnow,
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
