@@ -2,7 +2,6 @@ import uuid
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Any
 
 from sqlalchemy import (
     JSON,
@@ -208,7 +207,7 @@ class BacktestRun(SQLModel, table=True):
         sa_column=Column(DateTime(timezone=True), nullable=False),
     )
 
-    def __init__(self, **data: Any) -> None:
-        if "signal_set_fingerprint" not in data:
+    def __init__(self, **data: object) -> None:
+        if data.get("signal_set_fingerprint") is None:
             raise TypeError("signal_set_fingerprint is required")
         super().__init__(**data)
