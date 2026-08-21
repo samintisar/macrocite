@@ -23,6 +23,8 @@ def event_type_report(
     y_true: Sequence[EventTypeName],
     y_pred: Sequence[EventTypeName],
 ) -> dict[str, dict[str, float]]:
+    if len(y_true) != len(y_pred) or not y_true:
+        raise ValueError("y_true and y_pred must be same non-empty length")
     labels = [e.value for e in EventTypeName]
     report: dict[str, dict[str, float]] = {}
     for label in labels:
@@ -64,6 +66,18 @@ def evaluate(
     pred_confidence: Sequence[float],
     correct_direction: Sequence[bool] | None = None,
 ) -> EvalMetrics:
+    sequences: list[Sequence[float] | Sequence[EventTypeName] | Sequence[bool]] = [
+        human_sentiment,
+        pred_sentiment,
+        human_event,
+        pred_event,
+        pred_confidence,
+    ]
+    if correct_direction is not None:
+        sequences.append(correct_direction)
+    lengths = {len(seq) for seq in sequences}
+    if len(lengths) != 1 or 0 in lengths:
+        raise ValueError("all input sequences must share the same non-empty length")
     acc = direction_accuracy(human_sentiment, pred_sentiment)
     report = event_type_report(human_event, pred_event)
     if correct_direction is None:
