@@ -1,0 +1,14 @@
+{
+  "labels": [
+    {"id": "ex01", "raw_text": "Company beats EPS estimates.", "human_sentiment": 0.8, "human_event_type": "earnings"},
+    {"id": "ex02", "raw_text": "CEO resigns effective immediately.", "human_sentiment": -0.6, "human_event_type": "leadership"},
+    {"id": "ex03", "raw_text": "Guidance raised for FY.", "human_sentiment": 0.7, "human_event_type": "guidance"},
+    {"id": "ex04", "raw_text": "DOJ files antitrust suit.", "human_sentiment": -0.8, "human_event_type": "legal"},
+    {"id": "ex05", "raw_text": "New product launch delayed.", "human_sentiment": -0.4, "human_event_type": "product"},
+    {"id": "ex06", "raw_text": "Fed hike fears weigh on outlook.", "human_sentiment": -0.3, "human_event_type": "macro"},
+    {"id": "ex07", "raw_text": "Routine 8-K announcing a conference.", "human_sentiment": 0.0, "human_event_type": "other"},
+    {"id": "ex08", "raw_text": "Record revenue and margin expansion.", "human_sentiment": 0.9, "human_event_type": "earnings"},
+    {"id": "ex09", "raw_text": "CFO appointed from internal bench.", "human_sentiment": 0.2, "human_event_type": "leadership"},
+    {"id": "ex10", "raw_text": "Patent litigation settled with no admission.", "human_sentiment": 0.1, "human_event_type": "legal"}
+  ]
+}
