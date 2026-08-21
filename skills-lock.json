@@ -1,0 +1,89 @@
+{
+  "version": 1,
+  "skills": {
+    "together-audio": {
+      "source": "togethercomputer/skills",
+      "sourceType": "github",
+      "skillPath": "skills/together-audio/SKILL.md",
+      "computedHash": "52e78892c14549f3e9211e5dd18d2b9bf72564128f0cfb39b7e1b5adf476f425"
+    },
+    "together-batch-inference": {
+      "source": "togethercomputer/skills",
+      "sourceType": "github",
+      "skillPath": "skills/together-batch-inference/SKILL.md",
+      "computedHash": "1f5205b7415f30cd61de1ccf3bbfa6d36fb8071f524962d6013b2189ac184bf5"
+    },
+    "together-chat-completions": {
+      "source": "togethercomputer/skills",
+      "sourceType": "github",
+      "skillPath": "skills/together-chat-completions/SKILL.md",
+      "computedHash": "27768b12e6f73685fc3c6a24d12f9c74b975453d9c51bf9e47b39d791abb450a"
+    },
+    "together-dedicated-containers": {
+      "source": "togethercomputer/skills",
+      "sourceType": "github",
+      "skillPath": "skills/together-dedicated-containers/SKILL.md",
+      "computedHash": "34466be9682d1747d572b396a5ed36fa2f4d06fa102663952a44eb16c209b88c"
+    },
+    "together-dedicated-model-inference": {
+      "source": "togethercomputer/skills",
+      "sourceType": "github",
+      "skillPath": "skills/together-dedicated-model-inference/SKILL.md",
+      "computedHash": "f0a2574cb164382806a6d1f3051b942258c2d5e990372b7ecd5ba4ee558944af"
+    },
+    "together-embeddings": {
+      "source": "togethercomputer/skills",
+      "sourceType": "github",
+      "skillPath": "skills/together-embeddings/SKILL.md",
+      "computedHash": "0283f992cc2d30f535a23a2f13fb64c93b15cb0eaa336fee2e9021345d0d4ef3"
+    },
+    "together-evaluations": {
+      "source": "togethercomputer/skills",
+      "sourceType": "github",
+      "skillPath": "skills/together-evaluations/SKILL.md",
+      "computedHash": "8c8703dc19e622cb77e16f60ac3382b2ddb60f6185ca82313370527681a62d07"
+    },
+    "together-fine-tuning": {
+      "source": "togethercomputer/skills",
+      "sourceType": "github",
+      "skillPath": "skills/together-fine-tuning/SKILL.md",
+      "computedHash": "68c45184fd4e52ae2b60f4b6951452a4c915f37f9a64dc5a0708dbaa9f893c4e"
+    },
+    "together-gpu-clusters": {
+      "source": "togethercomputer/skills",
+      "sourceType": "github",
+      "skillPath": "skills/together-gpu-clusters/SKILL.md",
+      "computedHash": "e2837d6d03ee65437004cc9b1c25aafb0efc52522f86484a6983a02b86f2a6c7"
+    },
+    "together-images": {
+      "source": "togethercomputer/skills",
+      "sourceType": "github",
+      "skillPath": "skills/together-images/SKILL.md",
+      "computedHash": "d41b4b264255ff63c945bc9236e4e8927b42bc12c681b5ac494a575ec583197e"
+    },
+    "together-kueue": {
+      "source": "togethercomputer/skills",
+      "sourceType": "github",
+      "skillPath": "skills/together-kueue/SKILL.md",
+      "computedHash": "caf6eb4907e2886e3801f71327906034570da235ed9d337c3a4434bbe6d47c7d"
+    },
+    "together-sandboxes": {
+      "source": "togethercomputer/skills",
+      "sourceType": "github",
+      "skillPath": "skills/together-sandboxes/SKILL.md",
+      "computedHash": "16f6d24a53da97207f36c51e23d79fa2e81d2060d2fa1b817722954167c87979"
+    },
+    "together-video": {
+      "source": "togethercomputer/skills",
+      "sourceType": "github",
+      "skillPath": "skills/together-video/SKILL.md",
+      "computedHash": "f13b0384b037dffc56752060c5fd82318ff0031a509af198f3c6344b4ac7cb56"
+    },
+    "together-volcano": {
+      "source": "togethercomputer/skills",
+      "sourceType": "github",
+      "skillPath": "skills/together-volcano/SKILL.md",
+      "computedHash": "b3328924dcf1b2414d6c2ec3e25d0d7d890ad9bbd6361157a896b22b7752356d"
+    }
+  }
+}
