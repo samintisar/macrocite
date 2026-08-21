@@ -31,10 +31,8 @@ def _find_exit_index(
     take_profit: float | None,
 ) -> int | None:
     target_index = entry_index + holding_days
-    if target_index >= len(prices):
-        return None
 
-    for index in range(entry_index + 1, target_index + 1):
+    for index in range(entry_index + 1, len(prices)):
         price = prices[index][1]
         if stop_loss is not None:
             stop_price = entry_price * (Decimal(1) + Decimal(str(stop_loss)))
@@ -72,10 +70,8 @@ def build_trades(
 
     for signal in sorted_signals:
         sentiment = signal["sentiment"]
-        published_at = signal["published_at"]
+        published_at = _signal_published_at(signal)
         if not isinstance(sentiment, (int, float)):
-            continue
-        if not isinstance(published_at, datetime):
             continue
         if sentiment <= sentiment_threshold:
             continue

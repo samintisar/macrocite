@@ -67,6 +67,37 @@ def test_stop_loss_exits_before_holding_days() -> None:
     ]
 
 
+def test_stop_loss_when_holding_window_exceeds_series() -> None:
+    prices = [
+        (date(2024, 1, 2), Decimal(100)),
+        (date(2024, 1, 3), Decimal(99)),
+        (date(2024, 1, 4), Decimal(95)),
+        (date(2024, 1, 5), Decimal(94)),
+    ]
+    signals = [
+        {
+            "sentiment": 0.8,
+            "published_at": datetime(2024, 1, 2, 10, 0, tzinfo=UTC),
+        }
+    ]
+    trades = build_trades(
+        prices=prices,
+        signals=signals,
+        sentiment_threshold=0.5,
+        holding_days=5,
+        stop_loss=-0.03,
+        take_profit=None,
+    )
+    assert trades == [
+        Trade(
+            entry_date=date(2024, 1, 2),
+            exit_date=date(2024, 1, 4),
+            entry_price=Decimal(100),
+            exit_price=Decimal(95),
+        )
+    ]
+
+
 def test_no_overlapping_trades() -> None:
     prices = [
         (date(2024, 1, 2), Decimal(100)),
