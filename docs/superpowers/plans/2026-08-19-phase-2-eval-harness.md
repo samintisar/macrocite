@@ -416,7 +416,7 @@ from signalbench.db.models import EvalRun
 def test_failed_run_still_inserts(session: Session) -> None:
     record_eval_run(
         session,
-        model_version="claude-sonnet-4-6",
+        model_version="deepseek-ai/DeepSeek-V4-Flash-0731",
         prompt_version="v1",
         git_commit_sha="abc",
         label_set_git_sha="def",
@@ -524,7 +524,7 @@ Expect: FAIL missing workflow file.
 
 - [ ] **Step 3: Write `__main__.py` and workflow**
 
-Deterministic CI stub: predict the **human** labels so accuracy is 1.0 until real extraction is wired; then switch the runner to call the extractor on `raw_text` with FakeLLM/Anthropic. For the gate test, include `tests/test_eval_main_exit.py`:
+Deterministic CI stub: predict the **human** labels so accuracy is 1.0 until real extraction is wired; then switch the runner to call the extractor on `raw_text` with FakeLLM/Together. For the gate test, include `tests/test_eval_main_exit.py`:
 
 ```python
 from signalbench.eval.gate import Baseline, passed_ci_gate

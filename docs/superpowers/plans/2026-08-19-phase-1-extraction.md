@@ -2,15 +2,15 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. **Models:** cheap implementers `composer-2.5`; mid-tier implementers, reviewers, and fix loops `cursor-grok-4.6-high`. Never `*-fast` models. See [docs/superpowers/README.md](../README.md).
 
-**Goal:** Extract structured signals from stored documents with a versioned prompt and mocked Claude client, one row per (document, ticker, model, prompt).
+**Goal:** Extract structured signals from stored documents with a versioned prompt and mocked Together client, one row per (document, ticker, model, prompt).
 
-**Architecture:** A document is still the artifact. A signal is one LLM claim about one ticker in that document. Unique key `(document_id, ticker_id, model_version, prompt_version)` preserves history when the prompt or model changes. Extraction may name a ticker that ingest did not put on `document_tickers`. Tests never call Anthropic; inject a fake client.
+**Architecture:** A document is still the artifact. A signal is one LLM claim about one ticker in that document. Unique key `(document_id, ticker_id, model_version, prompt_version)` preserves history when the prompt or model changes. Extraction may name a ticker that ingest did not put on `document_tickers`. Tests never call Together; inject a fake client. Production uses Together AI serverless chat completions with `response_format` `json_schema` (not Anthropic, not Batch API).
 
-**Tech Stack:** SQLModel, Pydantic v2, Anthropic SDK (tool-use / structured output), Typer, pytest. Prompt file `prompts/extract_v1.txt` with `prompt_version=v1` in config.
+**Tech Stack:** SQLModel, Pydantic v2, Together SDK v2 (`together>=2.0.0`, structured JSON schema output), Typer, pytest. Default `model_version=deepseek-ai/DeepSeek-V4-Flash-0731` (Together serverless; reasoning-capable; 1M context). Prompt file `prompts/extract_v1.txt` with `prompt_version=v1` in config.
 
 **Depends on:** Phase 0 gate green ([2026-08-19-phase-0-ingest.md](2026-08-19-phase-0-ingest.md)). Reuse `Ticker`, `RawDocument`, `tests/conftest.py` session fixture.
 
-**Out of scope:** eval CI, backtests, dashboard, live API keys in CI.
+**Out of scope:** eval CI, backtests, dashboard, live API keys in CI, Together Batch API, Anthropic.
 
 ---
 
@@ -22,8 +22,10 @@
 - Create: `src/signalbench/extraction/extract.py` — `extract_document`
 - Create: `prompts/extract_v1.txt`
 - Create: `src/signalbench/extraction/prompt.py` — load prompt + version string
-- Modify: `src/signalbench/config.py` — `model_version`, `prompt_version`
+- Modify: `src/signalbench/config.py` — `model_version`, `prompt_version`, `together_api_key`
 - Modify: `src/signalbench/cli.py` — `extract` command
+- Modify: `pyproject.toml` — add `together>=2.0.0`
+- Create: `src/signalbench/extraction/together_llm.py` — `TogetherLLM` (production only)
 - Create: `tests/test_signal_schema.py`, `tests/test_extract_contract.py`, `tests/test_extract.py`, `tests/test_extract_cli.py`
 - Create: `tests/fixtures/extract_doc.txt`
 
@@ -73,7 +75,7 @@ def test_unique_document_ticker_model_prompt(session: Session) -> None:
     kwargs = dict(
         document_id=doc.id,
         ticker_id=ticker.id,
-        model_version="claude-sonnet-4-6",
+        model_version="deepseek-ai/DeepSeek-V4-Flash-0731",
         prompt_version="v1",
         sentiment=0.4,
         event_type=EventType.earnings,
@@ -94,7 +96,7 @@ def test_new_prompt_version_inserts_second_row(session: Session) -> None:
         Signal(
             document_id=doc.id,
             ticker_id=ticker.id,
-            model_version="claude-sonnet-4-6",
+            model_version="deepseek-ai/DeepSeek-V4-Flash-0731",
             prompt_version="v1",
             sentiment=0.4,
             event_type=EventType.earnings,
@@ -106,7 +108,7 @@ def test_new_prompt_version_inserts_second_row(session: Session) -> None:
         Signal(
             document_id=doc.id,
             ticker_id=ticker.id,
-            model_version="claude-sonnet-4-6",
+            model_version="deepseek-ai/DeepSeek-V4-Flash-0731",
             prompt_version="v2",
             sentiment=0.5,
             event_type=EventType.earnings,
@@ -351,7 +353,7 @@ git commit -m "feat: add structured extraction Pydantic contract"
 `extract_document(session, document, llm, model_version, prompt_version)`:
 
 1. Load prompt text for `prompt_version`.
-2. Call `llm.complete(prompt, document.raw_text) -> ExtractionResult` (protocol, not Anthropic type).
+2. Call `llm.complete(prompt, document.raw_text) -> ExtractionResult` (protocol, not Together SDK type).
 3. For each claim, resolve ticker by `symbol` (create inactive ticker if missing so we do not drop co-mentions).
 4. Insert `Signal` rows; skip rows that violate unique key (already extracted).
 
@@ -410,14 +412,14 @@ def test_extract_persists_rationale_and_raw_payload(session: Session) -> None:
         session,
         document=doc,
         llm=llm,
-        model_version="claude-sonnet-4-6",
+        model_version="deepseek-ai/DeepSeek-V4-Flash-0731",
         prompt_version="v1",
     )
     assert created == 1
     row = session.exec(select(Signal)).one()
     assert row.rationale == "Beat on EPS."
     assert row.raw_llm_response is not None
-    assert row.model_version == "claude-sonnet-4-6"
+    assert row.model_version == "deepseek-ai/DeepSeek-V4-Flash-0731"
     assert row.prompt_version == "v1"
     assert row.ticker_id == ticker.id
     assert llm.calls == 1
@@ -448,8 +450,8 @@ def test_same_key_does_not_duplicate(session: Session) -> None:
             )
         ]
     )
-    extract_document(session, doc, FakeLLM(result), "claude-sonnet-4-6", "v1")
-    extract_document(session, doc, FakeLLM(result), "claude-sonnet-4-6", "v1")
+    extract_document(session, doc, FakeLLM(result), "deepseek-ai/DeepSeek-V4-Flash-0731", "v1")
+    extract_document(session, doc, FakeLLM(result), "deepseek-ai/DeepSeek-V4-Flash-0731", "v1")
     assert len(session.exec(select(Signal)).all()) == 1
 ```
 
@@ -486,9 +488,9 @@ class LLMClient(Protocol):
     def complete(self, prompt: str, raw_text: str) -> ExtractionResult: ...
 ```
 
-Store `raw_llm_response=result.model_dump()`. Map `event_type` to `EventType`. Add `model_version: str = "claude-sonnet-4-6"` and `prompt_version: str = "v1"` to `Settings`.
+Store `raw_llm_response=result.model_dump()`. Map `event_type` to `EventType`. Add `model_version: str = "deepseek-ai/DeepSeek-V4-Flash-0731"`, `prompt_version: str = "v1"`, and `together_api_key: str | None = None` (env `TOGETHER_API_KEY`) to `Settings`.
 
-A later `AnthropicLLM` class wraps the SDK; tests must not instantiate it.
+A later `TogetherLLM` class wraps the Together v2 SDK; tests must not instantiate it or pass a real `TOGETHER_API_KEY`.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -550,7 +552,7 @@ def test_one_document_two_ticker_signals(session: Session) -> None:
             ),
         ]
     )
-    created = extract_document(session, doc, FakeLLM(result), "claude-sonnet-4-6", "v1")
+    created = extract_document(session, doc, FakeLLM(result), "deepseek-ai/DeepSeek-V4-Flash-0731", "v1")
     assert created == 2
     rows = session.exec(select(Signal).where(Signal.document_id == doc.id)).all()
     assert {row.ticker_id for row in rows} == {aapl.id, msft.id}
@@ -591,9 +593,11 @@ git commit -m "test: lock multi-ticker extraction per document"
 
 **Files:**
 - Modify: `src/signalbench/cli.py`
+- Modify: `pyproject.toml`
+- Create: `src/signalbench/extraction/together_llm.py`
 - Create: `tests/test_extract_cli.py`
 
-`--llm fake` reads `tests/fixtures/extract_claims.json` or uses a built-in fake for CI. Default production path uses Anthropic only when `ANTHROPIC_API_KEY` is set; CI always uses fake.
+`--llm fake` reads `tests/fixtures/extract_claims.json` or uses a built-in fake for CI. Default production path uses Together only when `TOGETHER_API_KEY` is set; CI always uses fake.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -623,7 +627,17 @@ Expect: FAIL until `extract` command exists (Typer “No such command”).
 
 - [ ] **Step 3: Add `extract` command**
 
-`signalbench extract --llm fake` loads all `raw_documents` without a signal for current `model_version`+`prompt_version` and runs `extract_document` with `FakeLLM` in tests. Production: `AnthropicLLM`.
+`signalbench extract --llm fake` loads all `raw_documents` without a signal for current `model_version`+`prompt_version` and runs `extract_document` with `FakeLLM` in tests. Production: `TogetherLLM` (`src/signalbench/extraction/together_llm.py`).
+
+`TogetherLLM.complete` must:
+
+1. Call `client.chat.completions.create()` with `together>=2.0.0`.
+2. Pass `model=self.model_version` (default `deepseek-ai/DeepSeek-V4-Flash-0731`).
+3. Set `response_format` to `json_schema` using `ExtractionResult.model_json_schema()` (name `extraction_result`). Tell the system prompt to respond only in JSON.
+4. Parse `choices[0].message.content` with `ExtractionResult.model_validate_json`. Do not parse the `reasoning` field. Raise on empty content.
+5. Use `temperature=0`. Pass `reasoning={"enabled": False}` so extract does not pay for thinking tokens. Do not stream. Do not use the Batch API.
+
+Add `together>=2.0.0` to `pyproject.toml` dependencies. CLI `--llm together` (or default when `TOGETHER_API_KEY` is set) constructs `TogetherLLM`; tests never do.
 
 - [ ] **Step 4: Run tests**
 
@@ -632,12 +646,12 @@ uv run pytest tests/test_extract_cli.py tests/test_extract.py tests/test_extract
 ```
 
 Verify: that pytest command
-Expect: all passed; no Anthropic HTTP.
+Expect: all passed; no Together HTTP (`api.together.ai` / `api.together.xyz`).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/signalbench/cli.py tests/test_extract_cli.py
+git add src/signalbench/cli.py src/signalbench/extraction/together_llm.py pyproject.toml tests/test_extract_cli.py
 git commit -m "feat: add extract CLI with fake LLM for tests"
 ```
 
@@ -658,4 +672,4 @@ Verify:
 - Fixture extract writes a `signals` row with `model_version` and `prompt_version`.
 - Same `(document_id, ticker_id, model_version, prompt_version)` does not duplicate.
 - New `prompt_version` inserts a second row (`test_new_prompt_version_inserts_second_row`).
-- No test constructs `Anthropic()` / hits `api.anthropic.com`.
+- No test constructs `Together()` / hits `api.together.ai` or `api.together.xyz`.

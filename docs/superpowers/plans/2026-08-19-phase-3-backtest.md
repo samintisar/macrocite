@@ -91,7 +91,7 @@ def test_fingerprint_required(session: Session) -> None:
             ticker_ids=[str(cfg.id)],
             start_date=date(2024, 1, 1),
             end_date=date(2024, 12, 31),
-            model_version="claude-sonnet-4-6",
+            model_version="deepseek-ai/DeepSeek-V4-Flash-0731",
             prompt_version="v1",
             # fingerprint omitted
         )
@@ -405,7 +405,7 @@ def test_extracted_in_2026_trades_asof_2022(session: Session) -> None:
         Signal(
             document_id=doc.id,
             ticker_id=ticker.id,
-            model_version="claude-sonnet-4-6",
+            model_version="deepseek-ai/DeepSeek-V4-Flash-0731",
             prompt_version="v1",
             sentiment=0.9,
             event_type=EventType.earnings,
@@ -444,7 +444,7 @@ def test_extracted_in_2026_trades_asof_2022(session: Session) -> None:
         ticker_id=ticker.id,
         sentiment_threshold=0.5,
         holding_days=1,
-        model_version="claude-sonnet-4-6",
+        model_version="deepseek-ai/DeepSeek-V4-Flash-0731",
         prompt_version="v1",
     )
     assert trades[0].entry_date == date(2022, 6, 1)
@@ -552,7 +552,7 @@ def test_second_run_matches_fingerprint(session: Session) -> None:
         Signal(
             document_id=doc.id,
             ticker_id=ticker.id,
-            model_version="claude-sonnet-4-6",
+            model_version="deepseek-ai/DeepSeek-V4-Flash-0731",
             prompt_version="v1",
             sentiment=0.9,
             event_type=EventType.earnings,
@@ -586,8 +586,8 @@ def test_second_run_matches_fingerprint(session: Session) -> None:
     )
     session.commit()
     params = {"sentiment_threshold": 0.5, "holding_days": 1, "name": "mvp"}
-    r1 = persist_run(session, ticker_id=ticker.id, params=params, model_version="claude-sonnet-4-6", prompt_version="v1")
-    r2 = persist_run(session, ticker_id=ticker.id, params=params, model_version="claude-sonnet-4-6", prompt_version="v1")
+    r1 = persist_run(session, ticker_id=ticker.id, params=params, model_version="deepseek-ai/DeepSeek-V4-Flash-0731", prompt_version="v1")
+    r2 = persist_run(session, ticker_id=ticker.id, params=params, model_version="deepseek-ai/DeepSeek-V4-Flash-0731", prompt_version="v1")
     assert r1.signal_set_fingerprint == r2.signal_set_fingerprint
     assert r1.sharpe_ratio == r2.sharpe_ratio
 ```

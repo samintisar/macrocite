@@ -53,14 +53,14 @@ def test_extract_persists_rationale_and_raw_payload(session: Session) -> None:
         session,
         document=doc,
         llm=llm,
-        model_version="claude-sonnet-4-6",
+        model_version="deepseek-ai/DeepSeek-V4-Flash-0731",
         prompt_version="v1",
     )
     assert created == 1
     row = session.exec(select(Signal)).one()
     assert row.rationale == "Beat on EPS."
     assert row.raw_llm_response is not None
-    assert row.model_version == "claude-sonnet-4-6"
+    assert row.model_version == "deepseek-ai/DeepSeek-V4-Flash-0731"
     assert row.prompt_version == "v1"
     assert row.ticker_id == ticker.id
     assert llm.calls == 1
@@ -91,8 +91,8 @@ def test_same_key_does_not_duplicate(session: Session) -> None:
             )
         ]
     )
-    extract_document(session, doc, FakeLLM(result), "claude-sonnet-4-6", "v1")
-    extract_document(session, doc, FakeLLM(result), "claude-sonnet-4-6", "v1")
+    extract_document(session, doc, FakeLLM(result), "deepseek-ai/DeepSeek-V4-Flash-0731", "v1")
+    extract_document(session, doc, FakeLLM(result), "deepseek-ai/DeepSeek-V4-Flash-0731", "v1")
     assert len(session.exec(select(Signal)).all()) == 1
 
 
@@ -131,7 +131,7 @@ def test_one_document_two_ticker_signals(session: Session) -> None:
         ]
     )
     created = extract_document(
-        session, doc, FakeLLM(result), "claude-sonnet-4-6", "v1"
+        session, doc, FakeLLM(result), "deepseek-ai/DeepSeek-V4-Flash-0731", "v1"
     )
     assert created == 2
     rows = session.exec(select(Signal).where(Signal.document_id == doc.id)).all()

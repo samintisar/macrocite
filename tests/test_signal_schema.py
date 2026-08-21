@@ -31,7 +31,7 @@ def test_unique_document_ticker_model_prompt(session: Session) -> None:
     kwargs = {
         "document_id": doc.id,
         "ticker_id": ticker.id,
-        "model_version": "claude-sonnet-4-6",
+        "model_version": "deepseek-ai/DeepSeek-V4-Flash-0731",
         "prompt_version": "v1",
         "sentiment": 0.4,
         "event_type": EventType.earnings,
@@ -52,7 +52,7 @@ def test_new_prompt_version_inserts_second_row(session: Session) -> None:
         Signal(
             document_id=doc.id,
             ticker_id=ticker.id,
-            model_version="claude-sonnet-4-6",
+            model_version="deepseek-ai/DeepSeek-V4-Flash-0731",
             prompt_version="v1",
             sentiment=0.4,
             event_type=EventType.earnings,
@@ -64,7 +64,7 @@ def test_new_prompt_version_inserts_second_row(session: Session) -> None:
         Signal(
             document_id=doc.id,
             ticker_id=ticker.id,
-            model_version="claude-sonnet-4-6",
+            model_version="deepseek-ai/DeepSeek-V4-Flash-0731",
             prompt_version="v2",
             sentiment=0.5,
             event_type=EventType.earnings,
