@@ -2,6 +2,7 @@ import uuid
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from enum import Enum
+from typing import Any
 
 from sqlalchemy import (
     JSON,
@@ -170,3 +171,44 @@ class EvalRun(SQLModel, table=True):
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),
     )
+
+
+class BacktestConfig(SQLModel, table=True):
+    __tablename__ = "backtest_configs"
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    name: str
+    strategy_type: str
+    params: dict[str, object] = Field(sa_column=Column(JSON, nullable=False))
+    created_at: datetime = Field(
+        default_factory=utcnow,
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
+
+
+class BacktestRun(SQLModel, table=True):
+    __tablename__ = "backtest_runs"
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    config_id: uuid.UUID = Field(foreign_key="backtest_configs.id", ondelete="RESTRICT")
+    ticker_ids: list[str] = Field(sa_column=Column(JSON, nullable=False))
+    start_date: date
+    end_date: date
+    model_version: str
+    prompt_version: str
+    signal_set_fingerprint: str
+    sharpe_ratio: float | None = None
+    max_drawdown: float | None = None
+    win_rate: float | None = None
+    total_return: float | None = None
+    benchmark_return: float | None = None
+    trade_log: list[object] | None = Field(default=None, sa_column=Column(JSON))
+    run_at: datetime = Field(
+        default_factory=utcnow,
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
+
+    def __init__(self, **data: Any) -> None:
+        if "signal_set_fingerprint" not in data:
+            raise TypeError("signal_set_fingerprint is required")
+        super().__init__(**data)
