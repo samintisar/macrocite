@@ -18,4 +18,4 @@ Layout:
 - `data/watchlist.yaml` — 20-ticker seed
 - Isolated work in `.worktrees/<phase>/` (gitignored via `.git/info/exclude`). Do not register worktrees as Serena projects.
 
-Phase 0 is on `main`. Phase 1 (extraction) is next.
+Phases 0–2 are on `main`. Phase 2 eval harness: git labels, metrics, 5-point CI gate, `eval_runs` (Alembic `0004_eval_runs`), `python -m signalbench.eval` calls Together on frozen `raw_text` (pytest injects a fake LLM). CI needs GitHub secret `TOGETHER_API_KEY`. Next: Phase 3 backtest.

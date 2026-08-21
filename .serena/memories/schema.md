@@ -12,4 +12,6 @@ Alembic `0001_phase0` is the Postgres source of truth for Phase 0 tables. Tests 
 
 Phase 1 adds `signals` unique `(document_id, ticker_id, model_version, prompt_version)`. Extraction may name a ticker not on `document_tickers`.
 
+Phase 2 adds `eval_runs` (Alembic `0004_eval_runs`; `0003` already widened `prices.volume`). Labels live in `evals/labels.json` with frozen `raw_text` — not FKs to `raw_documents`. Failed CI gates still insert (`passed_ci_gate=false`).
+
 See `mem:conventions`, `mem:core`.

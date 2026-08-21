@@ -8,7 +8,8 @@ Package/test (repo or worktree root):
 - `uv run mypy src tests`
 
 API: `uv run uvicorn signalbench.api.main:app --reload`
-CLI: `uv run signalbench --help` (`seed-watchlist`, `ingest filings`, `ingest prices`)
+CLI: `uv run signalbench --help` (`seed-watchlist`, `ingest filings`, `ingest prices`, `extract`, `eval`)
+Eval (no Postgres): `uv run python -m signalbench.eval` — persist only if `DATABASE_URL` is in the process env.
 
 Postgres: `docker compose up -d` (needs Docker Desktop running). Env: `.env.example` → `DATABASE_URL`, `SEC_USER_AGENT`.
 

@@ -1,7 +1,68 @@
+# Virtual environments
 .venv/
+venv/
+env/
+
+# Secrets and local env (keep .env.example)
 .env
+.env.*
+!.env.example
+
+# Python bytecode and packaging
 __pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+.eggs/
+build/
+dist/
+wheels/
+sdist/
+pip-wheel-metadata/
+
+# Test / type / lint caches and coverage
+.pytest_cache/
 .mypy_cache/
 .ruff_cache/
-*.pyc
-dist/
+.hypothesis/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.cover
+.cache
+
+# Isolated git worktrees (local phase work)
+.worktrees/
+
+# Serena local state (memories and project.yml stay tracked)
+.serena/cache/
+.serena/project.local.yml
+
+# Cursor / editor local files (keep .cursor/rules)
+.cursor/mcp.json
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Logs and local databases
+*.log
+logs/
+*.sqlite
+*.sqlite3
+*.db
+
+# Docker local overrides
+docker-compose.override.yml
