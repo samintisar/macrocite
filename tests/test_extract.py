@@ -96,6 +96,42 @@ def test_same_key_does_not_duplicate(session: Session) -> None:
     assert len(session.exec(select(Signal)).all()) == 1
 
 
+def test_extract_creates_inactive_ticker_for_unknown_symbol(session: Session) -> None:
+    doc = RawDocument(
+        source="sec_edgar",
+        external_id="acc-unknown-ticker",
+        doc_type="eight_k",
+        raw_text="ZZZZ announces a new product line.",
+        published_at=datetime(2024, 2, 1, tzinfo=UTC),
+    )
+    session.add(doc)
+    session.commit()
+    session.refresh(doc)
+    result = ExtractionResult(
+        claims=[
+            ExtractedClaim(
+                ticker="ZZZZ",
+                sentiment=0.2,
+                event_type=EventTypeName.product,
+                confidence=0.6,
+                rationale="New product mentioned.",
+            )
+        ]
+    )
+    created = extract_document(
+        session,
+        document=doc,
+        llm=FakeLLM(result),
+        model_version="deepseek-ai/DeepSeek-V4-Flash-0731",
+        prompt_version="v1",
+    )
+    assert created == 1
+    ticker = session.exec(select(Ticker).where(Ticker.symbol == "ZZZZ")).one()
+    assert ticker.active is False
+    signal = session.exec(select(Signal)).one()
+    assert signal.ticker_id == ticker.id
+
+
 def test_one_document_two_ticker_signals(session: Session) -> None:
     aapl = Ticker(symbol="AAPL", company_name="Apple Inc.", active=True)
     msft = Ticker(symbol="MSFT", company_name="Microsoft Corporation", active=True)
