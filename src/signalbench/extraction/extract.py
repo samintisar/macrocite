@@ -13,6 +13,26 @@ class LLMClient(Protocol):
     def complete(self, prompt: str, raw_text: str) -> ExtractionResult: ...
 
 
+def documents_pending_extract(
+    session: Session,
+    model_version: str,
+    prompt_version: str,
+) -> list[RawDocument]:
+    extracted_ids = set(
+        session.exec(
+            select(Signal.document_id).where(
+                Signal.model_version == model_version,
+                Signal.prompt_version == prompt_version,
+            )
+        ).all()
+    )
+    return [
+        document
+        for document in session.exec(select(RawDocument)).all()
+        if document.id not in extracted_ids
+    ]
+
+
 def extract_document(
     session: Session,
     document: RawDocument,

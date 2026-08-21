@@ -6,9 +6,13 @@ import typer
 from sqlmodel import Session, select
 
 from signalbench.config import settings
-from signalbench.db.models import RawDocument, Ticker
+from signalbench.db.models import Ticker
 from signalbench.db.session import get_session
-from signalbench.extraction.extract import LLMClient, extract_document
+from signalbench.extraction.extract import (
+    LLMClient,
+    documents_pending_extract,
+    extract_document,
+)
 from signalbench.extraction.schema import ExtractionResult
 from signalbench.ingest.edgar import ingest_eight_ks_for_symbol
 from signalbench.ingest.prices import fetch_yfinance_daily, ingest_daily_prices
@@ -55,7 +59,9 @@ def extract(
 ) -> None:
     client = _llm_client(llm)
     with get_session() as session:
-        for document in session.exec(select(RawDocument)).all():
+        for document in documents_pending_extract(
+            session, settings.model_version, settings.prompt_version
+        ):
             extract_document(
                 session,
                 document,

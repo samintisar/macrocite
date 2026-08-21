@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 
 from sqlmodel import Session, select
 
-from signalbench.db.models import RawDocument, Signal, Ticker
+from signalbench.db.models import EventType, RawDocument, Signal, Ticker
 from signalbench.extraction.extract import extract_document
 from signalbench.extraction.schema import (
     EventTypeName,
@@ -136,3 +136,79 @@ def test_one_document_two_ticker_signals(session: Session) -> None:
     assert created == 2
     rows = session.exec(select(Signal).where(Signal.document_id == doc.id)).all()
     assert {row.ticker_id for row in rows} == {aapl.id, msft.id}
+
+
+def test_documents_pending_extract_skips_current_version_pair(session: Session) -> None:
+    from signalbench.extraction.extract import documents_pending_extract
+
+    ticker = Ticker(symbol="AAPL", company_name="Apple Inc.", active=True)
+    session.add(ticker)
+    session.commit()
+    session.refresh(ticker)
+
+    already = RawDocument(
+        source="sec_edgar",
+        external_id="acc-already",
+        doc_type="eight_k",
+        raw_text="already extracted",
+        published_at=datetime(2024, 1, 15, tzinfo=UTC),
+    )
+    fresh = RawDocument(
+        source="sec_edgar",
+        external_id="acc-fresh",
+        doc_type="eight_k",
+        raw_text="needs extract",
+        published_at=datetime(2024, 1, 16, tzinfo=UTC),
+    )
+    other_prompt = RawDocument(
+        source="sec_edgar",
+        external_id="acc-other-prompt",
+        doc_type="eight_k",
+        raw_text="extracted under old prompt",
+        published_at=datetime(2024, 1, 17, tzinfo=UTC),
+    )
+    session.add(already)
+    session.add(fresh)
+    session.add(other_prompt)
+    session.commit()
+    session.refresh(already)
+    session.refresh(fresh)
+    session.refresh(other_prompt)
+
+    session.add(
+        Signal(
+            document_id=already.id,
+            ticker_id=ticker.id,
+            model_version="deepseek-ai/DeepSeek-V4-Flash-0731",
+            prompt_version="v1",
+            sentiment=0.4,
+            event_type=EventType.earnings,
+            confidence=0.8,
+            rationale="done",
+            raw_llm_response={"ok": True},
+        )
+    )
+    session.add(
+        Signal(
+            document_id=other_prompt.id,
+            ticker_id=ticker.id,
+            model_version="deepseek-ai/DeepSeek-V4-Flash-0731",
+            prompt_version="v0",
+            sentiment=0.1,
+            event_type=EventType.other,
+            confidence=0.5,
+            rationale="old prompt",
+            raw_llm_response={"ok": True},
+        )
+    )
+    session.commit()
+
+    pending = documents_pending_extract(
+        session,
+        model_version="deepseek-ai/DeepSeek-V4-Flash-0731",
+        prompt_version="v1",
+    )
+    pending_ids = {doc.id for doc in pending}
+    assert already.id not in pending_ids
+    assert fresh.id in pending_ids
+    assert other_prompt.id in pending_ids
