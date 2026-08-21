@@ -54,6 +54,13 @@ def prices() -> None:
             typer.echo(f"{index}/{len(tickers)} {ticker.symbol} +{created}")
 
 
+@app.command("eval")
+def run_eval() -> None:
+    from signalbench.eval.__main__ import main
+
+    raise typer.Exit(main())
+
+
 @app.command()
 def extract(
     llm: Annotated[
