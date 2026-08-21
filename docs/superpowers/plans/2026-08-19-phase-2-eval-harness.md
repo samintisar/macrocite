@@ -23,7 +23,7 @@
 - Create: `src/signalbench/eval/gate.py` — compare to baseline, exit code
 - Create: `src/signalbench/eval/__main__.py` — `python -m signalbench.eval`
 - Modify: `src/signalbench/db/models.py` — `EvalRun`
-- Create: `alembic/versions/0003_eval_runs.py`
+- Create: `alembic/versions/0004_eval_runs.py`
 - Create: `src/signalbench/eval/persist.py`
 - Create: `.github/workflows/eval.yml`
 - Create: `tests/test_eval_labels.py`, `tests/test_eval_metrics.py`, `tests/test_eval_gate.py`, `tests/test_eval_persist.py`, `tests/test_eval_workflow.py`
@@ -384,7 +384,7 @@ git commit -m "feat: fail eval gate when accuracy drops more than 5 points"
 - Modify: `src/signalbench/db/models.py`
 - Create: `src/signalbench/eval/persist.py`
 - Create: `tests/test_eval_persist.py`
-- Create: `alembic/versions/0003_eval_runs.py`
+- Create: `alembic/versions/0004_eval_runs.py`
 
 ```python
 class EvalRun(SQLModel, table=True):
@@ -455,7 +455,7 @@ Expect: row inserted with `passed_ci_gate=false`.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/signalbench/db/models.py src/signalbench/eval/persist.py alembic/versions/0003_eval_runs.py tests/test_eval_persist.py
+git add src/signalbench/db/models.py src/signalbench/eval/persist.py alembic/versions/0004_eval_runs.py tests/test_eval_persist.py
 git commit -m "feat: persist eval_runs including failed CI gates"
 ```
 
