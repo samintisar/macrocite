@@ -15,3 +15,5 @@ jobs:
       - uses: astral-sh/setup-uv@v4
       - run: uv sync --group dev
       - run: uv run python -m signalbench.eval
+        env:
+          TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
