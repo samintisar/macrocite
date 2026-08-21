@@ -1,3 +1,4 @@
+from datetime import UTC, date, datetime, time
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -46,8 +47,11 @@ def filings() -> None:
 @ingest_app.command()
 def prices() -> None:
     with get_session() as session:
-        for ticker in _active_tickers(session):
-            ingest_daily_prices(session, ticker, fetch=fetch_yfinance_daily)
+        tickers = _active_tickers(session)
+        typer.echo(f"Ingesting prices for {len(tickers)} tickers (2y window)")
+        for index, ticker in enumerate(tickers, start=1):
+            created = ingest_daily_prices(session, ticker, fetch=fetch_yfinance_daily)
+            typer.echo(f"{index}/{len(tickers)} {ticker.symbol} +{created}")
 
 
 @app.command()
@@ -56,12 +60,28 @@ def extract(
         Literal["fake", "together"] | None,
         typer.Option("--llm", help="LLM backend: fake (CI) or together (production)."),
     ] = None,
+    since: Annotated[
+        str | None,
+        typer.Option(
+            "--since",
+            help="Only extract documents published on or after this UTC date (YYYY-MM-DD).",
+        ),
+    ] = None,
 ) -> None:
     client = _llm_client(llm)
+    cutoff = None
+    if since is not None:
+        cutoff = datetime.combine(date.fromisoformat(since), time.min, tzinfo=UTC)
     with get_session() as session:
-        for document in documents_pending_extract(
-            session, settings.model_version, settings.prompt_version
-        ):
+        pending = documents_pending_extract(
+            session,
+            settings.model_version,
+            settings.prompt_version,
+            since=cutoff,
+        )
+        typer.echo(f"Extracting {len(pending)} documents")
+        for index, document in enumerate(pending, start=1):
+            typer.echo(f"{index}/{len(pending)} {document.external_id}")
             extract_document(
                 session,
                 document,

@@ -248,3 +248,37 @@ def test_documents_pending_extract_skips_current_version_pair(session: Session) 
     assert already.id not in pending_ids
     assert fresh.id in pending_ids
     assert other_prompt.id in pending_ids
+
+
+def test_documents_pending_extract_respects_since(session: Session) -> None:
+    from signalbench.extraction.extract import documents_pending_extract
+
+    old = RawDocument(
+        source="sec_edgar",
+        external_id="acc-old",
+        doc_type="eight_k",
+        raw_text="2015 filing",
+        published_at=datetime(2015, 1, 28, tzinfo=UTC),
+    )
+    recent = RawDocument(
+        source="sec_edgar",
+        external_id="acc-recent",
+        doc_type="eight_k",
+        raw_text="2026 filing",
+        published_at=datetime(2026, 3, 1, tzinfo=UTC),
+    )
+    session.add(old)
+    session.add(recent)
+    session.commit()
+    session.refresh(old)
+    session.refresh(recent)
+
+    pending = documents_pending_extract(
+        session,
+        model_version="deepseek-ai/DeepSeek-V4-Flash-0731",
+        prompt_version="v1",
+        since=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    pending_ids = {doc.id for doc in pending}
+    assert old.id not in pending_ids
+    assert recent.id in pending_ids

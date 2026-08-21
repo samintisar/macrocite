@@ -20,12 +20,13 @@ def ingest_eight_ks_for_symbol(
     symbol: str,
     client: httpx.Client,
     user_agent: str,
+    cik10: str | None = None,
 ) -> int:
     ticker = session.exec(select(Ticker).where(Ticker.symbol == symbol)).one()
     headers = {"User-Agent": user_agent}
 
-    cik10 = _lookup_cik_for_symbol(client, headers, symbol)
-    submissions = _get_json(client, SUBMISSIONS_URL_TEMPLATE.format(cik10=cik10), headers)
+    resolved_cik = cik10 or _lookup_cik_for_symbol(client, headers, symbol)
+    submissions = _get_json(client, SUBMISSIONS_URL_TEMPLATE.format(cik10=resolved_cik), headers)
     recent = submissions["filings"]["recent"]
 
     created = 0
@@ -49,7 +50,7 @@ def ingest_eight_ks_for_symbol(
             continue
 
         archive_url = ARCHIVE_URL_TEMPLATE.format(
-            cik_no_zeros=str(int(cik10)),
+            cik_no_zeros=str(int(resolved_cik)),
             accession_nodash=accession_number.replace("-", ""),
             primary_document=primary_document,
         )

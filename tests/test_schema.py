@@ -93,3 +93,9 @@ def test_price_requires_adj_close(session: Session) -> None:
     session.commit()
     row = session.exec(select(Price)).one()
     assert row.adj_close == Decimal("100.5000")
+
+
+def test_price_volume_column_is_bigint() -> None:
+    from sqlalchemy import BigInteger
+
+    assert isinstance(Price.__table__.c.volume.type, BigInteger)

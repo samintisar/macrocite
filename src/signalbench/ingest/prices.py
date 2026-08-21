@@ -24,12 +24,12 @@ def ingest_daily_prices(
     ticker: Ticker,
     fetch: Callable[[str], list[DailyBar]],
 ) -> int:
+    existing_dates = set(
+        session.exec(select(Price.date).where(Price.ticker_id == ticker.id)).all()
+    )
     created = 0
     for bar in fetch(ticker.symbol):
-        existing = session.exec(
-            select(Price).where(Price.ticker_id == ticker.id, Price.date == bar.date)
-        ).first()
-        if existing is not None:
+        if bar.date in existing_dates:
             continue
         session.add(
             Price(
@@ -51,7 +51,7 @@ def ingest_daily_prices(
 def fetch_yfinance_daily(symbol: str) -> list[DailyBar]:
     import yfinance as yf
 
-    frame = yf.Ticker(symbol).history(period="max", auto_adjust=False, timeout=30)
+    frame = yf.Ticker(symbol).history(period="2y", auto_adjust=False, timeout=30)
     bars: list[DailyBar] = []
     for idx, row in frame.iterrows():
         adj = row["Adj Close"] if "Adj Close" in row.index else row["Close"]

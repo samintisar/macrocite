@@ -1,4 +1,5 @@
 import uuid
+from datetime import UTC, datetime
 from typing import Protocol, cast
 
 from sqlalchemy.exc import IntegrityError
@@ -17,6 +18,7 @@ def documents_pending_extract(
     session: Session,
     model_version: str,
     prompt_version: str,
+    since: datetime | None = None,
 ) -> list[RawDocument]:
     extracted_ids = set(
         session.exec(
@@ -26,11 +28,25 @@ def documents_pending_extract(
             )
         ).all()
     )
-    return [
+    pending = [
         document
         for document in session.exec(select(RawDocument)).all()
         if document.id not in extracted_ids
     ]
+    if since is None:
+        return pending
+    cutoff = since if since.tzinfo is not None else since.replace(tzinfo=UTC)
+    return [
+        document
+        for document in pending
+        if _as_utc(document.published_at) >= cutoff
+    ]
+
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value
 
 
 def extract_document(

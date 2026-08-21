@@ -110,3 +110,56 @@ def test_extract_skips_llm_when_signal_exists_for_current_version(
     result = runner.invoke(app, ["extract", "--llm", "fake"])
     assert result.exit_code == 0, result.stdout + str(result.exception)
     assert llm.calls == 1
+
+
+def test_extract_since_skips_older_documents(monkeypatch: pytest.MonkeyPatch) -> None:
+    from datetime import UTC, datetime
+
+    from signalbench.db.models import RawDocument
+    from signalbench.extraction.schema import ExtractionResult
+
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False})
+    SQLModel.metadata.create_all(engine)
+
+    with Session(engine) as seed:
+        seed.add(
+            RawDocument(
+                source="sec_edgar",
+                external_id="acc-old",
+                doc_type="eight_k",
+                raw_text="old",
+                published_at=datetime(2015, 1, 28, tzinfo=UTC),
+            )
+        )
+        seed.add(
+            RawDocument(
+                source="sec_edgar",
+                external_id="acc-new",
+                doc_type="eight_k",
+                raw_text="new",
+                published_at=datetime(2026, 3, 1, tzinfo=UTC),
+            )
+        )
+        seed.commit()
+
+    @contextmanager
+    def _session() -> Generator[Session, None, None]:
+        with Session(engine) as session:
+            yield session
+
+    class CountingLLM:
+        def __init__(self) -> None:
+            self.texts: list[str] = []
+
+        def complete(self, prompt: str, raw_text: str) -> ExtractionResult:
+            self.texts.append(raw_text)
+            return ExtractionResult(claims=[])
+
+    llm = CountingLLM()
+    monkeypatch.setattr("signalbench.cli.get_session", _session)
+    monkeypatch.setattr("signalbench.cli._llm_client", lambda _choice: llm)
+    monkeypatch.delenv("TOGETHER_API_KEY", raising=False)
+
+    result = runner.invoke(app, ["extract", "--llm", "fake", "--since", "2026-01-01"])
+    assert result.exit_code == 0, result.stdout + str(result.exception)
+    assert llm.texts == ["new"]

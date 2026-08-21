@@ -3,7 +3,15 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from enum import Enum
 
-from sqlalchemy import JSON, Column, DateTime, Numeric, Text, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    Column,
+    DateTime,
+    Numeric,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.types import TypeDecorator
 from sqlmodel import Field, SQLModel
 
@@ -99,7 +107,7 @@ class Price(SQLModel, table=True):
     low: Decimal = Field(sa_column=Column(Numeric(12, 4), nullable=False))
     close: Decimal = Field(sa_column=Column(Numeric(12, 4), nullable=False))
     adj_close: Decimal = Field(sa_column=Column(Numeric(12, 4), nullable=False))
-    volume: int
+    volume: int = Field(sa_column=Column(BigInteger, nullable=False))
 
 
 class EventType(str, Enum):
