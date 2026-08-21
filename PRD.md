@@ -4,7 +4,7 @@
 
 Status: Draft v1
 Owner: Samin
-Last updated: 2026-08-19
+Last updated: 2026-08-20
 
 ---
 
@@ -59,7 +59,7 @@ SignalBench is a research tool that extracts structured signals (sentiment, even
 - Ingestion runs on a scheduled job (cron or GitHub Actions scheduled workflow), writes raw docs to Postgres with dedup on (source, external_id); EDGAR uses accession number.
 
 ### 6.2 Signal Extraction
-- LLM call (Claude via API) per document, forced structured output:
+- LLM call (Together AI chat completions) per document, forced structured output via `response_format` `json_schema`:
   ```json
   {
     "ticker": "string",
@@ -96,10 +96,10 @@ Design principle: complement LLM Reliability Console, don't duplicate it. That p
 |---|---|---|
 | Backend | Python 3.11 / FastAPI | Standard for AI service backends; reuses familiar patterns |
 | Package/env mgmt | uv | Fast-emerging standard; signals current tooling awareness over pip/poetry |
-| Structured LLM output | Pydantic v2 + Anthropic native tool-use (`instructor` as a faster-to-wire alternative) | Industry-standard pattern for reliable structured extraction; native tool-use shows deeper understanding of what's happening under the hood vs. a wrapper library |
+| Structured LLM output | Pydantic v2 + Together `json_schema` (`ExtractionResult.model_json_schema()`) | Industry-standard structured extraction without Anthropic cost; schema-constrained JSON shows the contract is enforced at the API, not just in the prompt |
 | ORM / DB models | SQLModel | Pydantic + SQLAlchemy combined, built by FastAPI's author; trending in the ecosystem |
 | Database | PostgreSQL (+ pgvector extension) | Time-series + relational joins (signals ↔ prices ↔ tickers); pgvector enables a "similar historical signals" semantic search feature, reusing SolomindLM's embeddings/RAG experience in a new domain |
-| Signal LLM | Claude API (structured outputs) | Swap-testable for eval harness; existing API familiarity |
+| Signal LLM | Together AI (`deepseek-ai/DeepSeek-V4-Flash-0731` default; `model_version` in config) | Swap-testable for eval harness; serverless chat is cheaper than Claude for per-document extraction |
 | Eval framework | DeepEval or promptfoo + custom metrics on top | Recognized eval tooling is increasingly asked about by name in interviews; custom metrics on top show raw engineering isn't outsourced entirely |
 | Backtesting | vectorbt | Fast, numpy-vectorized, good docs |
 | Data sources | Alpha Vantage, SEC EDGAR, yfinance | Free tiers sufficient at MVP scale |

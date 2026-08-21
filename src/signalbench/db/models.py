@@ -3,7 +3,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from enum import Enum
 
-from sqlalchemy import Column, DateTime, Numeric, Text, UniqueConstraint
+from sqlalchemy import JSON, Column, DateTime, Numeric, Text, UniqueConstraint
 from sqlalchemy.types import TypeDecorator
 from sqlmodel import Field, SQLModel
 
@@ -100,3 +100,44 @@ class Price(SQLModel, table=True):
     close: Decimal = Field(sa_column=Column(Numeric(12, 4), nullable=False))
     adj_close: Decimal = Field(sa_column=Column(Numeric(12, 4), nullable=False))
     volume: int
+
+
+class EventType(str, Enum):
+    earnings = "earnings"
+    guidance = "guidance"
+    leadership = "leadership"
+    legal = "legal"
+    product = "product"
+    macro = "macro"
+    other = "other"
+
+
+class Signal(SQLModel, table=True):
+    __tablename__ = "signals"
+    # Table-model __init__ skips Pydantic; validate_assignment enforces Field ge/le.
+    model_config = SQLModel.model_config.copy()
+    model_config["validate_assignment"] = True
+    __table_args__ = (
+        UniqueConstraint(
+            "document_id",
+            "ticker_id",
+            "model_version",
+            "prompt_version",
+            name="uq_signals_doc_ticker_model_prompt",
+        ),
+    )
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    document_id: uuid.UUID = Field(foreign_key="raw_documents.id", ondelete="CASCADE")
+    ticker_id: uuid.UUID = Field(foreign_key="tickers.id", ondelete="RESTRICT")
+    model_version: str
+    prompt_version: str
+    sentiment: float = Field(ge=-1.0, le=1.0)
+    event_type: EventType
+    confidence: float = Field(ge=0.0, le=1.0)
+    rationale: str | None = None
+    raw_llm_response: dict[str, object] | None = Field(default=None, sa_column=Column(JSON))
+    extracted_at: datetime = Field(
+        default_factory=utcnow,
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )

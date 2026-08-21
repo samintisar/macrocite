@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Annotated, Literal
 
 import httpx
 import typer
@@ -7,6 +8,12 @@ from sqlmodel import Session, select
 from signalbench.config import settings
 from signalbench.db.models import Ticker
 from signalbench.db.session import get_session
+from signalbench.extraction.extract import (
+    LLMClient,
+    documents_pending_extract,
+    extract_document,
+)
+from signalbench.extraction.schema import ExtractionResult
 from signalbench.ingest.edgar import ingest_eight_ks_for_symbol
 from signalbench.ingest.prices import fetch_yfinance_daily, ingest_daily_prices
 from signalbench.ingest.seed import seed_watchlist as seed_watchlist_from_yaml
@@ -41,6 +48,45 @@ def prices() -> None:
     with get_session() as session:
         for ticker in _active_tickers(session):
             ingest_daily_prices(session, ticker, fetch=fetch_yfinance_daily)
+
+
+@app.command()
+def extract(
+    llm: Annotated[
+        Literal["fake", "together"] | None,
+        typer.Option("--llm", help="LLM backend: fake (CI) or together (production)."),
+    ] = None,
+) -> None:
+    client = _llm_client(llm)
+    with get_session() as session:
+        for document in documents_pending_extract(
+            session, settings.model_version, settings.prompt_version
+        ):
+            extract_document(
+                session,
+                document,
+                client,
+                settings.model_version,
+                settings.prompt_version,
+            )
+
+
+class _FakeLLM:
+    def complete(self, prompt: str, raw_text: str) -> ExtractionResult:
+        return ExtractionResult(claims=[])
+
+
+def _llm_client(llm: Literal["fake", "together"] | None) -> LLMClient:
+    if llm == "fake":
+        return _FakeLLM()
+    if llm == "together" or settings.together_api_key:
+        from signalbench.extraction.together_llm import TogetherLLM
+
+        return TogetherLLM(
+            model_version=settings.model_version,
+            api_key=settings.together_api_key,
+        )
+    return _FakeLLM()
 
 
 def _active_tickers(session: Session) -> list[Ticker]:

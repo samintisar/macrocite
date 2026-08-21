@@ -10,7 +10,7 @@
 
 **Depends on:** empty repo besides [PRD.md](../../../PRD.md) and [docs/superpowers/README.md](../README.md).
 
-**Out of scope:** Claude, `signals` table, evals, vectorbt, dashboard, Alpha Vantage, pgvector.
+**Out of scope:** Together AI / LLM extraction, `signals` table, evals, vectorbt, dashboard, Alpha Vantage, pgvector.
 
 ---
 

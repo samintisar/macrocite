@@ -105,7 +105,7 @@ def test_signals_include_rationale(session: Session) -> None:
         Signal(
             document_id=doc.id,
             ticker_id=ticker.id,
-            model_version="claude-sonnet-4-6",
+            model_version="deepseek-ai/DeepSeek-V4-Flash-0731",
             prompt_version="v1",
             sentiment=0.4,
             event_type=EventType.earnings,
