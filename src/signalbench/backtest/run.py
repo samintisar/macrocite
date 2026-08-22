@@ -8,9 +8,16 @@ from typing import cast
 from sqlalchemy import ColumnElement
 from sqlmodel import Session, col, select
 
+from signalbench.backtest.fingerprint import signal_set_fingerprint
 from signalbench.backtest.metrics import compute_metrics
 from signalbench.backtest.strategy import Trade, build_trades
-from signalbench.db.models import Price, RawDocument, Signal
+from signalbench.db.models import (
+    BacktestConfig,
+    BacktestRun,
+    Price,
+    RawDocument,
+    Signal,
+)
 
 _METRIC_KEYS = (
     "sharpe_ratio",
@@ -68,3 +75,108 @@ def run_backtest_for_ticker(
         stop_loss=stop_loss,
         take_profit=take_profit,
     )
+
+
+def _as_float(value: object, key: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        msg = f"{key} must be a number"
+        raise TypeError(msg)
+    return float(value)
+
+
+def _as_int(value: object, key: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        msg = f"{key} must be an int"
+        raise TypeError(msg)
+    return value
+
+
+def _optional_float(params: dict[str, object], key: str) -> float | None:
+    if key not in params:
+        return None
+    return _as_float(params[key], key)
+
+
+def _serialize_trades(trades: list[Trade]) -> list[dict[str, str]]:
+    return [
+        {
+            "entry_date": trade.entry_date.isoformat(),
+            "exit_date": trade.exit_date.isoformat(),
+            "entry_price": str(trade.entry_price),
+            "exit_price": str(trade.exit_price),
+        }
+        for trade in trades
+    ]
+
+
+def persist_run(
+    session: Session,
+    ticker_id: uuid.UUID,
+    params: dict[str, object],
+    model_version: str,
+    prompt_version: str,
+) -> BacktestRun:
+    name = str(params["name"])
+    config_params = {key: value for key, value in params.items() if key != "name"}
+    config = session.exec(
+        select(BacktestConfig).where(BacktestConfig.name == name)
+    ).first()
+    if config is None:
+        config = BacktestConfig(
+            name=name,
+            strategy_type="sentiment_threshold_long",
+            params=config_params,
+        )
+        session.add(config)
+
+    trades = run_backtest_for_ticker(
+        session,
+        ticker_id=ticker_id,
+        sentiment_threshold=_as_float(
+            config_params["sentiment_threshold"], "sentiment_threshold"
+        ),
+        holding_days=_as_int(config_params["holding_days"], "holding_days"),
+        model_version=model_version,
+        prompt_version=prompt_version,
+        stop_loss=_optional_float(config_params, "stop_loss"),
+        take_profit=_optional_float(config_params, "take_profit"),
+    )
+
+    signal_ids = session.exec(
+        select(Signal.id)
+        .where(Signal.ticker_id == ticker_id)
+        .where(Signal.model_version == model_version)
+        .where(Signal.prompt_version == prompt_version)
+    ).all()
+    fingerprint = signal_set_fingerprint([str(signal_id) for signal_id in signal_ids])
+
+    price_rows = session.exec(
+        select(Price).where(Price.ticker_id == ticker_id).order_by(col(Price.date))
+    ).all()
+    if not price_rows:
+        msg = f"no prices for ticker {ticker_id}"
+        raise ValueError(msg)
+    prices: list[tuple[date, Decimal]] = [
+        (row.date, row.adj_close) for row in price_rows
+    ]
+    metrics = metrics_as_json(prices, trades)
+
+    run = BacktestRun(
+        config_id=config.id,
+        ticker_ids=[str(ticker_id)],
+        start_date=price_rows[0].date,
+        end_date=price_rows[-1].date,
+        model_version=model_version,
+        prompt_version=prompt_version,
+        signal_set_fingerprint=fingerprint,
+        sharpe_ratio=metrics["sharpe_ratio"],
+        max_drawdown=metrics["max_drawdown"],
+        win_rate=metrics["win_rate"],
+        total_return=metrics["total_return"],
+        benchmark_return=metrics["benchmark_return"],
+        trade_log=_serialize_trades(trades),
+    )
+    session.add(run)
+    session.commit()
+    session.refresh(run)
+    return run

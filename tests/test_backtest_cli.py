@@ -1,0 +1,85 @@
+from datetime import UTC, date, datetime
+from decimal import Decimal
+
+from sqlmodel import Session
+from typer.testing import CliRunner
+
+from signalbench.backtest.run import persist_run
+from signalbench.cli import app
+from signalbench.db.models import EventType, Price, RawDocument, Signal, Ticker
+
+
+def test_backtest_help() -> None:
+    result = CliRunner().invoke(app, ["backtest", "--help"])
+    assert result.exit_code == 0
+
+
+def test_second_run_matches_fingerprint(session: Session) -> None:
+    ticker = Ticker(symbol="AAPL", company_name="Apple Inc.", active=True)
+    session.add(ticker)
+    session.commit()
+    session.refresh(ticker)
+    doc = RawDocument(
+        source="sec_edgar",
+        external_id="cli-bt",
+        doc_type="eight_k",
+        raw_text="beat",
+        published_at=datetime(2022, 6, 1, tzinfo=UTC),
+    )
+    session.add(doc)
+    session.commit()
+    session.refresh(doc)
+    session.add(
+        Signal(
+            document_id=doc.id,
+            ticker_id=ticker.id,
+            model_version="deepseek-ai/DeepSeek-V4-Flash-0731",
+            prompt_version="v1",
+            sentiment=0.9,
+            event_type=EventType.earnings,
+            confidence=0.9,
+            rationale="beat",
+        )
+    )
+    session.add(
+        Price(
+            ticker_id=ticker.id,
+            date=date(2022, 6, 1),
+            open=Decimal(10),
+            high=Decimal(10),
+            low=Decimal(10),
+            close=Decimal(10),
+            adj_close=Decimal(10),
+            volume=1,
+        )
+    )
+    session.add(
+        Price(
+            ticker_id=ticker.id,
+            date=date(2022, 6, 8),
+            open=Decimal(11),
+            high=Decimal(11),
+            low=Decimal(11),
+            close=Decimal(11),
+            adj_close=Decimal(11),
+            volume=1,
+        )
+    )
+    session.commit()
+    params = {"sentiment_threshold": 0.5, "holding_days": 1, "name": "mvp"}
+    r1 = persist_run(
+        session,
+        ticker_id=ticker.id,
+        params=params,
+        model_version="deepseek-ai/DeepSeek-V4-Flash-0731",
+        prompt_version="v1",
+    )
+    r2 = persist_run(
+        session,
+        ticker_id=ticker.id,
+        params=params,
+        model_version="deepseek-ai/DeepSeek-V4-Flash-0731",
+        prompt_version="v1",
+    )
+    assert r1.signal_set_fingerprint == r2.signal_set_fingerprint
+    assert r1.sharpe_ratio == r2.sharpe_ratio

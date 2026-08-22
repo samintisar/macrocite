@@ -1,11 +1,13 @@
 from datetime import UTC, date, datetime, time
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Literal, cast
 
 import httpx
 import typer
+import yaml
 from sqlmodel import Session, select
 
+from signalbench.backtest.run import persist_run
 from signalbench.config import settings
 from signalbench.db.models import Ticker
 from signalbench.db.session import get_session
@@ -20,6 +22,9 @@ from signalbench.ingest.prices import fetch_yfinance_daily, ingest_daily_prices
 from signalbench.ingest.seed import seed_watchlist as seed_watchlist_from_yaml
 
 WATCHLIST_PATH = Path(__file__).resolve().parents[2] / "data" / "watchlist.yaml"
+BACKTEST_CONFIG_PATH = (
+    Path(__file__).resolve().parents[2] / "data" / "backtest_config.yaml"
+)
 
 app = typer.Typer()
 ingest_app = typer.Typer()
@@ -59,6 +64,27 @@ def run_eval() -> None:
     from signalbench.eval.__main__ import main
 
     raise typer.Exit(main())
+
+
+@app.command()
+def backtest() -> None:
+    payload = yaml.safe_load(BACKTEST_CONFIG_PATH.read_text(encoding="utf-8"))
+    raw_params = payload["params"]
+    params: dict[str, object] = dict(cast(dict[str, object], raw_params))
+    params["name"] = payload["name"]
+    with get_session() as session:
+        for ticker in _active_tickers(session):
+            run = persist_run(
+                session,
+                ticker_id=ticker.id,
+                params=params,
+                model_version=settings.model_version,
+                prompt_version=settings.prompt_version,
+            )
+            typer.echo(
+                f"{ticker.symbol} fingerprint={run.signal_set_fingerprint[:12]} "
+                f"sharpe={run.sharpe_ratio}"
+            )
 
 
 @app.command()
