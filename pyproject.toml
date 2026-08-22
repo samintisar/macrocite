@@ -3,6 +3,7 @@ name = "signalbench"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
+  "numpy>=2.0",
   "fastapi>=0.115",
   "uvicorn[standard]>=0.32",
   "sqlmodel>=0.0.22",
