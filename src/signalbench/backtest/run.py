@@ -109,6 +109,14 @@ def _serialize_trades(trades: list[Trade]) -> list[dict[str, str]]:
     ]
 
 
+def _config_name(params: dict[str, object]) -> str:
+    raw = params.get("name")
+    if not isinstance(raw, str) or not raw.strip():
+        msg = "backtest config name is required"
+        raise ValueError(msg)
+    return raw
+
+
 def persist_run(
     session: Session,
     ticker_id: uuid.UUID,
@@ -116,18 +124,22 @@ def persist_run(
     model_version: str,
     prompt_version: str,
 ) -> BacktestRun:
-    name = str(params["name"])
+    name = _config_name(params)
     config_params = {key: value for key, value in params.items() if key != "name"}
+    strategy_type = "sentiment_threshold_long"
     config = session.exec(
         select(BacktestConfig).where(BacktestConfig.name == name)
     ).first()
     if config is None:
         config = BacktestConfig(
             name=name,
-            strategy_type="sentiment_threshold_long",
+            strategy_type=strategy_type,
             params=config_params,
         )
         session.add(config)
+    elif config.params != config_params or config.strategy_type != strategy_type:
+        msg = f"backtest config name {name!r} is taken"
+        raise ValueError(msg)
 
     trades = run_backtest_for_ticker(
         session,

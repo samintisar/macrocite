@@ -176,7 +176,7 @@ class BacktestConfig(SQLModel, table=True):
     __tablename__ = "backtest_configs"
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
-    name: str
+    name: str = Field(unique=True, index=True)
     strategy_type: str
     params: dict[str, object] = Field(sa_column=Column(JSON, nullable=False))
     created_at: datetime = Field(
