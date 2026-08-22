@@ -45,3 +45,21 @@ def test_max_drawdown_through_intraday_dip() -> None:
     ]
     m = compute_metrics(prices, trades)
     assert m.max_drawdown == 0.10
+
+
+def test_sharpe_ratio_zero_with_single_daily_return() -> None:
+    prices = [
+        (date(2024, 1, 2), Decimal(100)),
+        (date(2024, 1, 3), Decimal(110)),
+    ]
+    trades = [
+        Trade(
+            entry_date=date(2024, 1, 2),
+            exit_date=date(2024, 1, 3),
+            entry_price=Decimal(100),
+            exit_price=Decimal(110),
+        )
+    ]
+    m = compute_metrics(prices, trades)
+    assert m.sharpe_ratio == 0.0
+    assert isinstance(m.sharpe_ratio, float)

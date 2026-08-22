@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
@@ -69,8 +70,11 @@ def _sharpe_ratio(equity_curve: np.ndarray) -> float:
         return 0.0
 
     daily_returns = np.diff(equity_curve) / equity_curve[:-1]
+    if len(daily_returns) < 2:
+        return 0.0
+
     std = float(np.std(daily_returns, ddof=1))
-    if std == 0.0:
+    if not math.isfinite(std) or std == 0.0:
         return 0.0
 
     mean = float(np.mean(daily_returns))
