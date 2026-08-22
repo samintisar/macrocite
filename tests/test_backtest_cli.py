@@ -57,7 +57,7 @@ def test_second_run_matches_fingerprint(session: Session) -> None:
             high=Decimal(10),
             low=Decimal(10),
             close=Decimal(10),
-            adj_close=Decimal(10),
+            adj_close=Decimal(20),
             volume=1,
         )
     )
@@ -69,7 +69,7 @@ def test_second_run_matches_fingerprint(session: Session) -> None:
             high=Decimal(11),
             low=Decimal(11),
             close=Decimal(11),
-            adj_close=Decimal(11),
+            adj_close=Decimal(22),
             volume=1,
         )
     )
@@ -92,6 +92,14 @@ def test_second_run_matches_fingerprint(session: Session) -> None:
     assert r1.signal_set_fingerprint == r2.signal_set_fingerprint
     assert r1.sharpe_ratio == r2.sharpe_ratio
     assert r1.config_id == r2.config_id
+    assert r1.trade_log is not None
+    assert len(r1.trade_log) == 1
+    trade = r1.trade_log[0]
+    assert isinstance(trade, dict)
+    assert trade["entry_date"] == "2022-06-01"
+    assert trade["exit_date"] == "2022-06-08"
+    assert Decimal(str(trade["entry_price"])) == Decimal(20)
+    assert Decimal(str(trade["exit_price"])) == Decimal(22)
     configs = session.exec(
         select(BacktestConfig).where(BacktestConfig.name == "mvp")
     ).all()

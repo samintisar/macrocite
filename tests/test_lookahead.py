@@ -43,7 +43,7 @@ def test_extracted_in_2026_trades_asof_2022(session: Session) -> None:
             high=Decimal(10),
             low=Decimal(10),
             close=Decimal(10),
-            adj_close=Decimal(10),
+            adj_close=Decimal(20),
             volume=1,
         )
     )
@@ -55,7 +55,7 @@ def test_extracted_in_2026_trades_asof_2022(session: Session) -> None:
             high=Decimal(11),
             low=Decimal(11),
             close=Decimal(11),
-            adj_close=Decimal(11),
+            adj_close=Decimal(22),
             volume=1,
         )
     )
@@ -70,3 +70,5 @@ def test_extracted_in_2026_trades_asof_2022(session: Session) -> None:
     )
     assert trades[0].entry_date == date(2022, 6, 1)
     assert trades[0].entry_date.year != 2026
+    assert trades[0].entry_price == Decimal(20)
+    assert trades[0].exit_price == Decimal(22)

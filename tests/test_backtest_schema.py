@@ -81,5 +81,6 @@ def test_backtest_run_persist_and_load(session: Session) -> None:
     assert loaded.config_id == config_id
     assert loaded.ticker_ids == ticker_ids
 
-    fk = next(iter(BacktestRun.__table__.c.config_id.foreign_keys))
+    table = BacktestRun.metadata.tables["backtest_runs"]
+    fk = next(iter(table.c.config_id.foreign_keys))
     assert fk.ondelete == "RESTRICT"
