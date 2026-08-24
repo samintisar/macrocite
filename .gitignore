@@ -39,6 +39,10 @@ coverage.xml
 # Isolated git worktrees (local phase work)
 .worktrees/
 
+# Personal paper-trading notes (not product docs; not investment advice)
+docs/personal/**
+!docs/personal/README.md
+
 # Serena local state (memories and project.yml stay tracked)
 .serena/cache/
 .serena/project.local.yml
