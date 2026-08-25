@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import cast
 
@@ -26,6 +26,30 @@ _METRIC_KEYS = (
     "total_return",
     "benchmark_return",
 )
+_PRICE_LOOKBACK_DAYS = 365 * 2
+
+
+def _window_prices(
+    prices: list[tuple[date, Decimal]],
+) -> list[tuple[date, Decimal]]:
+    if not prices:
+        return prices
+    cutoff = prices[-1][0] - timedelta(days=_PRICE_LOOKBACK_DAYS)
+    return [row for row in prices if row[0] >= cutoff]
+
+
+def _window_signals(
+    signals: list[dict[str, object]],
+    cutoff: date,
+) -> list[dict[str, object]]:
+    windowed: list[dict[str, object]] = []
+    for signal in signals:
+        published_at = signal["published_at"]
+        if not isinstance(published_at, datetime):
+            continue
+        if published_at.date() >= cutoff:
+            windowed.append(signal)
+    return windowed
 
 
 def metrics_as_json(
@@ -50,9 +74,9 @@ def run_backtest_for_ticker(
     price_rows = session.exec(
         select(Price).where(Price.ticker_id == ticker_id).order_by(col(Price.date))
     ).all()
-    prices: list[tuple[date, Decimal]] = [
-        (row.date, row.adj_close) for row in price_rows
-    ]
+    prices: list[tuple[date, Decimal]] = _window_prices(
+        [(row.date, row.adj_close) for row in price_rows]
+    )
     signal_rows = session.exec(
         select(Signal, RawDocument)
         .join(
@@ -67,6 +91,9 @@ def run_backtest_for_ticker(
         {"sentiment": signal.sentiment, "published_at": document.published_at}
         for signal, document in signal_rows
     ]
+    if prices:
+        cutoff = prices[-1][0] - timedelta(days=_PRICE_LOOKBACK_DAYS)
+        signals = _window_signals(signals, cutoff)
     return build_trades(
         prices=prices,
         signals=signals,
@@ -168,16 +195,19 @@ def persist_run(
     if not price_rows:
         msg = f"no prices for ticker {ticker_id}"
         raise ValueError(msg)
-    prices: list[tuple[date, Decimal]] = [
-        (row.date, row.adj_close) for row in price_rows
-    ]
+    prices: list[tuple[date, Decimal]] = _window_prices(
+        [(row.date, row.adj_close) for row in price_rows]
+    )
+    if not prices:
+        msg = f"no prices for ticker {ticker_id}"
+        raise ValueError(msg)
     metrics = metrics_as_json(prices, trades)
 
     run = BacktestRun(
         config_id=config.id,
         ticker_ids=[str(ticker_id)],
-        start_date=price_rows[0].date,
-        end_date=price_rows[-1].date,
+        start_date=prices[0][0],
+        end_date=prices[-1][0],
         model_version=model_version,
         prompt_version=prompt_version,
         signal_set_fingerprint=fingerprint,
