@@ -5,6 +5,7 @@
 
 ## Pre-registration (the most important rule)
 
+- **Prerequisite:** `data/cdr_spread_survey.yaml` (overview, "Spread survey") is committed first. It sets `cost_per_side` below.
 - All parameters below go in `data/strategy_v1.yaml`, committed **before** the first backtest on real data.
 - Each run records `config_sha256`, `git_sha`, and `data_fingerprint`.
 - The first real v1 pass-bar report decides go/no-go. Parameters are not tuned to pass. A later `strategy_v2.yaml` may be tested, but every v2 report is labeled **post-hoc** and cannot overturn a v1 fail on its own. Going live on a post-hoc result is an explicit owner decision, written in the overview changelog.
@@ -34,7 +35,7 @@ All values are computed on adjusted OHLC of the **US** stock (`adjusted_bars()` 
 - **Skip entry** if next open > signal close × 1.01 (`gap_up`) or next open ≤ stop (`gap_below_stop`).
 - `R = entry fill − stop`. The 2R target is set from the actual entry fill.
 - Exits are evaluated on each close, in this order: stop (close ≤ stop), earnings (event on D+1 or D+2), target (close ≥ target), time (sessions held ≥ limit). The first match fills at the next open. Day of entry counts as session 1 held.
-- **Cost:** 0.2% per side. Buys fill at open × 1.002, sells at open × 0.998.
+- **Cost:** `cost_per_side` = max(0.2%, median surveyed spread ÷ 2 + 0.1%). For example, a 0.4% median spread gives 0.3%. Buys fill at open × (1 + cost_per_side), sells at open × (1 − cost_per_side).
 
 ## Risk and sizing
 
@@ -137,3 +138,4 @@ A **combined** run of all passing setups is reported for information only. It do
 ## Changelog
 
 - 2026-09-22: created.
+- 2026-09-22: cost per side now comes from the spread survey, not a fixed 0.2%.

@@ -14,27 +14,28 @@
 
 ## Part B — CDR universe
 
-**Source:** the Cboe Canada CDR listings page (<https://www.cboe.com/listings/ca/cdr/>).
+**Source:** the JSON behind Cboe Canada's listing directory, `GET https://www-api.cboe.com/ca/equities/listing-directory-data/`, which returns `{"data": [{"symbol", "name", "currency", "security", "security_sub_type", "marketcap", "last", "changepcnt", "volume"}, ...]}`. CDRs are rows with `security == "dr"`. A US-company CDR has its US ticker in parentheses in `name`, e.g. `"NVIDIA (NVDA) BMO CDR (CAD HEDGED)"` → `NVDA`. Rows without a parenthesised ticker (foreign issuers such as Toyota or ASML, which don't file 8-Ks) are excluded. Share-class slashes are normalised for yfinance and SEC (`BRK/B` → `BRK-B`). On 2026-09-22 this gave about 40 US names.
 
 **Stored as a checked-in file,** `data/cdr_universe.yaml`, not scraped on every run. The list changes rarely, and reviewing changes in git is part of the discipline.
 
 ```yaml
 - us_symbol: NVDA
-  cdr_symbol: NVDA        # as listed on Cboe Canada
-  price_symbol: NVDA.NE   # symbol used to fetch CDR prices; format verified in Task 1 of the plan
-  company_name: NVIDIA Corporation
+  cdr_symbol: ZNVD         # as listed on Cboe Canada
+  price_symbol: ZNVD.NE    # yfinance symbol; `.NE` verified 2026-09-22 (`.TO` returns nothing)
+  company_name: NVIDIA
   sector: Information Technology
 ```
 
-- `signalbench universe refresh` fetches the Cboe page, prints a diff against the YAML (added and removed names), and writes it only with `--write`.
+- `signalbench universe refresh` fetches the Cboe JSON, prints a diff against the YAML (added and removed names), and writes it only with `--write`.
 - **Sector** uses GICS sector names from yfinance `info["sector"]`. yfinance uses its own names (e.g. "Technology"); map them to GICS in one dictionary in `ingest/cdr.py`, and fail the refresh loudly on any unmapped name.
-- **Verifying the CDR price symbol format is the first task in the plan.** Try yfinance with `.NE` first, then `.TO`. If neither returns data for 3 known CDRs, switch CDR prices to a fallback source chosen in that task, and record the result in this spec's changelog before continuing.
+- `company_name` is the text before the first ` (` in `name`, title-cased.
+- CDR price history is short (ZNVD starts 2025-10-16; new listings have days). That is expected. The backtest uses US prices (spec 02).
 
 **Tables (migration `0008`).** Extend `tickers` with `kind` (`us_stock` | `cdr` | `benchmark`), `sector`, and `us_ticker_id` (nullable FK, set on CDR rows). The `data/watchlist.yaml` seeding is replaced by seeding from `cdr_universe.yaml` plus benchmarks `QQQ` and `SPY`. Delete `data/watchlist.yaml` and `seed-watchlist`.
 
 **Liquidity filter,** evaluated nightly and stored as `tickers.active`:
 - US stock: 20-session median traded value (close × volume) ≥ US$50M
-- CDR: 20-session median traded value ≥ C$100k
+- CDR: has a stored price row with a non-null close in the last 5 sessions. There is deliberately no CDR volume threshold, because most CDRs trade a few thousand dollars a day or less and fills come from market-maker quotes. The spread limit is applied live (spec 05).
 - Both must pass. A name that fails stays in the YAML but is inactive for new signals. Open positions in it are still managed.
 
 ## Part C — Prices
@@ -42,7 +43,7 @@
 - US stocks and benchmarks: daily OHLCV from `2010-01-01` (enough for a 200-session warm-up before the 2012 backtest start). CDRs: all available history.
 - Store raw `open/high/low/close/volume` plus `adj_close` (as today). Readers compute split/dividend-adjusted OHLC with `factor = adj_close / close` applied to open, high, and low. This lives in one helper, `adjusted_bars()`, with a test on a split day.
 - **Incremental:** each run fetches from the last stored date minus 5 sessions (to pick up late adjustments) and upserts. Fix the current two-year window: the start date comes from config, not a hard-coded lookback.
-- Reject rows with non-positive prices or `high < low`, and log them.
+- Reject rows with NaN or non-positive prices or `high < low`, and log them. yfinance returns a NaN close for the current, unfinished session.
 
 ## Part D — 8-K upgrade
 
@@ -116,8 +117,9 @@ signalbench ingest all                # in order: prices, filings, earnings, new
 
 - CI green (pytest, ruff, mypy strict).
 - A real local `signalbench ingest all` completes and prints per-table counts. Record them in the plan's completion notes: universe size, active names, price rows, 8-Ks since 2016, share with at least one EX-99, news rows, earnings events.
-- The CDR price symbol format is verified and recorded.
+- `signalbench ingest prices` stores CDR rows for at least 30 CDRs.
 
 ## Changelog
 
 - 2026-09-22: created.
+- 2026-09-22: the universe source is the Cboe JSON endpoint (the page itself renders client-side). `.NE` is verified. The CDR traded-value filter was replaced by "priced in the last 5 sessions".

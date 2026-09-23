@@ -48,7 +48,7 @@ For each `EntryOrder`:
 🟢 BUY NVDA (CDR) — Pullback · NVIDIA
 Signal C$38.40 · Stop C$36.10 (−6.0%) · Target +2R after your fill
 Size 1 unit (~C$38.40) · risk C$2.30 · LIMIT C$38.78
-Skip if price > C$38.78
+Skip if price > C$38.78 or bid/ask spread > <survey limit>%
 Jev: no negative filing or news in last 10 sessions
 Why: <one line from Claude>
 [✅ I bought] [⏭ Skip]
@@ -56,7 +56,7 @@ Why: <one line from Claude>
 - The Jev line is one of: no negative / ⭐ catalyst: `<event_type>` (`<source>`) / ⚠️ Jev check unavailable — read the filing yourself.
 - Breakout shows "Trailing stop, no target".
 - ✅ offers [Use suggested] or asks for a reply like `1 38.52` (units, price; date defaults to today, and a third token can override it) → `Ledger.record_fill` → confirmation.
-- ⏭ asks for a reason: [Disagree] [No time] [Price moved >1%] [Other].
+- ⏭ asks for a reason: [Disagree] [No time] [Price moved >1%] [Spread too wide] [Other].
 - A second tap on a handled signal replies "already logged".
 
 **Exit:**
@@ -140,3 +140,4 @@ Symbols are CDR symbols. The bot resolves US symbols to their CDR when they're u
 ## Changelog
 
 - 2026-09-22: created.
+- 2026-09-22: the entry message includes the spread limit from the survey (default 0.5%); `wide_spread` skip button added.

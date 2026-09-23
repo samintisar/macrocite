@@ -12,7 +12,7 @@ All money is CAD, stored as `Numeric`, and computed with `Decimal`.
 | Table | Columns |
 | --- | --- |
 | `cash_movements` | id, amount_cad (+ deposit / − withdrawal), occurred_on, note |
-| `trade_signals` | id, as_of, us_symbol, cdr_ticker_id, setup, us_signal_close, us_stop, stop_pct, time_limit, cdr_signal_close, cdr_stop, suggested_units, order_type (`limit`/`market`), risk_amount_cad, catalyst, jev_status (`ok`/`unavailable`), explanation, status (`sent`/`taken`/`skipped`/`expired`), skip_reason (`disagree`/`no_time`/`price_moved`/`other`/null), telegram_message_id, expires_at, created_at. Unique (`as_of`, `us_symbol`, `setup`) |
+| `trade_signals` | id, as_of, us_symbol, cdr_ticker_id, setup, us_signal_close, us_stop, stop_pct, time_limit, cdr_signal_close, cdr_stop, suggested_units, order_type (`limit`/`market`), risk_amount_cad, catalyst, jev_status (`ok`/`unavailable`), explanation, status (`sent`/`taken`/`skipped`/`expired`), skip_reason (`disagree`/`no_time`/`price_moved`/`wide_spread`/`other`/null), telegram_message_id, expires_at, created_at. Unique (`as_of`, `us_symbol`, `setup`) |
 | `exit_alerts` | id, cdr_ticker_id, as_of, reason (`stop`/`earnings`/`target`/`time`), status (`sent`/`done`/`ignored`), telegram_message_id, created_at |
 | `fills` | id, cdr_ticker_id, side (`buy`/`sell`), quantity (18,6), price_cad (12,4), fee_cad (default 0), trade_date, signal_id (FK nullable), exit_alert_id (FK nullable), voided (bool), void_reason, created_at |
 | `equity_snapshots` | date (PK), cash, positions_value, equity, peak |
@@ -40,7 +40,7 @@ All money is CAD, stored as `Numeric`, and computed with `Decimal`.
 - sessions held count NYSE sessions from the buy's trade date (session 1)
 - CDR display levels: `cdr_stop = cdr_signal_close × (1 − stop_pct)`; the target in CAD uses the same ratio
 
-**Equity** = cash + Σ open quantity × latest CDR close. It is written nightly to `equity_snapshots`. **Peak** = max equity since `risk_state.peak_reset_on`.
+**Equity** = cash + Σ open quantity × CDR mark. The CDR mark is the latest US close × (CDR close ÷ US close) on the most recent date the CDR had volume > 0. If the CDR has never traded, the latest CDR close is used. This avoids stale prices on the many zero-volume days. It is written nightly to `equity_snapshots`. **Peak** = max equity since `risk_state.peak_reset_on`.
 
 **Pause:** set when equity < 0.85 × peak. It is cleared only by `/resume`, which sets `peak_reset_on = today`.
 
@@ -67,7 +67,7 @@ Runs after each close of a managed position. Active once at least 10 managed pos
 
 | # | Check | Pass |
 | --- | --- | --- |
-| 1 | Take rate = taken ÷ (taken + expired + skipped for `disagree`/`no_time`/`other`) | ≥ 0.80. `price_moved` skips are excluded because the rules require them |
+| 1 | Take rate = taken ÷ (taken + expired + skipped for `disagree`/`no_time`/`other`) | ≥ 0.80. `price_moved` and `wide_spread` skips are excluded because the rules require them |
 | 2 | Mean \|cdr_fill − cdr_signal_close\| ÷ cdr_signal_close over signal-linked buys | ≤ 0.5% |
 | 3 | Every exit alert followed by a matching sell within 1 session | 0 misses |
 | 4 | No signal-linked buy filled above cdr_signal_close × 1.01 | 0 violations |
@@ -115,3 +115,4 @@ class Ledger:
 ## Changelog
 
 - 2026-09-22: created.
+- 2026-09-22: CDR mark from US close × last traded ratio; `wide_spread` skip reason added.

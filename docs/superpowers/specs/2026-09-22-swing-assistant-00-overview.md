@@ -13,13 +13,13 @@ A personal swing-trading assistant. Every evening after the US close it scans li
 | Topic | Decision |
 | --- | --- |
 | Signal source | Price setups computed in code; Jev reads filings and news as a filter and as a sentiment trigger |
-| Instrument | CDRs on Cboe Canada, in CAD. $0 commission, no FX fee, ~0.60%/yr hedge cost built into the price |
+| Instrument | US-company CDRs on Cboe Canada (currently BMO CDRs, `Z`-prefixed, e.g. ZNVD), in CAD. $0 commission, no FX fee, hedge cost built into the price. Thinly traded: market makers quote them, so the bid/ask spread matters more than volume |
 | Account | Personal non-registered. TFSA is out of scope |
 | Risk profile | **B**: 2% of equity at risk per trade, max 3 open positions, max 2 per sector, pause new entries at −15% from equity peak |
 | Capital | Start **$100 CAD**. After 10 closed trades, a scale-up check may suggest adding $900 |
 | Setups | Pullback, Breakout, Sentiment+price-confirmation. Each must pass a pre-registered bar to go live |
 | Stops | Checked on the daily close; exit at next open. Matches the backtest |
-| Universe | Every CDR that passes a liquidity filter (~50–60 names) |
+| Universe | Every US-company CDR (~40 names as of 2026-09-22) whose US stock passes a liquidity filter and whose CDR has a price in the last 5 sessions |
 | Jev | Blocks clearly negative situations, tags catalysts to rank first, triggers the sentiment setup. Must earn its role in backtests |
 | Messaging | Telegram bot, long polling, buttons + slash commands |
 | Hosting | Owner's Windows PC: Docker Postgres, bot process, Task Scheduler for the evening scan |
@@ -48,7 +48,7 @@ Build one at a time. Each sub-spec gets its own implementation plan, written onl
 
 | # | Spec | Gate |
 | --- | --- | --- |
-| 01 | [Data foundation](2026-09-22-swing-assistant-01-data-foundation-design.md) — housekeeping, CDR universe, prices, 8-K upgrade, earnings dates, Finnhub news | Tests green in CI; real ingest run records counts; CDR price symbol format verified |
+| 01 | [Data foundation](2026-09-22-swing-assistant-01-data-foundation-design.md) — housekeeping, CDR universe, prices, 8-K upgrade, earnings dates, Finnhub news | Tests green in CI; real ingest run records counts; CDR prices stored for at least 30 CDRs |
 | 02 | [Strategy and backtest](2026-09-22-swing-assistant-02-strategy-backtest-design.md) — setups, sizing, simulator, pass-bar report | **🚦 Go/no-go.** If neither Pullback nor Breakout passes, stop and rethink before building 04–05 unless 03's Sentiment setup passes |
 | 03 | [Jev reader](2026-09-22-swing-assistant-03-jev-reader-design.md) — client, backfill, filter, Sentiment setup, calibration report | Filter role decided by pre-registered rule; Sentiment setup passes or is information-only |
 | 04 | [Ledger](2026-09-22-swing-assistant-04-ledger-design.md) — fills, positions, equity, ACB, scale-up check | Hand-checked ACB example passes; equity rebuilt from fills |
@@ -65,6 +65,10 @@ Go live with $100 after 05, using only setups that passed.
 - **R**: the per-unit risk, `entry − stop`. A +2R exit gains twice what the stop would lose.
 - **Equity peak**: the highest end-of-day equity seen so far.
 
+## Spread survey (required before the first real backtest)
+
+On 2026-09-22 the median CDR traded value was tiny (ZNVD about C$15k/day, ZMSF about C$1.5k, ZAAP zero volume on 20 of 20 sessions). Fills come from market-maker quotes, so cost depends on the bid/ask spread, and no free data source provides it. Before `strategy_v1.yaml` is committed (spec 02), the owner records bid/ask for at least 5 CDRs during market hours in `data/cdr_spread_survey.yaml`. That sets the backtest cost and the live spread limit. If the median spread is above 1%, stop and revisit the instrument choice before running any backtest.
+
 ## Out of scope
 
 - Broker APIs or automated order placement
@@ -79,3 +83,8 @@ Go live with $100 after 05, using only setups that passed.
 
 - `docs/personal/paper-trading-playbook.md` v1.1 (closed by spec 01)
 - `docs/superpowers/plans/2026-08-19-phase-4-dashboard.md` and `2026-08-19-phase-5-stretch.md`. Not built; replaced by this design
+
+## Changelog
+
+- 2026-09-22: created.
+- 2026-09-22: CDR findings. The universe is BMO `Z`-prefixed CDRs (~40 US names), and yfinance serves them as `<SYMBOL>.NE`. CDR volume is too thin for a traded-value filter, so a spread survey was added as a spec 02 prerequisite, and CDR liquidity became "priced in the last 5 sessions".
