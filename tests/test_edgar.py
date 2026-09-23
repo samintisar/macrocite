@@ -102,6 +102,18 @@ def test_missing_filing_index_means_no_exhibits(session: Session) -> None:
     assert DOCUMENT_SEPARATOR not in doc.text
 
 
+def test_missing_exhibit_document_is_skipped(session: Session) -> None:
+    _add_aapl(session)
+    routes = _routes()
+    del routes["a8-kex991.htm"]
+    created = ingest_eight_ks_for_symbol(session, "AAPL", _client(routes), UA, limiter=FAST)
+    assert created == 1
+    doc = session.exec(select(RawDocument)).one()
+    assert doc.text is not None
+    assert "Item 2.02 Results of Operations" in doc.text
+    assert DOCUMENT_SEPARATOR not in doc.text
+
+
 def test_ingest_retries_archive_on_429(session: Session) -> None:
     _add_aapl(session)
     routes = _routes()

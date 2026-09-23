@@ -227,10 +227,16 @@ def _fetch_exhibits(
             logger.warning("No filing index for %s", ref.accession_number)
             return []
         raise
-    return [
-        _get_text(client, _archive_url(cik10, ref, name), headers, limiter)
-        for name in exhibit_documents(index_html)
-    ]
+    exhibits: list[str] = []
+    for name in exhibit_documents(index_html):
+        try:
+            exhibits.append(_get_text(client, _archive_url(cik10, ref, name), headers, limiter))
+        except httpx.HTTPStatusError as error:
+            if error.response.status_code == 404:
+                logger.warning("Missing exhibit %s for %s", name, ref.accession_number)
+                continue
+            raise
+    return exhibits
 
 
 def _archive_url(cik10: str, ref: FilingRef, document: str | None = None) -> str:
