@@ -47,7 +47,12 @@ def validate_bar(bar: DailyBar) -> str | None:
     return None
 
 
-def fetch_start(session: Session, ticker: Ticker, history_start: date) -> date:
+def fetch_start(
+    session: Session, ticker: Ticker, history_start: date, full: bool = False
+) -> date:
+    """Refetch the last few days of stored history, or everything when `full` is set."""
+    if full:
+        return history_start
     last: date | None = session.exec(
         select(func.max(Price.date)).where(Price.ticker_id == ticker.id)
     ).one()
@@ -61,8 +66,9 @@ def ingest_daily_prices(
     ticker: Ticker,
     fetch: PriceFetcher,
     history_start: date,
+    full: bool = False,
 ) -> PriceIngestResult:
-    start = fetch_start(session, ticker, history_start)
+    start = fetch_start(session, ticker, history_start, full=full)
     symbol = ticker.price_symbol or ticker.symbol
     existing = {
         row.date: row

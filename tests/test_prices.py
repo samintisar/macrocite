@@ -90,3 +90,22 @@ def test_fetch_uses_price_symbol(session: Session) -> None:
 
     ingest_daily_prices(session, ticker, fetch=fetch, history_start=HISTORY_START)
     assert requested == [("ZNVD.NE", HISTORY_START)]
+
+
+def test_full_refetch_asks_for_history_start_despite_stored_rows(session: Session) -> None:
+    ticker = _ticker(session)
+    ingest_daily_prices(
+        session, ticker, fetch=lambda _s, _d: [_bar(date(2024, 1, 12))], history_start=HISTORY_START
+    )
+    requested: list[date] = []
+
+    def fetch(_symbol: str, start: date) -> list[DailyBar]:
+        requested.append(start)
+        return [_bar(date(2010, 1, 4)), _bar(date(2024, 1, 12))]
+
+    result = ingest_daily_prices(
+        session, ticker, fetch=fetch, history_start=HISTORY_START, full=True
+    )
+    assert requested == [HISTORY_START]
+    assert (result.created, result.updated) == (1, 0)
+    assert len(session.exec(select(Price)).all()) == 2

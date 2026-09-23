@@ -96,7 +96,7 @@ uv run signalbench ingest stats
 | --- | --- |
 | `uv run signalbench universe refresh [--write]` | Diff the Cboe CDR directory against `data/cdr_universe.yaml`; write only with `--write` |
 | `uv run signalbench seed` | Load tickers from `data/cdr_universe.yaml` plus the QQQ/SPY benchmarks |
-| `uv run signalbench ingest prices` | Fetch and upsert daily OHLCV for tickers and benchmarks |
+| `uv run signalbench ingest prices [--full]` | Fetch and upsert daily OHLCV for tickers and benchmarks; `--full` refetches from `PRICE_HISTORY_START` even for tickers with recent rows |
 | `uv run signalbench ingest filings [--backfill-text]` | Fetch SEC 8-Ks since 2016; `--backfill-text` fills text/acceptance/items for rows stored before this spec |
 | `uv run signalbench ingest earnings` | Record earnings dates from SEC Item 2.02 filings and the Finnhub calendar |
 | `uv run signalbench ingest news` | Fetch Finnhub company news per ticker |

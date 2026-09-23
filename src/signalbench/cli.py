@@ -78,9 +78,14 @@ def seed() -> None:
 
 
 @ingest_app.command()
-def prices() -> None:
+def prices(
+    full: Annotated[
+        bool,
+        typer.Option("--full", help="Refetch from PRICE_HISTORY_START, not just recent days."),
+    ] = False,
+) -> None:
     with get_session() as session:
-        _ingest_prices(session)
+        _ingest_prices(session, full=full)
 
 
 @ingest_app.command()
@@ -128,7 +133,7 @@ def stats() -> None:
             typer.echo(f"{label}: {value}")
 
 
-def _ingest_prices(session: Session) -> None:
+def _ingest_prices(session: Session, full: bool = False) -> None:
     tickers = _universe_tickers(session)
     for index, ticker in enumerate(tickers, start=1):
         result = ingest_daily_prices(
@@ -136,6 +141,7 @@ def _ingest_prices(session: Session) -> None:
             ticker,
             fetch=fetch_yfinance_daily,
             history_start=settings.price_history_start,
+            full=full,
         )
         typer.echo(
             f"prices {index}/{len(tickers)} {ticker.symbol} "
