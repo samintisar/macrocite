@@ -7,6 +7,7 @@ from sqlmodel import Session, SQLModel, create_engine, select
 
 from signalbench.db.models import DocType, DocumentTicker, RawDocument, Ticker
 from signalbench.ingest.edgar import (
+    backfill_filing_text,
     exhibit_documents,
     ingest_eight_ks_for_symbol,
     parse_acceptance,
@@ -225,3 +226,28 @@ def test_parse_acceptance() -> None:
 
 def test_exhibit_documents_lists_only_ex99_in_order() -> None:
     assert exhibit_documents(_fixture("edgar_index.htm")) == ["a8-kex991.htm"]
+
+
+def test_backfill_filing_text_fills_rows_stored_before_spec_01(session: Session) -> None:
+    ticker = _add_aapl(session)
+    legacy = RawDocument(
+        source="sec_edgar",
+        external_id=ACCESSION,
+        doc_type=DocType.eight_k,
+        raw_text=_fixture("edgar_8k.html"),
+        published_at=datetime(2024, 1, 15, tzinfo=UTC),
+    )
+    session.add(legacy)
+    session.flush()
+    session.add(DocumentTicker(document_id=legacy.id, ticker_id=ticker.id))
+    session.commit()
+
+    client = _client(_routes())
+    assert backfill_filing_text(session, "AAPL", client, UA, limiter=FAST) == 1
+    session.refresh(legacy)
+    assert legacy.text is not None
+    assert "record first quarter revenue" in legacy.text
+    assert legacy.items == "2.02,9.01"
+    assert legacy.acceptance_at == datetime(2024, 1, 15, 21, 30, 5, tzinfo=UTC)
+    assert legacy.published_at == legacy.acceptance_at
+    assert backfill_filing_text(session, "AAPL", client, UA, limiter=FAST) == 0
