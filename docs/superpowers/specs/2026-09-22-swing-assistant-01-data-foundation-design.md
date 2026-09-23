@@ -123,3 +123,11 @@ signalbench ingest all                # in order: prices, filings, earnings, new
 
 - 2026-09-22: created.
 - 2026-09-22: the universe source is the Cboe JSON endpoint (the page itself renders client-side). `.NE` is verified. Exhibits come from `-index.htm`. The CDR traded-value filter was replaced by "priced in the last 5 sessions".
+- 2026-09-23: changes made during implementation, after the final review and live checks:
+  - `ingest prices --full` refetches from `price_history_start`. The incremental run only looks back 10 days, so tickers with older partial history (and rows left on an old split scale) need it once.
+  - Finnhub is queried with `.` for share classes (`BRK-B` → `BRK.B`). The earnings calendar is fetched one ticker at a time, because the all-companies response stops at 1,500 rows. Each response is credited to the ticker that was queried (Finnhub answers GOOG with GOOGL rows and BRK.B with BRK.A rows).
+  - When an 8-K accession is already stored, it is linked to the queried ticker (GOOG and GOOGL share a CIK) and its text is filled in if missing.
+  - If a ticker fails in `ingest prices`, `filings`, `news` or `earnings`, the error is logged and the run continues; at the end the command lists the failures and exits 1.
+- 2026-09-23: gate run. `us_stocks: 46` (40 in the universe plus 6 deactivated old watchlist names), `active_us_stocks: 35`, `cdrs: 40`, `cdrs_with_prices: 40`, `price_rows: 235402`, `eight_ks_since: 5082`, `eight_ks_with_exhibit_text: 2934`, `news_rows: 82761`, `earnings_events: 1702`. A second `ingest all` added nothing (+0 for all 82 price tickers, 40 filing tickers and 40 news tickers) and had no failures.
+  - 5 names are inactive because their CDR has no price in the last 5 sessions (CRM, HD, PFE, UNH, V).
+  - 13 CDRs have almost no Yahoo history; most were listed 2026-07-17 and have barely traded. Examples: ZMET, ZV and ZCRM each have a single bar. The backtest uses US prices, so this doesn't block spec 02, but it adds weight to the spread survey.
