@@ -6,7 +6,7 @@ Start at the [overview spec](specs/2026-09-22-swing-assistant-00-overview.md). S
 
 | # | Spec | Gate (short) |
 | --- | --- | --- |
-| 01 | [Data foundation](specs/2026-09-22-swing-assistant-01-data-foundation-design.md) | CI green; real ingest counts recorded; CDR price symbol verified |
+| 01 | [Data foundation](specs/2026-09-22-swing-assistant-01-data-foundation-design.md) · plan: [2026-09-22-swing-01-data-foundation.md](plans/2026-09-22-swing-01-data-foundation.md) | CI green; real ingest counts recorded; CDR price symbol verified |
 | 02 | [Strategy and backtest](specs/2026-09-22-swing-assistant-02-strategy-backtest-design.md) | Pre-registered v1 pass-bar reports committed; go/no-go recorded |
 | 03 | [Jev reader](specs/2026-09-22-swing-assistant-03-jev-reader-design.md) | Filter decision, Sentiment report, calibration report committed |
 | 04 | [Ledger](specs/2026-09-22-swing-assistant-04-ledger-design.md) | Hand-checked ACB fixture passes |
