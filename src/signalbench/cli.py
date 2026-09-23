@@ -7,11 +7,12 @@ from sqlmodel import Session, select
 from signalbench.config import settings
 from signalbench.db.models import Ticker
 from signalbench.db.session import get_session
+from signalbench.ingest.cdr import load_universe
 from signalbench.ingest.edgar import ingest_eight_ks_for_symbol
 from signalbench.ingest.prices import fetch_yfinance_daily, ingest_daily_prices
-from signalbench.ingest.seed import seed_watchlist as seed_watchlist_from_yaml
+from signalbench.ingest.seed import seed_universe
 
-WATCHLIST_PATH = Path(__file__).resolve().parents[2] / "data" / "watchlist.yaml"
+UNIVERSE_PATH = Path(__file__).resolve().parents[2] / "data" / "cdr_universe.yaml"
 
 app = typer.Typer()
 ingest_app = typer.Typer()
@@ -19,9 +20,14 @@ app.add_typer(ingest_app, name="ingest")
 
 
 @app.command()
-def seed_watchlist() -> None:
+def seed() -> None:
+    entries = load_universe(UNIVERSE_PATH)
     with get_session() as session:
-        seed_watchlist_from_yaml(session, WATCHLIST_PATH)
+        result = seed_universe(session, entries)
+    typer.echo(
+        f"Seeded {result.us_stocks} US stocks, {result.cdrs} CDRs, "
+        f"{result.benchmarks} benchmarks; deactivated {len(result.deactivated)}"
+    )
 
 
 @ingest_app.command()
