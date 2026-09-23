@@ -29,17 +29,12 @@ def news_windows(last_published: date | None, today: date) -> list[tuple[date, d
 
 
 def last_news_date(session: Session, ticker: Ticker) -> date | None:
-    document_ids = list(
-        session.exec(
-            select(DocumentTicker.document_id).where(DocumentTicker.ticker_id == ticker.id)
-        ).all()
-    )
-    if not document_ids:
-        return None
     latest: datetime | None = session.exec(
-        select(func.max(RawDocument.published_at)).where(
+        select(func.max(RawDocument.published_at))
+        .join(DocumentTicker, col(DocumentTicker.document_id) == RawDocument.id)
+        .where(
             RawDocument.source == NEWS_SOURCE,
-            col(RawDocument.id).in_(document_ids),
+            DocumentTicker.ticker_id == ticker.id,
         )
     ).one()
     return None if latest is None else latest.date()

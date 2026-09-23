@@ -24,33 +24,44 @@ def has_item_202(items: str | None) -> bool:
 
 
 def sync_sec_earnings_events(session: Session) -> int:
-    """One event per ticker on the New York date each Item 2.02 8-K was accepted."""
-    existing: set[tuple[uuid.UUID, date]] = set(
-        session.exec(
-            select(EarningsEvent.ticker_id, col(EarningsEvent.event_date)).where(
-                EarningsEvent.source == SEC_EARNINGS_SOURCE
-            )
+    """One event per ticker on the New York date each Item 2.02 8-K was accepted.
+
+    8-K/A amendments repeat Item 2.02 weeks later, so they are not earnings dates; events
+    they created before the form was stored are removed.
+    """
+    stored = {
+        (event.ticker_id, event.event_date): event
+        for event in session.exec(
+            select(EarningsEvent).where(EarningsEvent.source == SEC_EARNINGS_SOURCE)
         ).all()
-    )
+    }
     rows = session.exec(
-        select(DocumentTicker.ticker_id, col(RawDocument.acceptance_at), col(RawDocument.items))
+        select(
+            DocumentTicker.ticker_id,
+            col(RawDocument.acceptance_at),
+            col(RawDocument.items),
+            col(RawDocument.form),
+        )
         .join(RawDocument, col(RawDocument.id) == DocumentTicker.document_id)
         .where(
             RawDocument.source == "sec_edgar",
             col(RawDocument.acceptance_at).is_not(None),
         )
     ).all()
+    wanted: set[tuple[uuid.UUID, date]] = set()
+    for ticker_id, acceptance_at, items, form in rows:
+        if acceptance_at is None or form == "8-K/A" or not has_item_202(items):
+            continue
+        wanted.add((ticker_id, acceptance_at.astimezone(NEW_YORK).date()))
+    for key, event in stored.items():
+        if key not in wanted:
+            session.delete(event)
+    session.flush()
     created = 0
-    for ticker_id, acceptance_at, items in rows:
-        if acceptance_at is None or not has_item_202(items):
-            continue
-        event_date = acceptance_at.astimezone(NEW_YORK).date()
-        if (ticker_id, event_date) in existing:
-            continue
+    for ticker_id, event_date in sorted(wanted - stored.keys()):
         session.add(
             EarningsEvent(ticker_id=ticker_id, event_date=event_date, source=SEC_EARNINGS_SOURCE)
         )
-        existing.add((ticker_id, event_date))
         created += 1
     session.commit()
     return created
@@ -63,7 +74,9 @@ def ingest_finnhub_calendar_for_ticker(
 
     The unfiltered calendar is truncated, so each ticker is queried on its own. Finnhub may
     answer with another share class (GOOG gives GOOGL rows), so every row is attributed to
-    the queried ticker. Stored rows change only after the query succeeds.
+    the queried ticker. Stored rows change only after the query succeeds. A past Finnhub date
+    is kept only if an SEC Item 2.02 event within CLUSTER_DAYS confirms it; otherwise it was
+    a wrong estimate.
     """
     end = today + timedelta(days=CALENDAR_DAYS_AHEAD)
     payload = finnhub.get(
@@ -78,14 +91,21 @@ def ingest_finnhub_calendar_for_ticker(
     if not isinstance(rows, list):
         raise TypeError(f"Finnhub response has no earningsCalendar list: {payload!r}"[:300])
     event_dates = {date.fromisoformat(str(row["date"])) for row in rows if row.get("date")}
-    for stale in session.exec(
+    sec_dates = session.exec(
+        select(col(EarningsEvent.event_date)).where(
+            EarningsEvent.ticker_id == ticker.id,
+            EarningsEvent.source == SEC_EARNINGS_SOURCE,
+        )
+    ).all()
+    for stored in session.exec(
         select(EarningsEvent).where(
             EarningsEvent.ticker_id == ticker.id,
             EarningsEvent.source == FINNHUB_EARNINGS_SOURCE,
-            col(EarningsEvent.event_date) >= today,
         )
     ).all():
-        session.delete(stale)
+        confirmed = any(abs((stored.event_date - day).days) <= CLUSTER_DAYS for day in sec_dates)
+        if stored.event_date >= today or not confirmed:
+            session.delete(stored)
     session.flush()
     for event_date in sorted(event_dates):
         session.add(

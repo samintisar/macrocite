@@ -95,7 +95,10 @@ def _upsert(
     ticker.sector = sector
     ticker.price_symbol = price_symbol
     ticker.us_ticker_id = us_ticker_id
-    ticker.active = True
+    # Existing universe names keep the flag `update_liquidity_flags` set; benchmarks are
+    # never judged for liquidity, so they are always active.
+    if kind is TickerKind.benchmark:
+        ticker.active = True
     session.add(ticker)
     session.flush()
     return ticker

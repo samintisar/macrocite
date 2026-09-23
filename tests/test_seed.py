@@ -58,6 +58,19 @@ def test_seed_deactivates_names_dropped_from_universe(session: Session) -> None:
     assert rows["NVDA"].active is True
 
 
+def test_reseed_keeps_liquidity_flags(session: Session) -> None:
+    seed_universe(session, ENTRIES)
+    rows = _by_symbol(session)
+    rows["JPM"].active = False
+    rows["ZJPM"].active = False
+    session.commit()
+    seed_universe(session, ENTRIES)
+    rows = _by_symbol(session)
+    assert rows["JPM"].active is False
+    assert rows["ZJPM"].active is False
+    assert rows["NVDA"].active is True
+
+
 def test_seed_refuses_to_change_a_ticker_kind(session: Session) -> None:
     session.add(Ticker(symbol="ZNVD", company_name="Not a CDR", kind=TickerKind.us_stock))
     session.commit()

@@ -48,9 +48,55 @@ def test_fetch_start_uses_history_start_then_refetches_ten_days(session: Session
     ticker = _ticker(session)
     assert fetch_start(session, ticker, HISTORY_START) == HISTORY_START
     ingest_daily_prices(
-        session, ticker, fetch=lambda _s, _d: [_bar(date(2024, 1, 12))], history_start=HISTORY_START
+        session,
+        ticker,
+        fetch=lambda _s, _d: [_bar(date(2010, 1, 4)), _bar(date(2024, 1, 12))],
+        history_start=HISTORY_START,
     )
     assert fetch_start(session, ticker, HISTORY_START) == date(2024, 1, 2)
+
+
+def test_fetch_start_backfills_history_that_starts_late(session: Session) -> None:
+    ticker = _ticker(session)
+    ingest_daily_prices(
+        session, ticker, fetch=lambda _s, _d: [_bar(date(2024, 1, 12))], history_start=HISTORY_START
+    )
+    assert fetch_start(session, ticker, HISTORY_START) == HISTORY_START
+
+
+def test_rescaled_history_triggers_full_refetch(session: Session) -> None:
+    ticker = _ticker(session)
+    old = [_bar(date(2010, 1, 4)), _bar(date(2024, 1, 10)), _bar(date(2024, 1, 12))]
+    ingest_daily_prices(session, ticker, fetch=lambda _s, _d: old, history_start=HISTORY_START)
+    requested: list[date] = []
+
+    def fetch(_symbol: str, start: date) -> list[DailyBar]:
+        requested.append(start)
+        # A dividend lowered every earlier adj_close, including the 2024-01-10 overlap row.
+        return [
+            _bar(day, adj_close="180.0000")
+            for day in (date(2010, 1, 4), date(2024, 1, 10), date(2024, 1, 12))
+            if day >= start
+        ]
+
+    result = ingest_daily_prices(session, ticker, fetch=fetch, history_start=HISTORY_START)
+    assert requested == [date(2024, 1, 2), HISTORY_START]
+    assert result.updated == 3
+    assert {row.adj_close for row in session.exec(select(Price)).all()} == {Decimal("180.0000")}
+
+
+def test_change_to_newest_row_alone_is_not_a_rescale(session: Session) -> None:
+    ticker = _ticker(session)
+    old = [_bar(date(2010, 1, 4)), _bar(date(2024, 1, 12))]
+    ingest_daily_prices(session, ticker, fetch=lambda _s, _d: old, history_start=HISTORY_START)
+    requested: list[date] = []
+
+    def fetch(_symbol: str, start: date) -> list[DailyBar]:
+        requested.append(start)
+        return [_bar(date(2024, 1, 12), close="186.0000")]
+
+    ingest_daily_prices(session, ticker, fetch=fetch, history_start=HISTORY_START)
+    assert requested == [date(2024, 1, 2)]
 
 
 def test_refetch_updates_changed_values(session: Session) -> None:

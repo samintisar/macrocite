@@ -215,8 +215,8 @@ def test_keeps_8k_amendments_and_skips_other_forms_and_old_filings(session: Sess
         session, "AAPL", _client(routes), UA, since=date(2016, 1, 1), limiter=FAST
     )
     assert created == 2
-    ids = {doc.external_id for doc in session.exec(select(RawDocument)).all()}
-    assert ids == {ACCESSION, "0000320193-24-000002"}
+    forms = {doc.external_id: doc.form for doc in session.exec(select(RawDocument)).all()}
+    assert forms == {ACCESSION: "8-K", "0000320193-24-000002": "8-K/A"}
 
 
 def test_parse_acceptance() -> None:
@@ -282,6 +282,8 @@ def test_existing_filing_gets_linked_to_the_queried_ticker(session: Session) -> 
     links = {(link.document_id, link.ticker_id) for link in session.exec(select(DocumentTicker)).all()}
     assert links == {(document.id, other.id), (document.id, ticker.id)}
     assert len(session.exec(select(RawDocument)).all()) == 1
+    session.refresh(document)
+    assert document.form == "8-K"
 
 
 def test_existing_filing_without_text_gets_text_items_and_acceptance(session: Session) -> None:

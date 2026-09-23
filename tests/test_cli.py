@@ -9,6 +9,7 @@ from signalbench import cli
 from signalbench.cli import app
 from signalbench.db.models import EarningsEvent, Ticker, TickerKind
 from signalbench.ingest.finnhub import FinnhubClient
+from signalbench.ingest.prices import PriceIngestResult
 from signalbench.ingest.ratelimit import RateLimiter
 
 runner = CliRunner()
@@ -136,3 +137,24 @@ def test_ingest_all_reports_a_failed_earnings_calendar_after_news(
     assert "earnings: 1 failed: BAD" in result.stderr
     stored = {(row.ticker_id, row.event_date) for row in session.exec(select(EarningsEvent)).all()}
     assert stored == {(aapl.id, date(2099, 1, 2)), (bad.id, date(2099, 1, 5))}
+
+
+def test_liquidity_failure_is_reported_and_later_steps_still_run(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _use_session(monkeypatch, session, _stocks(session, ["AAPL"]))
+    monkeypatch.setattr(cli, "ingest_daily_prices", lambda *_args, **_kwargs: PriceIngestResult(0, 0, 0))
+    monkeypatch.setattr(cli, "_ingest_earnings", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(cli.settings, "finnhub_api_key", None)
+    filings: list[str] = []
+
+    def ingest_filings(_session: Session, symbol: str, *_args: object, **_kwargs: object) -> int:
+        filings.append(symbol)
+        return 0
+
+    monkeypatch.setattr(cli, "ingest_eight_ks_for_symbol", ingest_filings)
+    result = runner.invoke(app, ["ingest", "all"])  # no QQQ rows, so liquidity cannot run
+    assert result.exit_code == 1
+    assert "liquidity FAILED: RuntimeError:" in result.stderr
+    assert filings == ["AAPL"]
+    assert "prices: 1 failed: liquidity" in result.stderr

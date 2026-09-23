@@ -7,6 +7,7 @@ from typing import Any, cast
 
 import httpx
 from bs4 import BeautifulSoup, Tag
+from sqlalchemy import update
 from sqlmodel import Session, col, select
 
 from signalbench.db.models import DocType, DocumentTicker, RawDocument, Ticker
@@ -116,26 +117,51 @@ def ingest_eight_ks_for_symbol(
     headers = {"User-Agent": user_agent}
     resolved_cik = cik10 or _lookup_cik_for_symbol(client, headers, symbol, limiter)
 
-    created = 0
-    for ref in filing_refs(client, headers, resolved_cik, since, limiter):
-        if ref.form not in EIGHT_K_FORMS or ref.available_on < since:
-            continue
-        existing = session.exec(
-            select(col(RawDocument.id), col(RawDocument.text).is_(None)).where(
+    refs = [
+        ref
+        for ref in filing_refs(client, headers, resolved_cik, since, limiter)
+        if ref.form in EIGHT_K_FORMS and ref.available_on >= since
+    ]
+    stored_docs = {
+        external_id: (document_id, missing_text, form)
+        for external_id, document_id, missing_text, form in session.exec(
+            select(
+                col(RawDocument.external_id),
+                col(RawDocument.id),
+                col(RawDocument.text).is_(None),
+                col(RawDocument.form),
+            ).where(
                 RawDocument.source == "sec_edgar",
-                RawDocument.external_id == ref.accession_number,
+                col(RawDocument.external_id).in_([ref.accession_number for ref in refs]),
             )
-        ).first()
+        ).all()
+    }
+    linked = set(
+        session.exec(
+            select(DocumentTicker.document_id).where(DocumentTicker.ticker_id == ticker.id)
+        ).all()
+    )
+
+    created = 0
+    for ref in refs:
+        existing = stored_docs.get(ref.accession_number)
         if existing is not None:
             # Tickers can share a CIK (GOOG/GOOGL); link this one and fill pre-spec-01 rows.
-            document_id, missing_text = existing
-            if session.get(DocumentTicker, (document_id, ticker.id)) is None:
+            document_id, missing_text, form = existing
+            if document_id not in linked:
                 session.add(DocumentTicker(document_id=document_id, ticker_id=ticker.id))
+                linked.add(document_id)
             if missing_text:
                 stored = session.get_one(RawDocument, document_id)
                 _fill_filing_text(stored, ref, client, headers, resolved_cik, limiter)
                 session.add(stored)
-            session.commit()
+                session.commit()
+            elif form is None:
+                session.execute(
+                    update(RawDocument)
+                    .where(col(RawDocument.id) == document_id)
+                    .values(form=ref.form)
+                )
             continue
 
         document = RawDocument(
@@ -152,8 +178,10 @@ def ingest_eight_ks_for_symbol(
         session.flush()
         session.add(DocumentTicker(document_id=document.id, ticker_id=ticker.id))
         session.commit()
+        linked.add(document.id)
         created += 1
 
+    session.commit()
     return created
 
 
@@ -218,6 +246,7 @@ def _fill_filing_text(
     exhibits = _fetch_exhibits(client, headers, cik10, ref, limiter)
     document.text = compose_filing_text(document.raw_text, exhibits)
     document.items = ref.items or None
+    document.form = ref.form
     document.acceptance_at = ref.acceptance_at
     if ref.acceptance_at is not None:
         document.published_at = ref.acceptance_at

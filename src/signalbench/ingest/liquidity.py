@@ -73,6 +73,8 @@ def update_liquidity_flags(session: Session, entries: list[CdrEntry]) -> Liquidi
         reason: str | None
         if traded_value is None:
             reason = "us_history_short"
+        elif us_rows[0].date < oldest_recent:
+            reason = "us_no_recent_price"
         elif traded_value < US_MIN_MEDIAN_TRADED_VALUE_USD:
             reason = "us_illiquid"
         elif cdr_recent is None:

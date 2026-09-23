@@ -33,7 +33,9 @@ def _ticker(session: Session, symbol: str) -> Ticker:
     return ticker
 
 
-def _filing(session: Session, ticker: Ticker, accession: str, accepted: datetime, items: str) -> None:
+def _filing(
+    session: Session, ticker: Ticker, accession: str, accepted: datetime, items: str, form: str = "8-K"
+) -> None:
     document = RawDocument(
         source="sec_edgar",
         external_id=accession,
@@ -42,6 +44,7 @@ def _filing(session: Session, ticker: Ticker, accession: str, accepted: datetime
         published_at=accepted,
         acceptance_at=accepted,
         items=items,
+        form=form,
     )
     session.add(document)
     session.flush()
@@ -177,3 +180,27 @@ def test_earnings_dates_merges_sources(session: Session) -> None:
     session.add(EarningsEvent(ticker_id=nvda.id, event_date=date(2026, 8, 26), source=FINNHUB_EARNINGS_SOURCE))
     session.commit()
     assert earnings_dates(session, nvda.id) == [date(2026, 8, 26)]
+
+
+def test_sec_events_skip_8k_amendments_and_drop_ones_they_created(session: Session) -> None:
+    aapl = _ticker(session, "AAPL")
+    _filing(session, aapl, "a-1", datetime(2024, 1, 15, 21, 30, tzinfo=UTC), "2.02,9.01")
+    session.add(EarningsEvent(ticker_id=aapl.id, event_date=date(2024, 2, 1), source=SEC_EARNINGS_SOURCE))
+    session.commit()
+    _filing(session, aapl, "a-2", datetime(2024, 2, 1, 15, 0, tzinfo=UTC), "2.02,9.01", form="8-K/A")
+    assert sync_sec_earnings_events(session) == 1
+    assert _events(session, SEC_EARNINGS_SOURCE) == [("AAPL", date(2024, 1, 15))]
+
+
+def test_finnhub_calendar_drops_past_dates_that_sec_does_not_confirm(session: Session) -> None:
+    nvda = _ticker(session, "NVDA")
+    for day in (date(2026, 8, 26), date(2026, 9, 10)):
+        session.add(EarningsEvent(ticker_id=nvda.id, event_date=day, source=FINNHUB_EARNINGS_SOURCE))
+    session.add(EarningsEvent(ticker_id=nvda.id, event_date=date(2026, 8, 27), source=SEC_EARNINGS_SOURCE))
+    session.commit()
+    finnhub = _calendar({"NVDA": [_rows(("NVDA", "2026-11-19"))]})
+    assert ingest_finnhub_calendar_for_ticker(session, finnhub, nvda, TODAY) == 1
+    assert _events(session, FINNHUB_EARNINGS_SOURCE) == [
+        ("NVDA", date(2026, 8, 26)),
+        ("NVDA", date(2026, 11, 19)),
+    ]

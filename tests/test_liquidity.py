@@ -55,10 +55,14 @@ def test_liquidity_flags(session: Session) -> None:
         _entry("THIN", "ZTHN"),
         _entry("NEWB", "ZNEW"),
         _entry("STAL", "ZSTL"),
+        _entry("GONE", "ZGON"),
     ]
     seed_universe(session, entries)
     days = _days(20)
     _prices(session, "QQQ", days, "400", 1)
+    stale = [DAY0 - timedelta(days=offset) for offset in range(40, 20, -1)]
+    _prices(session, "GONE", stale, "100", 1_000_000)  # liquid, but no price in the last 5 sessions
+    _prices(session, "ZGON", days[-1:], "12", 5)
     _prices(session, "NVDA", days, "100", 1_000_000)  # median 100M: active
     _prices(session, "EDGE", days, "50", 1_000_000)  # exactly 50M: active
     _prices(session, "THIN", days, "10", 1_000_000)  # 10M: illiquid
@@ -75,6 +79,7 @@ def test_liquidity_flags(session: Session) -> None:
         "THIN": "us_illiquid",
         "NEWB": "us_history_short",
         "STAL": "cdr_no_recent_price",
+        "GONE": "us_no_recent_price",
     }
     assert _ticker(session, "ZNVD").active is True
     assert _ticker(session, "THIN").active is False

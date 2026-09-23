@@ -14,6 +14,8 @@ logger = logging.getLogger(__name__)
 
 # 10 calendar days always covers at least 5 sessions, so late adjustments are picked up.
 REFETCH_CALENDAR_DAYS = 10
+# history_start can fall on a weekend or holiday; the first session is a few days later.
+HISTORY_START_SLACK_DAYS = 7
 
 
 @dataclass(frozen=True)
@@ -50,13 +52,20 @@ def validate_bar(bar: DailyBar) -> str | None:
 def fetch_start(
     session: Session, ticker: Ticker, history_start: date, full: bool = False
 ) -> date:
-    """Refetch the last few days of stored history, or everything when `full` is set."""
+    """Refetch the last few days of stored history, or everything when `full` is set.
+
+    Stored history that starts well after `history_start` (rows from the old 2y fetch, or a
+    lowered start) is refetched in full. A name listed after `history_start` also refetches in
+    full each run: one request, and unchanged rows are not written.
+    """
     if full:
         return history_start
-    last: date | None = session.exec(
-        select(func.max(Price.date)).where(Price.ticker_id == ticker.id)
+    first, last = session.exec(
+        select(func.min(Price.date), func.max(Price.date)).where(Price.ticker_id == ticker.id)
     ).one()
-    if last is None:
+    if first is None or last is None:
+        return history_start
+    if first > history_start + timedelta(days=HISTORY_START_SLACK_DAYS):
         return history_start
     return max(history_start, last - timedelta(days=REFETCH_CALENDAR_DAYS))
 
@@ -76,6 +85,10 @@ def ingest_daily_prices(
             select(Price).where(Price.ticker_id == ticker.id, col(Price.date) >= start)
         ).all()
     }
+    # The newest stored row may be a partial session; a change to an older close means a
+    # dividend or split rescaled the whole history, not just the refetch window.
+    last_complete = max(existing) if existing else None
+    history_rescaled = False
     created = updated = rejected = 0
     for bar in fetch(symbol, start):
         reason = validate_bar(bar)
@@ -98,6 +111,12 @@ def ingest_daily_prices(
             existing[bar.date] = row
             created += 1
         elif _row_values(row) != _bar_values(bar):
+            if (
+                last_complete is not None
+                and bar.date < last_complete
+                and (row.close, row.adj_close) != (bar.close, bar.adj_close)
+            ):
+                history_rescaled = True
             row.open = bar.open
             row.high = bar.high
             row.low = bar.low
@@ -109,7 +128,16 @@ def ingest_daily_prices(
             continue
         session.add(row)
     session.commit()
-    return PriceIngestResult(created=created, updated=updated, rejected=rejected)
+    result = PriceIngestResult(created=created, updated=updated, rejected=rejected)
+    if history_rescaled and not full:
+        logger.info("%s history was rescaled; refetching from %s", symbol, history_start)
+        rest = ingest_daily_prices(session, ticker, fetch, history_start, full=True)
+        result = PriceIngestResult(
+            created=result.created + rest.created,
+            updated=result.updated + rest.updated,
+            rejected=rest.rejected,  # the full pass sees every rejected bar again
+        )
+    return result
 
 
 def _row_values(row: Price) -> tuple[Decimal, Decimal, Decimal, Decimal, Decimal, int]:

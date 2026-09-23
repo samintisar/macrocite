@@ -91,6 +91,7 @@ class RawDocument(SQLModel, table=True):
         sa_column=Column(UTCDateTime(), nullable=True),
     )
     items: str | None = None
+    form: str | None = None
     text: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
     ingested_at: datetime = Field(
         default_factory=utcnow,

@@ -104,8 +104,8 @@ def filings(
 
 @ingest_app.command()
 def earnings() -> None:
-    with get_session() as session:
-        failed = _ingest_earnings(session)
+    with get_session() as session, httpx.Client(timeout=30.0) as client:
+        failed = _ingest_earnings(session, _finnhub(client))
     _exit_on_failures({"earnings": failed})
 
 
@@ -125,13 +125,12 @@ def ingest_all() -> None:
     with get_session() as session, httpx.Client(timeout=30.0) as client:
         failures["prices"] = _ingest_prices(session)
         failures["filings"] = _ingest_filings(session, client, backfill_text=False)
-        failures["earnings"] = _ingest_earnings(session)
-        if settings.finnhub_api_key is None:
+        finnhub = _finnhub(client)
+        failures["earnings"] = _ingest_earnings(session, finnhub)
+        if finnhub is None:
             typer.echo("FINNHUB_API_KEY is not set; skipping news", err=True)
         else:
-            failures["news"] = _ingest_news(
-                session, FinnhubClient(settings.finnhub_api_key, client)
-            )
+            failures["news"] = _ingest_news(session, finnhub)
     _exit_on_failures(failures)
 
 
@@ -184,7 +183,12 @@ def _ingest_prices(session: Session, full: bool = False) -> list[str]:
         return f"+{result.created} ~{result.updated} x{result.rejected}"
 
     failed = _for_each_ticker(session, "prices", _universe_tickers(session), work)
-    liquidity = update_liquidity_flags(session, load_universe(UNIVERSE_PATH))
+    try:
+        liquidity = update_liquidity_flags(session, load_universe(UNIVERSE_PATH))
+    except Exception as error:  # noqa: BLE001  # keep flags as they were; later steps still run
+        session.rollback()
+        typer.echo(f"liquidity FAILED: {type(error).__name__}: {error}", err=True)
+        return [*failed, "liquidity"]
     typer.echo(f"liquidity: {len(liquidity.active)} active, {len(liquidity.inactive)} inactive")
     for symbol, reason in sorted(liquidity.inactive.items()):
         typer.echo(f"  inactive {symbol}: {reason}")
@@ -210,20 +214,24 @@ def _ingest_filings(session: Session, client: httpx.Client, backfill_text: bool)
     return _for_each_ticker(session, "filings", tickers, work)
 
 
-def _ingest_earnings(session: Session) -> list[str]:
+def _ingest_earnings(session: Session, finnhub: FinnhubClient | None) -> list[str]:
     typer.echo(f"earnings from SEC 2.02: +{sync_sec_earnings_events(session)}")
-    if settings.finnhub_api_key is None:
+    if finnhub is None:
         typer.echo("FINNHUB_API_KEY is not set; skipping the upcoming earnings calendar", err=True)
         return []
     today = datetime.now(UTC).date()
-    with httpx.Client(timeout=30.0) as client:
-        finnhub = FinnhubClient(settings.finnhub_api_key, client)
 
-        def work(ticker: Ticker) -> str:
-            return f"+{ingest_finnhub_calendar_for_ticker(session, finnhub, ticker, today)}"
+    def work(ticker: Ticker) -> str:
+        return f"+{ingest_finnhub_calendar_for_ticker(session, finnhub, ticker, today)}"
 
-        tickers = _universe_tickers(session, {TickerKind.us_stock})
-        return _for_each_ticker(session, "earnings", tickers, work)
+    tickers = _universe_tickers(session, {TickerKind.us_stock})
+    return _for_each_ticker(session, "earnings", tickers, work)
+
+
+def _finnhub(client: httpx.Client) -> FinnhubClient | None:
+    if settings.finnhub_api_key is None:
+        return None
+    return FinnhubClient(settings.finnhub_api_key, client)
 
 
 def _ingest_news(session: Session, finnhub: FinnhubClient) -> list[str]:

@@ -14,7 +14,7 @@ def _script() -> ScriptDirectory:
 
 
 def test_migrations_have_single_head() -> None:
-    assert _script().get_heads() == ["0008_swing_data_foundation"]
+    assert _script().get_heads() == ["0009_document_form"]
 
 
 def test_0007_drops_sentiment_tables_and_enum() -> None:
