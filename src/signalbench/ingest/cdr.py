@@ -124,6 +124,7 @@ def load_universe(path: Path) -> list[CdrEntry]:
 
 def dump_universe(entries: list[CdrEntry], path: Path) -> None:
     body = yaml.safe_dump([asdict(entry) for entry in entries], sort_keys=False, allow_unicode=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(_YAML_HEADER + body, encoding="utf-8")
 
 
