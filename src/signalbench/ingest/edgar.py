@@ -121,19 +121,20 @@ def ingest_eight_ks_for_symbol(
         if ref.form not in EIGHT_K_FORMS or ref.available_on < since:
             continue
         existing = session.exec(
-            select(RawDocument).where(
+            select(col(RawDocument.id), col(RawDocument.text).is_(None)).where(
                 RawDocument.source == "sec_edgar",
                 RawDocument.external_id == ref.accession_number,
             )
         ).first()
         if existing is not None:
             # Tickers can share a CIK (GOOG/GOOGL); link this one and fill pre-spec-01 rows.
-            linked = session.get(DocumentTicker, (existing.id, ticker.id))
-            if linked is None:
-                session.add(DocumentTicker(document_id=existing.id, ticker_id=ticker.id))
-            if existing.text is None:
-                _fill_filing_text(existing, ref, client, headers, resolved_cik, limiter)
-                session.add(existing)
+            document_id, missing_text = existing
+            if session.get(DocumentTicker, (document_id, ticker.id)) is None:
+                session.add(DocumentTicker(document_id=document_id, ticker_id=ticker.id))
+            if missing_text:
+                stored = session.get_one(RawDocument, document_id)
+                _fill_filing_text(stored, ref, client, headers, resolved_cik, limiter)
+                session.add(stored)
             session.commit()
             continue
 
@@ -173,16 +174,15 @@ def backfill_filing_text(
     )
     if not document_ids:
         return 0
-    documents = [
-        document
-        for document in session.exec(
+    documents = list(
+        session.exec(
             select(RawDocument).where(
                 RawDocument.source == "sec_edgar",
                 col(RawDocument.id).in_(document_ids),
+                col(RawDocument.text).is_(None),
             )
         ).all()
-        if document.text is None
-    ]
+    )
     if not documents:
         return 0
 

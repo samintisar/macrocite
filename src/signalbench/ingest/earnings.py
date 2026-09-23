@@ -27,34 +27,33 @@ def has_item_202(items: str | None) -> bool:
 
 def sync_sec_earnings_events(session: Session) -> int:
     """One event per ticker on the New York date each Item 2.02 8-K was accepted."""
-    existing = {
-        (row.ticker_id, row.event_date)
-        for row in session.exec(
-            select(EarningsEvent).where(EarningsEvent.source == SEC_EARNINGS_SOURCE)
+    existing: set[tuple[uuid.UUID, date]] = set(
+        session.exec(
+            select(EarningsEvent.ticker_id, col(EarningsEvent.event_date)).where(
+                EarningsEvent.source == SEC_EARNINGS_SOURCE
+            )
         ).all()
-    }
-    documents = session.exec(
-        select(RawDocument).where(
+    )
+    rows = session.exec(
+        select(DocumentTicker.ticker_id, col(RawDocument.acceptance_at), col(RawDocument.items))
+        .join(RawDocument, col(RawDocument.id) == DocumentTicker.document_id)
+        .where(
             RawDocument.source == "sec_edgar",
             col(RawDocument.acceptance_at).is_not(None),
         )
     ).all()
     created = 0
-    for document in documents:
-        if document.acceptance_at is None or not has_item_202(document.items):
+    for ticker_id, acceptance_at, items in rows:
+        if acceptance_at is None or not has_item_202(items):
             continue
-        event_date = document.acceptance_at.astimezone(NEW_YORK).date()
-        ticker_ids = session.exec(
-            select(DocumentTicker.ticker_id).where(DocumentTicker.document_id == document.id)
-        ).all()
-        for ticker_id in ticker_ids:
-            if (ticker_id, event_date) in existing:
-                continue
-            session.add(
-                EarningsEvent(ticker_id=ticker_id, event_date=event_date, source=SEC_EARNINGS_SOURCE)
-            )
-            existing.add((ticker_id, event_date))
-            created += 1
+        event_date = acceptance_at.astimezone(NEW_YORK).date()
+        if (ticker_id, event_date) in existing:
+            continue
+        session.add(
+            EarningsEvent(ticker_id=ticker_id, event_date=event_date, source=SEC_EARNINGS_SOURCE)
+        )
+        existing.add((ticker_id, event_date))
+        created += 1
     session.commit()
     return created
 

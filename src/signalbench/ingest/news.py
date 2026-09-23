@@ -62,15 +62,14 @@ def ingest_company_news(
     external_ids = [str(article["id"]) for article in articles]
     known: dict[str, uuid.UUID] = {}
     if external_ids:
-        known = {
-            document.external_id: document.id
-            for document in session.exec(
-                select(RawDocument).where(
+        known = dict(
+            session.exec(
+                select(RawDocument.external_id, RawDocument.id).where(
                     RawDocument.source == NEWS_SOURCE,
                     col(RawDocument.external_id).in_(external_ids),
                 )
             ).all()
-        }
+        )
     linked: set[uuid.UUID] = set()
     if known:
         linked = set(
