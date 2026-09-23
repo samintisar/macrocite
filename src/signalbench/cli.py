@@ -46,10 +46,17 @@ def filings() -> None:
 def prices() -> None:
     with get_session() as session:
         tickers = _active_tickers(session)
-        typer.echo(f"Ingesting prices for {len(tickers)} tickers (2y window)")
         for index, ticker in enumerate(tickers, start=1):
-            created = ingest_daily_prices(session, ticker, fetch=fetch_yfinance_daily)
-            typer.echo(f"{index}/{len(tickers)} {ticker.symbol} +{created}")
+            result = ingest_daily_prices(
+                session,
+                ticker,
+                fetch=fetch_yfinance_daily,
+                history_start=settings.price_history_start,
+            )
+            typer.echo(
+                f"{index}/{len(tickers)} {ticker.symbol} "
+                f"+{result.created} ~{result.updated} x{result.rejected}"
+            )
 
 
 def _active_tickers(session: Session) -> list[Ticker]:
