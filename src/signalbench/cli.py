@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
@@ -85,7 +86,8 @@ def prices(
     ] = False,
 ) -> None:
     with get_session() as session:
-        _ingest_prices(session, full=full)
+        failed = _ingest_prices(session, full=full)
+    _exit_on_failures({"prices": failed})
 
 
 @ingest_app.command()
@@ -96,7 +98,8 @@ def filings(
     ] = False,
 ) -> None:
     with get_session() as session, httpx.Client(timeout=30.0) as client:
-        _ingest_filings(session, client, backfill_text=backfill_text)
+        failed = _ingest_filings(session, client, backfill_text=backfill_text)
+    _exit_on_failures({"filings": failed})
 
 
 @ingest_app.command()
@@ -111,19 +114,24 @@ def news() -> None:
         typer.echo("FINNHUB_API_KEY is not set in .env", err=True)
         raise typer.Exit(1)
     with get_session() as session, httpx.Client(timeout=30.0) as client:
-        _ingest_news(session, FinnhubClient(settings.finnhub_api_key, client))
+        failed = _ingest_news(session, FinnhubClient(settings.finnhub_api_key, client))
+    _exit_on_failures({"news": failed})
 
 
 @ingest_app.command("all")
 def ingest_all() -> None:
+    failures: dict[str, list[str]] = {}
     with get_session() as session, httpx.Client(timeout=30.0) as client:
-        _ingest_prices(session)
-        _ingest_filings(session, client, backfill_text=False)
+        failures["prices"] = _ingest_prices(session)
+        failures["filings"] = _ingest_filings(session, client, backfill_text=False)
         _ingest_earnings(session)
         if settings.finnhub_api_key is None:
             typer.echo("FINNHUB_API_KEY is not set; skipping news", err=True)
         else:
-            _ingest_news(session, FinnhubClient(settings.finnhub_api_key, client))
+            failures["news"] = _ingest_news(
+                session, FinnhubClient(settings.finnhub_api_key, client)
+            )
+    _exit_on_failures(failures)
 
 
 @ingest_app.command()
@@ -133,9 +141,38 @@ def stats() -> None:
             typer.echo(f"{label}: {value}")
 
 
-def _ingest_prices(session: Session, full: bool = False) -> None:
-    tickers = _universe_tickers(session)
+def _for_each_ticker(
+    session: Session,
+    command: str,
+    tickers: list[Ticker],
+    work: Callable[[Ticker], str],
+) -> list[str]:
+    """Run `work` per ticker, echoing its result; a failure is reported and skipped."""
+    failed: list[str] = []
     for index, ticker in enumerate(tickers, start=1):
+        symbol = ticker.symbol
+        label = f"{command} {index}/{len(tickers)} {symbol}"
+        try:
+            message = work(ticker)
+        except Exception as error:  # noqa: BLE001  # report any per-ticker failure and move on
+            session.rollback()
+            typer.echo(f"{label} FAILED: {type(error).__name__}: {error}", err=True)
+            failed.append(symbol)
+            continue
+        typer.echo(f"{label} {message}")
+    return failed
+
+
+def _exit_on_failures(failures: dict[str, list[str]]) -> None:
+    failed_steps = {command: symbols for command, symbols in failures.items() if symbols}
+    for command, symbols in failed_steps.items():
+        typer.echo(f"{command}: {len(symbols)} failed: {', '.join(symbols)}", err=True)
+    if failed_steps:
+        raise typer.Exit(1)
+
+
+def _ingest_prices(session: Session, full: bool = False) -> list[str]:
+    def work(ticker: Ticker) -> str:
         result = ingest_daily_prices(
             session,
             ticker,
@@ -143,22 +180,22 @@ def _ingest_prices(session: Session, full: bool = False) -> None:
             history_start=settings.price_history_start,
             full=full,
         )
-        typer.echo(
-            f"prices {index}/{len(tickers)} {ticker.symbol} "
-            f"+{result.created} ~{result.updated} x{result.rejected}"
-        )
+        return f"+{result.created} ~{result.updated} x{result.rejected}"
+
+    failed = _for_each_ticker(session, "prices", _universe_tickers(session), work)
     liquidity = update_liquidity_flags(session, load_universe(UNIVERSE_PATH))
     typer.echo(f"liquidity: {len(liquidity.active)} active, {len(liquidity.inactive)} inactive")
     for symbol, reason in sorted(liquidity.inactive.items()):
         typer.echo(f"  inactive {symbol}: {reason}")
+    return failed
 
 
-def _ingest_filings(session: Session, client: httpx.Client, backfill_text: bool) -> None:
-    tickers = _universe_tickers(session, {TickerKind.us_stock})
-    for index, ticker in enumerate(tickers, start=1):
+def _ingest_filings(session: Session, client: httpx.Client, backfill_text: bool) -> list[str]:
+    def work(ticker: Ticker) -> str:
+        backfilled = ""
         if backfill_text:
             filled = backfill_filing_text(session, ticker.symbol, client, settings.sec_user_agent)
-            typer.echo(f"filings {index}/{len(tickers)} {ticker.symbol} text backfilled {filled}")
+            backfilled = f" (text backfilled {filled})"
         created = ingest_eight_ks_for_symbol(
             session,
             ticker.symbol,
@@ -166,7 +203,10 @@ def _ingest_filings(session: Session, client: httpx.Client, backfill_text: bool)
             settings.sec_user_agent,
             since=settings.filings_backfill_start,
         )
-        typer.echo(f"filings {index}/{len(tickers)} {ticker.symbol} +{created}")
+        return f"+{created}{backfilled}"
+
+    tickers = _universe_tickers(session, {TickerKind.us_stock})
+    return _for_each_ticker(session, "filings", tickers, work)
 
 
 def _ingest_earnings(session: Session) -> None:
@@ -180,14 +220,17 @@ def _ingest_earnings(session: Session) -> None:
     typer.echo(f"earnings from Finnhub calendar: {created} upcoming")
 
 
-def _ingest_news(session: Session, finnhub: FinnhubClient) -> None:
+def _ingest_news(session: Session, finnhub: FinnhubClient) -> list[str]:
     today = datetime.now(UTC).date()
-    tickers = _universe_tickers(session, {TickerKind.us_stock})
-    for index, ticker in enumerate(tickers, start=1):
+
+    def work(ticker: Ticker) -> str:
         created = 0
         for start, end in news_windows(last_news_date(session, ticker), today):
             created += ingest_company_news(session, finnhub, ticker, start, end)
-        typer.echo(f"news {index}/{len(tickers)} {ticker.symbol} +{created}")
+        return f"+{created}"
+
+    tickers = _universe_tickers(session, {TickerKind.us_stock})
+    return _for_each_ticker(session, "news", tickers, work)
 
 
 def _universe_tickers(session: Session, kinds: set[TickerKind] | None = None) -> list[Ticker]:
