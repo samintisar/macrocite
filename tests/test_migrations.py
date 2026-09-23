@@ -14,7 +14,7 @@ def _script() -> ScriptDirectory:
 
 
 def test_migrations_have_single_head() -> None:
-    assert _script().get_heads() == ["0007_drop_sentiment_pipeline"]
+    assert _script().get_heads() == ["0008_swing_data_foundation"]
 
 
 def test_0007_drops_sentiment_tables_and_enum() -> None:
@@ -23,3 +23,10 @@ def test_0007_drops_sentiment_tables_and_enum() -> None:
         assert f'op.drop_table("{table}")' in text
     assert 'name="eventtype"' in text
     assert "checkfirst=True" in text
+
+
+def test_0008_creates_ticker_kind_enum_idempotently() -> None:
+    text = (VERSIONS / "0008_swing_data_foundation.py").read_text(encoding="utf-8")
+    assert 'name="tickerkind"' in text
+    assert "checkfirst=True" in text
+    assert 'op.create_table(\n        "earnings_events"' in text

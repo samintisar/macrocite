@@ -45,6 +45,12 @@ class DocType(str, Enum):
     ten_q = "ten_q"
 
 
+class TickerKind(str, Enum):
+    us_stock = "us_stock"
+    cdr = "cdr"
+    benchmark = "benchmark"
+
+
 class Ticker(SQLModel, table=True):
     __tablename__ = "tickers"
 
@@ -56,6 +62,13 @@ class Ticker(SQLModel, table=True):
     added_at: datetime = Field(
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
+    kind: TickerKind = Field(default=TickerKind.us_stock)
+    price_symbol: str | None = None
+    us_ticker_id: uuid.UUID | None = Field(
+        default=None,
+        foreign_key="tickers.id",
+        ondelete="RESTRICT",
     )
 
 
@@ -73,6 +86,12 @@ class RawDocument(SQLModel, table=True):
     title: str | None = None
     raw_text: str = Field(sa_column=Column(Text, nullable=False))
     published_at: datetime = Field(sa_column=Column(UTCDateTime(), nullable=False))
+    acceptance_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(UTCDateTime(), nullable=True),
+    )
+    items: str | None = None
+    text: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
     ingested_at: datetime = Field(
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),
@@ -107,3 +126,20 @@ class Price(SQLModel, table=True):
     close: Decimal = Field(sa_column=Column(Numeric(12, 4), nullable=False))
     adj_close: Decimal = Field(sa_column=Column(Numeric(12, 4), nullable=False))
     volume: int = Field(sa_column=Column(BigInteger, nullable=False))
+
+
+class EarningsEvent(SQLModel, table=True):
+    __tablename__ = "earnings_events"
+    __table_args__ = (
+        UniqueConstraint(
+            "ticker_id",
+            "event_date",
+            "source",
+            name="uq_earnings_events_ticker_date_source",
+        ),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    ticker_id: uuid.UUID = Field(foreign_key="tickers.id", ondelete="RESTRICT")
+    event_date: date
+    source: str

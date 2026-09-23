@@ -7,7 +7,15 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.types import TypeDecorator
 from sqlmodel import Session, select
 
-from signalbench.db.models import DocumentTicker, Price, RawDocument, Ticker
+from signalbench.db.models import (
+    DocType,
+    DocumentTicker,
+    EarningsEvent,
+    Price,
+    RawDocument,
+    Ticker,
+    TickerKind,
+)
 
 
 def test_document_has_no_ticker_id_column() -> None:
@@ -99,3 +107,77 @@ def test_price_volume_column_is_bigint() -> None:
     from sqlalchemy import BigInteger
 
     assert isinstance(Price.__table__.c.volume.type, BigInteger)
+
+
+def test_ticker_kind_defaults_to_us_stock(session: Session) -> None:
+    ticker = Ticker(symbol="AAPL", company_name="Apple")
+    session.add(ticker)
+    session.commit()
+    session.refresh(ticker)
+    assert ticker.kind is TickerKind.us_stock
+    assert ticker.price_symbol is None
+    assert ticker.us_ticker_id is None
+
+
+def test_cdr_links_to_its_us_ticker(session: Session) -> None:
+    us = Ticker(symbol="NVDA", company_name="Nvidia")
+    session.add(us)
+    session.commit()
+    session.refresh(us)
+    session.add(
+        Ticker(
+            symbol="ZNVD",
+            company_name="Nvidia",
+            kind=TickerKind.cdr,
+            price_symbol="ZNVD.NE",
+            us_ticker_id=us.id,
+        )
+    )
+    session.commit()
+    cdr = session.exec(select(Ticker).where(Ticker.symbol == "ZNVD")).one()
+    assert cdr.kind is TickerKind.cdr
+    assert cdr.us_ticker_id == us.id
+    assert cdr.price_symbol == "ZNVD.NE"
+
+
+def test_raw_document_new_fields(session: Session) -> None:
+    accepted = datetime(2026, 7, 30, 20, 30, 28, tzinfo=UTC)
+    filing = RawDocument(
+        source="sec_edgar",
+        external_id="0000320193-26-000018",
+        doc_type=DocType.eight_k,
+        raw_text="<html></html>",
+        published_at=accepted,
+        acceptance_at=accepted,
+        items="2.02,9.01",
+        text="Item 2.02 Results of Operations",
+    )
+    news = RawDocument(
+        source="finnhub",
+        external_id="123",
+        doc_type=DocType.news,
+        raw_text="Headline",
+        published_at=accepted,
+    )
+    session.add(filing)
+    session.add(news)
+    session.commit()
+    session.refresh(filing)
+    session.refresh(news)
+    assert filing.acceptance_at == accepted
+    assert filing.items == "2.02,9.01"
+    assert filing.text == "Item 2.02 Results of Operations"
+    assert news.acceptance_at is None
+    assert news.text is None
+
+
+def test_earnings_event_unique_per_ticker_date_source(session: Session) -> None:
+    ticker = Ticker(symbol="AAPL", company_name="Apple")
+    session.add(ticker)
+    session.commit()
+    session.refresh(ticker)
+    session.add(EarningsEvent(ticker_id=ticker.id, event_date=date(2026, 7, 30), source="sec_2.02"))
+    session.commit()
+    session.add(EarningsEvent(ticker_id=ticker.id, event_date=date(2026, 7, 30), source="sec_2.02"))
+    with pytest.raises(IntegrityError):
+        session.commit()
