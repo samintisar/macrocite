@@ -251,3 +251,62 @@ def test_backfill_filing_text_fills_rows_stored_before_spec_01(session: Session)
     assert legacy.acceptance_at == datetime(2024, 1, 15, 21, 30, 5, tzinfo=UTC)
     assert legacy.published_at == legacy.acceptance_at
     assert backfill_filing_text(session, "AAPL", client, UA, limiter=FAST) == 0
+
+
+def _stored_filing(session: Session, ticker: Ticker, text: str | None) -> RawDocument:
+    document = RawDocument(
+        source="sec_edgar",
+        external_id=ACCESSION,
+        doc_type=DocType.eight_k,
+        raw_text=_fixture("edgar_8k.html"),
+        text=text,
+        published_at=datetime(2024, 1, 15, tzinfo=UTC),
+    )
+    session.add(document)
+    session.flush()
+    session.add(DocumentTicker(document_id=document.id, ticker_id=ticker.id))
+    session.commit()
+    return document
+
+
+def test_existing_filing_gets_linked_to_the_queried_ticker(session: Session) -> None:
+    other = Ticker(symbol="GOOGL", company_name="Alphabet Inc.", active=True)
+    session.add(other)
+    ticker = _add_aapl(session)
+    document = _stored_filing(session, other, text="already clean")
+
+    created = ingest_eight_ks_for_symbol(
+        session, "AAPL", _client(_routes()), UA, cik10="0000320193", limiter=FAST
+    )
+    assert created == 0
+    links = {(link.document_id, link.ticker_id) for link in session.exec(select(DocumentTicker)).all()}
+    assert links == {(document.id, other.id), (document.id, ticker.id)}
+    assert len(session.exec(select(RawDocument)).all()) == 1
+
+
+def test_existing_filing_without_text_gets_text_items_and_acceptance(session: Session) -> None:
+    ticker = _add_aapl(session)
+    document = _stored_filing(session, ticker, text=None)
+
+    created = ingest_eight_ks_for_symbol(
+        session, "AAPL", _client(_routes()), UA, cik10="0000320193", limiter=FAST
+    )
+    assert created == 0
+    session.refresh(document)
+    accepted = datetime(2024, 1, 15, 21, 30, 5, tzinfo=UTC)
+    assert document.text is not None
+    assert "record first quarter revenue" in document.text
+    assert document.items == "2.02,9.01"
+    assert document.acceptance_at == accepted
+    assert document.published_at == accepted
+    assert len(session.exec(select(DocumentTicker)).all()) == 1
+
+
+def test_second_ingest_only_requests_submissions(session: Session) -> None:
+    _add_aapl(session)
+    requested: list[str] = []
+    client = _client(_routes(), requested)
+    ingest_eight_ks_for_symbol(session, "AAPL", client, UA, cik10="0000320193", limiter=FAST)
+    requested.clear()
+    assert ingest_eight_ks_for_symbol(session, "AAPL", client, UA, cik10="0000320193", limiter=FAST) == 0
+    assert requested == ["https://data.sec.gov/submissions/CIK0000320193.json"]

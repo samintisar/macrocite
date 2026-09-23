@@ -127,23 +127,26 @@ def ingest_eight_ks_for_symbol(
             )
         ).first()
         if existing is not None:
+            # Tickers can share a CIK (GOOG/GOOGL); link this one and fill pre-spec-01 rows.
+            linked = session.get(DocumentTicker, (existing.id, ticker.id))
+            if linked is None:
+                session.add(DocumentTicker(document_id=existing.id, ticker_id=ticker.id))
+            if existing.text is None:
+                _fill_filing_text(existing, ref, client, headers, resolved_cik, limiter)
+                session.add(existing)
+            session.commit()
             continue
 
-        primary_html = _get_text(client, _archive_url(resolved_cik, ref), headers, limiter)
-        exhibits = _fetch_exhibits(client, headers, resolved_cik, ref, limiter)
         document = RawDocument(
             source="sec_edgar",
             external_id=ref.accession_number,
             doc_type=DocType.eight_k,
             url=_archive_url(resolved_cik, ref),
             title=ref.primary_document,
-            raw_text=primary_html,
-            text=compose_filing_text(primary_html, exhibits),
-            items=ref.items or None,
-            acceptance_at=ref.acceptance_at,
-            published_at=ref.acceptance_at
-            or datetime.combine(ref.filing_date, time.min, tzinfo=UTC),
+            raw_text=_get_text(client, _archive_url(resolved_cik, ref), headers, limiter),
+            published_at=datetime.combine(ref.filing_date, time.min, tzinfo=UTC),
         )
+        _fill_filing_text(document, ref, client, headers, resolved_cik, limiter)
         session.add(document)
         session.flush()
         session.add(DocumentTicker(document_id=document.id, ticker_id=ticker.id))
@@ -196,16 +199,28 @@ def backfill_filing_text(
         if ref is None:
             logger.warning("No submissions entry for %s; text not backfilled", document.external_id)
             continue
-        exhibits = _fetch_exhibits(client, headers, resolved_cik, ref, limiter)
-        document.text = compose_filing_text(document.raw_text, exhibits)
-        document.items = ref.items or None
-        document.acceptance_at = ref.acceptance_at
-        if ref.acceptance_at is not None:
-            document.published_at = ref.acceptance_at
+        _fill_filing_text(document, ref, client, headers, resolved_cik, limiter)
         session.add(document)
         session.commit()
         updated += 1
     return updated
+
+
+def _fill_filing_text(
+    document: RawDocument,
+    ref: FilingRef,
+    client: httpx.Client,
+    headers: dict[str, str],
+    cik10: str,
+    limiter: RateLimiter,
+) -> None:
+    """Set text, items, and acceptance time from the stored primary HTML plus EX-99 exhibits."""
+    exhibits = _fetch_exhibits(client, headers, cik10, ref, limiter)
+    document.text = compose_filing_text(document.raw_text, exhibits)
+    document.items = ref.items or None
+    document.acceptance_at = ref.acceptance_at
+    if ref.acceptance_at is not None:
+        document.published_at = ref.acceptance_at
 
 
 def _fetch_exhibits(
