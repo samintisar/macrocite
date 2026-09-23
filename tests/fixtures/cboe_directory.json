@@ -1,0 +1,9 @@
+{
+  "data": [
+    {"symbol": "ZNVD", "name": "NVIDIA (NVDA) BMO CDR (CAD HEDGED)", "currency": "CAD", "security": "dr", "security_sub_type": "deprcpt", "marketcap": 1.0, "last": 12.17, "changepcnt": 0.1, "volume": 1639},
+    {"symbol": "ZBRK", "name": "BERKSHIRE HATHAWAY (BRK/B) BMO CDR (CAD HEDGED)", "currency": "CAD", "security": "dr", "security_sub_type": "deprcpt", "marketcap": 1.0, "last": 9.96, "changepcnt": 0.0, "volume": 306},
+    {"symbol": "ZMCD", "name": "MCDONALD'S (MCD) BMO CDR (CAD HEDGED)", "currency": "CAD", "security": "dr", "security_sub_type": "deprcpt", "marketcap": 1.0, "last": 8.04, "changepcnt": 0.0, "volume": 0},
+    {"symbol": "MB", "name": "MERCEDES CDR (CAD HEDGED)", "currency": "CAD", "security": "dr", "security_sub_type": "deprcpt", "marketcap": 1.0, "last": 7.59, "changepcnt": -0.5, "volume": 312},
+    {"symbol": "XYZ", "name": "SOME ETF (XYZ)", "currency": "CAD", "security": "etf", "security_sub_type": "etf", "marketcap": 1.0, "last": 20.0, "changepcnt": 0.0, "volume": 10}
+  ]
+}

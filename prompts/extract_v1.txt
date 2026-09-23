@@ -1,8 +1,0 @@
-Extract structured claims from the filing text.
-
-Return only claims about named stock tickers mentioned in the document.
-Each claim must include ticker, sentiment (-1.0 to 1.0), event_type, confidence (0.0 to 1.0), and a one-sentence rationale.
-
-event_type must be one of: earnings, guidance, leadership, legal, product, macro, other.
-
-Do not invent tickers that are not named. If there are no named tickers, return no claims.

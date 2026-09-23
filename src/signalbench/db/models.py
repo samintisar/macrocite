@@ -4,7 +4,6 @@ from decimal import Decimal
 from enum import Enum
 
 from sqlalchemy import (
-    JSON,
     BigInteger,
     Column,
     DateTime,
@@ -46,6 +45,12 @@ class DocType(str, Enum):
     ten_q = "ten_q"
 
 
+class TickerKind(str, Enum):
+    us_stock = "us_stock"
+    cdr = "cdr"
+    benchmark = "benchmark"
+
+
 class Ticker(SQLModel, table=True):
     __tablename__ = "tickers"
 
@@ -57,6 +62,13 @@ class Ticker(SQLModel, table=True):
     added_at: datetime = Field(
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
+    kind: TickerKind = Field(default=TickerKind.us_stock)
+    price_symbol: str | None = None
+    us_ticker_id: uuid.UUID | None = Field(
+        default=None,
+        foreign_key="tickers.id",
+        ondelete="RESTRICT",
     )
 
 
@@ -74,6 +86,13 @@ class RawDocument(SQLModel, table=True):
     title: str | None = None
     raw_text: str = Field(sa_column=Column(Text, nullable=False))
     published_at: datetime = Field(sa_column=Column(UTCDateTime(), nullable=False))
+    acceptance_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(UTCDateTime(), nullable=True),
+    )
+    items: str | None = None
+    form: str | None = None
+    text: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
     ingested_at: datetime = Field(
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),
@@ -110,104 +129,18 @@ class Price(SQLModel, table=True):
     volume: int = Field(sa_column=Column(BigInteger, nullable=False))
 
 
-class EventType(str, Enum):
-    earnings = "earnings"
-    guidance = "guidance"
-    leadership = "leadership"
-    legal = "legal"
-    product = "product"
-    macro = "macro"
-    other = "other"
-
-
-class Signal(SQLModel, table=True):
-    __tablename__ = "signals"
-    # Table-model __init__ skips Pydantic; validate_assignment enforces Field ge/le.
-    model_config = SQLModel.model_config.copy()
-    model_config["validate_assignment"] = True
+class EarningsEvent(SQLModel, table=True):
+    __tablename__ = "earnings_events"
     __table_args__ = (
         UniqueConstraint(
-            "document_id",
             "ticker_id",
-            "model_version",
-            "prompt_version",
-            name="uq_signals_doc_ticker_model_prompt",
+            "event_date",
+            "source",
+            name="uq_earnings_events_ticker_date_source",
         ),
     )
 
-    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
-    document_id: uuid.UUID = Field(foreign_key="raw_documents.id", ondelete="CASCADE")
+    id: int | None = Field(default=None, primary_key=True)
     ticker_id: uuid.UUID = Field(foreign_key="tickers.id", ondelete="RESTRICT")
-    model_version: str
-    prompt_version: str
-    sentiment: float = Field(ge=-1.0, le=1.0)
-    event_type: EventType
-    confidence: float = Field(ge=0.0, le=1.0)
-    rationale: str | None = None
-    raw_llm_response: dict[str, object] | None = Field(default=None, sa_column=Column(JSON))
-    extracted_at: datetime = Field(
-        default_factory=utcnow,
-        sa_column=Column(DateTime(timezone=True), nullable=False),
-    )
-
-
-class EvalRun(SQLModel, table=True):
-    __tablename__ = "eval_runs"
-
-    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
-    model_version: str
-    prompt_version: str
-    git_commit_sha: str | None = None
-    label_set_git_sha: str | None = None
-    n_examples: int
-    sentiment_accuracy: float
-    event_type_metrics: dict[str, object] = Field(sa_column=Column(JSON, nullable=False))
-    confidence_calibration: dict[str, object] | None = Field(
-        default=None, sa_column=Column(JSON)
-    )
-    passed_ci_gate: bool
-    run_at: datetime = Field(
-        default_factory=utcnow,
-        sa_column=Column(DateTime(timezone=True), nullable=False),
-    )
-
-
-class BacktestConfig(SQLModel, table=True):
-    __tablename__ = "backtest_configs"
-
-    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
-    name: str = Field(unique=True, index=True)
-    strategy_type: str
-    params: dict[str, object] = Field(sa_column=Column(JSON, nullable=False))
-    created_at: datetime = Field(
-        default_factory=utcnow,
-        sa_column=Column(DateTime(timezone=True), nullable=False),
-    )
-
-
-class BacktestRun(SQLModel, table=True):
-    __tablename__ = "backtest_runs"
-
-    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
-    config_id: uuid.UUID = Field(foreign_key="backtest_configs.id", ondelete="RESTRICT")
-    ticker_ids: list[str] = Field(sa_column=Column(JSON, nullable=False))
-    start_date: date
-    end_date: date
-    model_version: str
-    prompt_version: str
-    signal_set_fingerprint: str
-    sharpe_ratio: float | None = None
-    max_drawdown: float | None = None
-    win_rate: float | None = None
-    total_return: float | None = None
-    benchmark_return: float | None = None
-    trade_log: list[object] | None = Field(default=None, sa_column=Column(JSON))
-    run_at: datetime = Field(
-        default_factory=utcnow,
-        sa_column=Column(DateTime(timezone=True), nullable=False),
-    )
-
-    def __init__(self, **data: object) -> None:
-        if data.get("signal_set_fingerprint") is None:
-            raise TypeError("signal_set_fingerprint is required")
-        super().__init__(**data)
+    event_date: date
+    source: str

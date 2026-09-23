@@ -154,3 +154,13 @@ Not tradable. After 30 days on YAML and two filings you have actually read, a na
 
 **Unchanged math:** 25% size, one slot, T+5 or −3%, these eight names.  
 **Measurement:** random-entry control, live skip shadows, pre-registered 2pp test, tie-break, acceptance-time clock, tech-tape flag.
+
+---
+
+## Closed — 2026-09-22
+
+Closed before the freeze window ended. The 8-K sentiment strategy in this book was replaced by the Swing Assistant design (`docs/superpowers/specs/2026-09-22-swing-assistant-00-overview.md`).
+
+- Trades logged under v1.1: 0 (taken, control, and shadow).
+- No results exist, so closing is not a response to results, and no rule above was edited.
+- The new system pre-registers its own rules before any backtest (spec 02).

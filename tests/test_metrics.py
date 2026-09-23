@@ -1,8 +1,7 @@
 from datetime import date
 from decimal import Decimal
 
-from signalbench.backtest.metrics import compute_metrics
-from signalbench.backtest.strategy import Trade
+from signalbench.backtest.metrics import Trade, compute_metrics
 
 
 def test_golden_metrics() -> None:
