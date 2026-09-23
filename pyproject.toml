@@ -14,7 +14,6 @@ dependencies = [
   "pyyaml>=6.0",
   "yfinance>=0.2",
   "pydantic-settings>=2.6",
-  "together>=2.0.0",
 ]
 
 [project.scripts]
@@ -51,10 +50,6 @@ follow_imports_for_stubs = true
 
 [[tool.mypy.overrides]]
 module = ["yfinance"]
-ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
-module = ["together"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

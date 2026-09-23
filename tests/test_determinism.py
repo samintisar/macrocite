@@ -2,8 +2,7 @@ from datetime import date
 from decimal import Decimal
 
 from signalbench.backtest.fingerprint import signal_set_fingerprint
-from signalbench.backtest.run import metrics_as_json
-from signalbench.backtest.strategy import Trade
+from signalbench.backtest.metrics import Trade, compute_metrics
 
 
 def test_fingerprint_stable() -> None:
@@ -28,6 +27,4 @@ def test_two_run_metrics_equal() -> None:
             exit_price=Decimal(110),
         )
     ]
-    m1 = metrics_as_json(prices, trades)
-    m2 = metrics_as_json(prices, trades)
-    assert m1 == m2
+    assert compute_metrics(prices, trades) == compute_metrics(prices, trades)

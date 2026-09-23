@@ -1,6 +1,0 @@
-name: mvp_long
-strategy_type: sentiment_threshold_long
-params:
-  sentiment_threshold: 0.5
-  holding_days: 5
-  stop_loss: -0.03

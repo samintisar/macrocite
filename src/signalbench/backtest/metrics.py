@@ -7,7 +7,13 @@ from decimal import Decimal
 
 import numpy as np
 
-from signalbench.backtest.strategy import Trade
+
+@dataclass(frozen=True)
+class Trade:
+    entry_date: date
+    exit_date: date
+    entry_price: Decimal
+    exit_price: Decimal
 
 
 @dataclass(frozen=True)
