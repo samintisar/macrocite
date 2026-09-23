@@ -57,7 +57,7 @@ Extend `raw_documents` (also migration `0008`):
 - Backfill 8-Ks accepted on or after `2016-01-01` for every US ticker in the universe.
 - Also accept `8-K/A` amendments, stored with their own accession number.
 
-**Exhibits:** fetch the filing index (`{accession}-index.json`) and download every `EX-99.*` document (these hold press releases and earnings results). `text` = cleaned primary document + `\n\n---\n\n` + each cleaned EX-99 in index order.
+**Exhibits:** fetch the filing index page (`{accession}-index.htm`; its `tableFile` table lists each document's Type, which `index.json` does not) and download every `EX-99.*` document (these hold press releases and earnings results). `text` = cleaned primary document + `\n\n---\n\n` + each cleaned EX-99 in index order.
 
 **Cleaning:**
 - Parse HTML with BeautifulSoup + lxml. Drop `script`, `style`, and XBRL `ix:header` blocks. Collapse whitespace and keep paragraph breaks.
@@ -122,4 +122,4 @@ signalbench ingest all                # in order: prices, filings, earnings, new
 ## Changelog
 
 - 2026-09-22: created.
-- 2026-09-22: the universe source is the Cboe JSON endpoint (the page itself renders client-side). `.NE` is verified. The CDR traded-value filter was replaced by "priced in the last 5 sessions".
+- 2026-09-22: the universe source is the Cboe JSON endpoint (the page itself renders client-side). `.NE` is verified. Exhibits come from `-index.htm`. The CDR traded-value filter was replaced by "priced in the last 5 sessions".
