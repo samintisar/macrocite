@@ -5,7 +5,10 @@
       "accessionNumber": ["0000320193-24-000001"],
       "form": ["8-K"],
       "filingDate": ["2024-01-15"],
+      "acceptanceDateTime": ["2024-01-15T21:30:05.000Z"],
+      "items": ["2.02,9.01"],
       "primaryDocument": ["aapl-20240115.htm"]
-    }
+    },
+    "files": []
   }
 }
