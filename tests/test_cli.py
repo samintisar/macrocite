@@ -1,12 +1,15 @@
 from datetime import date
 
+import httpx
 import pytest
-from sqlmodel import Session
+from sqlmodel import Session, select
 from typer.testing import CliRunner
 
 from signalbench import cli
 from signalbench.cli import app
-from signalbench.db.models import Ticker, TickerKind
+from signalbench.db.models import EarningsEvent, Ticker, TickerKind
+from signalbench.ingest.finnhub import FinnhubClient
+from signalbench.ingest.ratelimit import RateLimiter
 
 runner = CliRunner()
 
@@ -94,3 +97,42 @@ def test_ingest_all_runs_every_step_then_exits_1_on_ticker_failures(
     assert "filings 2/2 BAD FAILED: RuntimeError: boom" in result.stderr
     assert sorted(set(news)) == ["AAPL", "BAD"]
     assert "filings: 1 failed: BAD" in result.stderr
+
+
+def test_ingest_all_reports_a_failed_earnings_calendar_after_news(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    aapl, bad = _stocks(session, ["AAPL", "BAD"])
+    _use_session(monkeypatch, session, [aapl, bad])
+    session.add(EarningsEvent(ticker_id=bad.id, event_date=date(2099, 1, 5), source="finnhub"))
+    session.commit()
+    monkeypatch.setattr(cli, "_ingest_prices", lambda _session, full=False: [])
+    monkeypatch.setattr(cli, "ingest_eight_ks_for_symbol", lambda *_args, **_kwargs: 0)
+    monkeypatch.setattr(cli.settings, "finnhub_api_key", "k")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.params["symbol"] == "BAD":
+            return httpx.Response(500)
+        return httpx.Response(200, json={"earningsCalendar": [{"symbol": "AAPL", "date": "2099-01-02"}]})
+
+    real_client = httpx.Client
+    monkeypatch.setattr(
+        cli.httpx, "Client", lambda **_kwargs: real_client(transport=httpx.MockTransport(handler))
+    )
+    fast = RateLimiter(calls=1_000_000, period=1.0)
+    monkeypatch.setattr(cli, "FinnhubClient", lambda key, client: FinnhubClient(key, client, limiter=fast))
+    news: list[str] = []
+
+    def ingest_news(_session: Session, _finnhub: object, ticker: Ticker, _start: date, _end: date) -> int:
+        news.append(ticker.symbol)
+        return 0
+
+    monkeypatch.setattr(cli, "ingest_company_news", ingest_news)
+    result = runner.invoke(app, ["ingest", "all"])
+    assert result.exit_code == 1
+    assert "earnings 1/2 AAPL +1" in result.stdout
+    assert "earnings 2/2 BAD FAILED: HTTPStatusError:" in result.stderr
+    assert sorted(set(news)) == ["AAPL", "BAD"]
+    assert "earnings: 1 failed: BAD" in result.stderr
+    stored = {(row.ticker_id, row.event_date) for row in session.exec(select(EarningsEvent)).all()}
+    assert stored == {(aapl.id, date(2099, 1, 2)), (bad.id, date(2099, 1, 5))}

@@ -21,7 +21,7 @@ from signalbench.ingest.cdr import (
     yfinance_sector,
 )
 from signalbench.ingest.earnings import (
-    ingest_finnhub_calendar,
+    ingest_finnhub_calendar_for_ticker,
     sync_sec_earnings_events,
 )
 from signalbench.ingest.edgar import backfill_filing_text, ingest_eight_ks_for_symbol
@@ -105,7 +105,8 @@ def filings(
 @ingest_app.command()
 def earnings() -> None:
     with get_session() as session:
-        _ingest_earnings(session)
+        failed = _ingest_earnings(session)
+    _exit_on_failures({"earnings": failed})
 
 
 @ingest_app.command()
@@ -124,7 +125,7 @@ def ingest_all() -> None:
     with get_session() as session, httpx.Client(timeout=30.0) as client:
         failures["prices"] = _ingest_prices(session)
         failures["filings"] = _ingest_filings(session, client, backfill_text=False)
-        _ingest_earnings(session)
+        failures["earnings"] = _ingest_earnings(session)
         if settings.finnhub_api_key is None:
             typer.echo("FINNHUB_API_KEY is not set; skipping news", err=True)
         else:
@@ -209,16 +210,20 @@ def _ingest_filings(session: Session, client: httpx.Client, backfill_text: bool)
     return _for_each_ticker(session, "filings", tickers, work)
 
 
-def _ingest_earnings(session: Session) -> None:
+def _ingest_earnings(session: Session) -> list[str]:
     typer.echo(f"earnings from SEC 2.02: +{sync_sec_earnings_events(session)}")
     if settings.finnhub_api_key is None:
         typer.echo("FINNHUB_API_KEY is not set; skipping the upcoming earnings calendar", err=True)
-        return
+        return []
+    today = datetime.now(UTC).date()
     with httpx.Client(timeout=30.0) as client:
         finnhub = FinnhubClient(settings.finnhub_api_key, client)
+
+        def work(ticker: Ticker) -> str:
+            return f"+{ingest_finnhub_calendar_for_ticker(session, finnhub, ticker, today)}"
+
         tickers = _universe_tickers(session, {TickerKind.us_stock})
-        created = ingest_finnhub_calendar(session, finnhub, tickers, datetime.now(UTC).date())
-    typer.echo(f"earnings from Finnhub calendar: {created} upcoming")
+        return _for_each_ticker(session, "earnings", tickers, work)
 
 
 def _ingest_news(session: Session, finnhub: FinnhubClient) -> list[str]:

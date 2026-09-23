@@ -1,6 +1,7 @@
 from datetime import UTC, date, datetime
 
 import httpx
+import pytest
 from sqlmodel import Session, select
 
 from signalbench.db.models import (
@@ -15,7 +16,7 @@ from signalbench.ingest.earnings import (
     SEC_EARNINGS_SOURCE,
     cluster_earliest,
     earnings_dates,
-    ingest_finnhub_calendar,
+    ingest_finnhub_calendar_for_ticker,
     sync_sec_earnings_events,
 )
 from signalbench.ingest.finnhub import FinnhubClient
@@ -93,38 +94,31 @@ def test_finnhub_calendar_replaces_its_future_window(session: Session) -> None:
         ]
     }
     finnhub = _calendar(responses)
-    assert ingest_finnhub_calendar(session, finnhub, [nvda], TODAY) == 1
-    assert ingest_finnhub_calendar(session, finnhub, [nvda], TODAY) == 1
+    assert ingest_finnhub_calendar_for_ticker(session, finnhub, nvda, TODAY) == 1
+    assert ingest_finnhub_calendar_for_ticker(session, finnhub, nvda, TODAY) == 1
     assert _events(session, FINNHUB_EARNINGS_SOURCE) == [("NVDA", date(2026, 10, 3))]
 
 
-def test_finnhub_calendar_queries_each_ticker_and_passes_the_window(session: Session) -> None:
+def test_finnhub_calendar_queries_the_ticker_over_the_window(session: Session) -> None:
     mu = _ticker(session, "MU")
-    cost = _ticker(session, "COST")
     seen: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request)
-        symbol = request.url.params["symbol"]
-        day = {"MU": "2026-09-30", "COST": "2026-09-24"}[symbol]
-        return _rows((symbol, day))
+        return _rows(("MU", "2026-09-30"))
 
     finnhub = FinnhubClient("k", httpx.Client(transport=httpx.MockTransport(handler)), limiter=FAST)
-    assert ingest_finnhub_calendar(session, finnhub, [mu, cost], TODAY) == 2
+    assert ingest_finnhub_calendar_for_ticker(session, finnhub, mu, TODAY) == 1
     assert [(r.url.params["symbol"], r.url.params["from"], r.url.params["to"]) for r in seen] == [
         ("MU", "2026-09-22", "2026-10-22"),
-        ("COST", "2026-09-22", "2026-10-22"),
     ]
-    assert _events(session, FINNHUB_EARNINGS_SOURCE) == [
-        ("COST", date(2026, 9, 24)),
-        ("MU", date(2026, 9, 30)),
-    ]
+    assert _events(session, FINNHUB_EARNINGS_SOURCE) == [("MU", date(2026, 9, 30))]
 
 
 def test_finnhub_calendar_attributes_rows_to_the_queried_ticker(session: Session) -> None:
     goog = _ticker(session, "GOOG")
     finnhub = _calendar({"GOOG": [_rows(("GOOGL", "2026-10-27"))]})
-    assert ingest_finnhub_calendar(session, finnhub, [goog], TODAY) == 1
+    assert ingest_finnhub_calendar_for_ticker(session, finnhub, goog, TODAY) == 1
     assert _events(session, FINNHUB_EARNINGS_SOURCE) == [("GOOG", date(2026, 10, 27))]
 
 
@@ -132,26 +126,44 @@ def test_finnhub_calendar_queries_share_classes_with_a_dot(session: Session) -> 
     brk = _ticker(session, "BRK-B")
     queried: list[str] = []
     finnhub = _calendar({"BRK.B": [_rows(("BRK.A", "2026-11-01"))]}, queried)
-    assert ingest_finnhub_calendar(session, finnhub, [brk], TODAY) == 1
+    assert ingest_finnhub_calendar_for_ticker(session, finnhub, brk, TODAY) == 1
     assert queried == ["BRK.B"]
     assert _events(session, FINNHUB_EARNINGS_SOURCE) == [("BRK-B", date(2026, 11, 1))]
 
 
-def test_finnhub_calendar_error_keeps_that_tickers_events(session: Session) -> None:
+def _stored_events(session: Session, *tickers: Ticker) -> None:
+    for ticker in tickers:
+        session.add(
+            EarningsEvent(ticker_id=ticker.id, event_date=date(2026, 10, 1), source=FINNHUB_EARNINGS_SOURCE)
+        )
+    session.commit()
+
+
+def test_finnhub_calendar_http_error_keeps_that_tickers_rows_and_others_proceed(session: Session) -> None:
     nvda = _ticker(session, "NVDA")
     mu = _ticker(session, "MU")
-    finnhub = _calendar(
-        {
-            "NVDA": [_rows(("NVDA", "2026-10-01")), _rows(("NVDA", "2026-10-03"))],
-            "MU": [_rows(("MU", "2026-09-30")), httpx.Response(200, json={"error": "limit"})],
-        }
-    )
-    ingest_finnhub_calendar(session, finnhub, [nvda, mu], TODAY)
-    assert ingest_finnhub_calendar(session, finnhub, [nvda, mu], TODAY) == 1
+    _stored_events(session, nvda, mu)
+    finnhub = _calendar({"NVDA": [httpx.Response(500)], "MU": [_rows(("MU", "2026-09-30"))]})
+
+    with pytest.raises(httpx.HTTPStatusError):
+        ingest_finnhub_calendar_for_ticker(session, finnhub, nvda, TODAY)
+    session.rollback()
+    assert ingest_finnhub_calendar_for_ticker(session, finnhub, mu, TODAY) == 1
     assert _events(session, FINNHUB_EARNINGS_SOURCE) == [
         ("MU", date(2026, 9, 30)),
-        ("NVDA", date(2026, 10, 3)),
+        ("NVDA", date(2026, 10, 1)),
     ]
+
+
+def test_finnhub_calendar_without_an_earnings_list_fails_and_keeps_rows(session: Session) -> None:
+    nvda = _ticker(session, "NVDA")
+    _stored_events(session, nvda)
+    finnhub = _calendar({"NVDA": [httpx.Response(200, json={"error": "limit"})]})
+
+    with pytest.raises(TypeError, match="earningsCalendar"):
+        ingest_finnhub_calendar_for_ticker(session, finnhub, nvda, TODAY)
+    session.rollback()
+    assert _events(session, FINNHUB_EARNINGS_SOURCE) == [("NVDA", date(2026, 10, 1))]
 
 
 def test_cluster_earliest() -> None:
