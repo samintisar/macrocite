@@ -216,7 +216,8 @@ def _ingest_earnings(session: Session) -> None:
         return
     with httpx.Client(timeout=30.0) as client:
         finnhub = FinnhubClient(settings.finnhub_api_key, client)
-        created = ingest_finnhub_calendar(session, finnhub, datetime.now(UTC).date())
+        tickers = _universe_tickers(session, {TickerKind.us_stock})
+        created = ingest_finnhub_calendar(session, finnhub, tickers, datetime.now(UTC).date())
     typer.echo(f"earnings from Finnhub calendar: {created} upcoming")
 
 

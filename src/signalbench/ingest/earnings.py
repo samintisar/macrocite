@@ -1,6 +1,6 @@
+import logging
 import uuid
 from datetime import date, timedelta
-from typing import Any, cast
 from zoneinfo import ZoneInfo
 
 from sqlmodel import Session, col, select
@@ -10,9 +10,10 @@ from signalbench.db.models import (
     EarningsEvent,
     RawDocument,
     Ticker,
-    TickerKind,
 )
-from signalbench.ingest.finnhub import FinnhubClient
+from signalbench.ingest.finnhub import FinnhubClient, finnhub_symbol
+
+logger = logging.getLogger(__name__)
 
 NEW_YORK = ZoneInfo("America/New_York")
 SEC_EARNINGS_SOURCE = "sec_2.02"
@@ -58,41 +59,48 @@ def sync_sec_earnings_events(session: Session) -> int:
     return created
 
 
-def ingest_finnhub_calendar(session: Session, finnhub: FinnhubClient, today: date) -> int:
-    """Replace Finnhub's upcoming events for the next 30 days with the current calendar."""
-    end = today + timedelta(days=CALENDAR_DAYS_AHEAD)
-    payload = cast(
-        dict[str, Any],
-        finnhub.get("/calendar/earnings", {"from": today.isoformat(), "to": end.isoformat()}),
-    )
-    for stale in session.exec(
-        select(EarningsEvent).where(
-            EarningsEvent.source == FINNHUB_EARNINGS_SOURCE,
-            col(EarningsEvent.event_date) >= today,
-        )
-    ).all():
-        session.delete(stale)
-    session.flush()
+def ingest_finnhub_calendar(
+    session: Session, finnhub: FinnhubClient, tickers: list[Ticker], today: date
+) -> int:
+    """Replace each ticker's upcoming Finnhub events with its next 30 days of calendar.
 
-    ticker_ids = {
-        ticker.symbol: ticker.id
-        for ticker in session.exec(select(Ticker).where(Ticker.kind == TickerKind.us_stock)).all()
-    }
-    seen: set[tuple[uuid.UUID, date]] = set()
+    The unfiltered calendar is truncated, so each ticker is queried on its own. Finnhub may
+    answer with another share class (GOOG gives GOOGL rows), so every row is attributed to
+    the queried ticker.
+    """
+    end = today + timedelta(days=CALENDAR_DAYS_AHEAD)
     created = 0
-    for row in payload.get("earningsCalendar", []):
-        ticker_id = ticker_ids.get(str(row.get("symbol", "")))
-        if ticker_id is None or not row.get("date"):
-            continue
-        event_date = date.fromisoformat(str(row["date"]))
-        if (ticker_id, event_date) in seen:
-            continue
-        seen.add((ticker_id, event_date))
-        session.add(
-            EarningsEvent(ticker_id=ticker_id, event_date=event_date, source=FINNHUB_EARNINGS_SOURCE)
+    for ticker in tickers:
+        payload = finnhub.get(
+            "/calendar/earnings",
+            {
+                "from": today.isoformat(),
+                "to": end.isoformat(),
+                "symbol": finnhub_symbol(ticker.symbol),
+            },
         )
-        created += 1
-    session.commit()
+        rows = payload.get("earningsCalendar") if isinstance(payload, dict) else None
+        if not isinstance(rows, list):
+            logger.warning("No earnings calendar for %s: %s", ticker.symbol, payload)
+            continue
+        event_dates = {date.fromisoformat(str(row["date"])) for row in rows if row.get("date")}
+        for stale in session.exec(
+            select(EarningsEvent).where(
+                EarningsEvent.ticker_id == ticker.id,
+                EarningsEvent.source == FINNHUB_EARNINGS_SOURCE,
+                col(EarningsEvent.event_date) >= today,
+            )
+        ).all():
+            session.delete(stale)
+        session.flush()
+        for event_date in sorted(event_dates):
+            session.add(
+                EarningsEvent(
+                    ticker_id=ticker.id, event_date=event_date, source=FINNHUB_EARNINGS_SOURCE
+                )
+            )
+        session.commit()
+        created += len(event_dates)
     return created
 
 

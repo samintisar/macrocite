@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from signalbench.ingest.finnhub import FinnhubClient
+from signalbench.ingest.finnhub import FinnhubClient, finnhub_symbol
 from signalbench.ingest.ratelimit import RateLimiter
 
 FAST = RateLimiter(calls=1_000_000, period=1.0)
@@ -52,3 +52,8 @@ def test_gives_up_after_retries() -> None:
 
     with pytest.raises(httpx.HTTPStatusError, match="429"):
         _finnhub(handler).get("/x", {})
+
+
+def test_finnhub_symbol_uses_dots_for_share_classes() -> None:
+    assert finnhub_symbol("BRK-B") == "BRK.B"
+    assert finnhub_symbol("GOOG") == "GOOG"

@@ -85,3 +85,17 @@ def test_news_windows_backfill_a_year_in_contiguous_chunks() -> None:
 
 def test_news_windows_overlap_two_days_after_last_article() -> None:
     assert news_windows(date(2026, 9, 20), TODAY) == [(date(2026, 9, 18), TODAY)]
+
+
+def test_share_class_symbol_is_queried_with_a_dot_and_linked_to_our_ticker(session: Session) -> None:
+    brk = _ticker(session, "BRK-B")
+    queried: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        queried.append(request.url.params["symbol"])
+        return httpx.Response(200, json=ARTICLES[:1])
+
+    finnhub = FinnhubClient("k", httpx.Client(transport=httpx.MockTransport(handler)), limiter=FAST)
+    assert ingest_company_news(session, finnhub, brk, TODAY, TODAY) == 1
+    assert queried == ["BRK.B"]
+    assert {link.ticker_id for link in session.exec(select(DocumentTicker)).all()} == {brk.id}

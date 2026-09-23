@@ -6,7 +6,7 @@ from sqlalchemy import func
 from sqlmodel import Session, col, select
 
 from signalbench.db.models import DocType, DocumentTicker, RawDocument, Ticker
-from signalbench.ingest.finnhub import FinnhubClient
+from signalbench.ingest.finnhub import FinnhubClient, finnhub_symbol
 
 NEWS_SOURCE = "finnhub"
 NEWS_BACKFILL_DAYS = 365
@@ -56,7 +56,11 @@ def ingest_company_news(
         list[dict[str, Any]],
         finnhub.get(
             "/company-news",
-            {"symbol": ticker.symbol, "from": start.isoformat(), "to": end.isoformat()},
+            {
+                "symbol": finnhub_symbol(ticker.symbol),
+                "from": start.isoformat(),
+                "to": end.isoformat(),
+            },
         ),
     )
     external_ids = [str(article["id"]) for article in articles]

@@ -67,21 +67,91 @@ def test_sec_events_use_new_york_date_of_item_202_filings(session: Session) -> N
     ]
 
 
+def _calendar(responses: dict[str, list[httpx.Response]], queried: list[str] | None = None) -> FinnhubClient:
+    def handler(request: httpx.Request) -> httpx.Response:
+        symbol = request.url.params["symbol"]
+        if queried is not None:
+            queried.append(symbol)
+        return responses[symbol].pop(0)
+
+    return FinnhubClient("k", httpx.Client(transport=httpx.MockTransport(handler)), limiter=FAST)
+
+
+def _rows(*rows: tuple[str, str]) -> httpx.Response:
+    return httpx.Response(200, json={"earningsCalendar": [{"symbol": s, "date": d} for s, d in rows]})
+
+
+TODAY = date(2026, 9, 22)
+
+
 def test_finnhub_calendar_replaces_its_future_window(session: Session) -> None:
-    _ticker(session, "NVDA")
-    payloads = [
-        {"earningsCalendar": [{"symbol": "NVDA", "date": "2026-10-01"}, {"symbol": "ZZZZ", "date": "2026-10-02"}]},
-        {"earningsCalendar": [{"symbol": "NVDA", "date": "2026-10-03"}]},
-    ]
+    nvda = _ticker(session, "NVDA")
+    responses = {
+        "NVDA": [
+            _rows(("NVDA", "2026-10-01"), ("NVDA", "2026-10-01")),
+            _rows(("NVDA", "2026-10-03")),
+        ]
+    }
+    finnhub = _calendar(responses)
+    assert ingest_finnhub_calendar(session, finnhub, [nvda], TODAY) == 1
+    assert ingest_finnhub_calendar(session, finnhub, [nvda], TODAY) == 1
+    assert _events(session, FINNHUB_EARNINGS_SOURCE) == [("NVDA", date(2026, 10, 3))]
+
+
+def test_finnhub_calendar_queries_each_ticker_and_passes_the_window(session: Session) -> None:
+    mu = _ticker(session, "MU")
+    cost = _ticker(session, "COST")
+    seen: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=payloads.pop(0))
+        seen.append(request)
+        symbol = request.url.params["symbol"]
+        day = {"MU": "2026-09-30", "COST": "2026-09-24"}[symbol]
+        return _rows((symbol, day))
 
     finnhub = FinnhubClient("k", httpx.Client(transport=httpx.MockTransport(handler)), limiter=FAST)
-    today = date(2026, 9, 22)
-    assert ingest_finnhub_calendar(session, finnhub, today) == 1
-    assert ingest_finnhub_calendar(session, finnhub, today) == 1
-    assert _events(session, FINNHUB_EARNINGS_SOURCE) == [("NVDA", date(2026, 10, 3))]
+    assert ingest_finnhub_calendar(session, finnhub, [mu, cost], TODAY) == 2
+    assert [(r.url.params["symbol"], r.url.params["from"], r.url.params["to"]) for r in seen] == [
+        ("MU", "2026-09-22", "2026-10-22"),
+        ("COST", "2026-09-22", "2026-10-22"),
+    ]
+    assert _events(session, FINNHUB_EARNINGS_SOURCE) == [
+        ("COST", date(2026, 9, 24)),
+        ("MU", date(2026, 9, 30)),
+    ]
+
+
+def test_finnhub_calendar_attributes_rows_to_the_queried_ticker(session: Session) -> None:
+    goog = _ticker(session, "GOOG")
+    finnhub = _calendar({"GOOG": [_rows(("GOOGL", "2026-10-27"))]})
+    assert ingest_finnhub_calendar(session, finnhub, [goog], TODAY) == 1
+    assert _events(session, FINNHUB_EARNINGS_SOURCE) == [("GOOG", date(2026, 10, 27))]
+
+
+def test_finnhub_calendar_queries_share_classes_with_a_dot(session: Session) -> None:
+    brk = _ticker(session, "BRK-B")
+    queried: list[str] = []
+    finnhub = _calendar({"BRK.B": [_rows(("BRK.A", "2026-11-01"))]}, queried)
+    assert ingest_finnhub_calendar(session, finnhub, [brk], TODAY) == 1
+    assert queried == ["BRK.B"]
+    assert _events(session, FINNHUB_EARNINGS_SOURCE) == [("BRK-B", date(2026, 11, 1))]
+
+
+def test_finnhub_calendar_error_keeps_that_tickers_events(session: Session) -> None:
+    nvda = _ticker(session, "NVDA")
+    mu = _ticker(session, "MU")
+    finnhub = _calendar(
+        {
+            "NVDA": [_rows(("NVDA", "2026-10-01")), _rows(("NVDA", "2026-10-03"))],
+            "MU": [_rows(("MU", "2026-09-30")), httpx.Response(200, json={"error": "limit"})],
+        }
+    )
+    ingest_finnhub_calendar(session, finnhub, [nvda, mu], TODAY)
+    assert ingest_finnhub_calendar(session, finnhub, [nvda, mu], TODAY) == 1
+    assert _events(session, FINNHUB_EARNINGS_SOURCE) == [
+        ("MU", date(2026, 9, 30)),
+        ("NVDA", date(2026, 10, 3)),
+    ]
 
 
 def test_cluster_earliest() -> None:

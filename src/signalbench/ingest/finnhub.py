@@ -11,6 +11,11 @@ FINNHUB_BASE_URL = "https://finnhub.io/api/v1"
 FINNHUB_CALLS_PER_MINUTE = 50
 
 
+def finnhub_symbol(symbol: str) -> str:
+    """Finnhub writes share classes with a dot: BRK-B is BRK.B."""
+    return symbol.replace("-", ".")
+
+
 class FinnhubClient:
     def __init__(
         self,
