@@ -41,6 +41,7 @@ testpaths = ["tests"]
 [tool.ruff]
 target-version = "py311"
 src = ["src", "tests"]
+extend-exclude = [".agents"]
 
 [tool.mypy]
 python_version = "3.11"
