@@ -1,7 +1,7 @@
 """Database reads for spec 03: readings keyed by legal close, and calibration samples."""
 
 from collections import Counter
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from datetime import date
 
 from sqlalchemy import func
@@ -52,6 +52,7 @@ def load_document_readings(
                 p_routine=reading.p_routine,
                 event_type=reading.event_type,
                 document_id=str(reading.document_id),
+                model_resolved=reading.model_resolved,
             )
         )
     for readings in out.values():
@@ -69,6 +70,13 @@ def reading_builds(
         )
     ).all()
     return dict(sorted(Counter(builds).items()))
+
+
+def resolved_builds(documents: Mapping[str, Sequence[DocumentReading]]) -> dict[str, int]:
+    """How many readings actually loaded (e.g. by `load_document_readings`) each resolved model
+    build produced, so it sums to the readings count a run or filter decision actually used."""
+    counts = Counter(reading.model_resolved for rows in documents.values() for reading in rows)
+    return dict(sorted(counts.items()))
 
 
 def _closes_by_date(session: Session, symbol: str) -> dict[date, float]:

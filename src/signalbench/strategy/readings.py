@@ -52,6 +52,7 @@ class DocumentReading:
     p_routine: float
     event_type: str
     document_id: str
+    model_resolved: str = ""  # which build produced it; no effect on data_fingerprint
 
 
 def is_positive(reading: DocumentReading) -> bool:

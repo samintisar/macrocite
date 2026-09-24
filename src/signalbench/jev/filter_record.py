@@ -161,6 +161,7 @@ class FilterSetting:
     theta_block: float | None
     model_requested: str
     question_set: str
+    strategy_config_sha256: str
 
 
 def load_filter_setting(path: Path) -> FilterSetting:
@@ -186,11 +187,15 @@ def load_filter_setting(path: Path) -> FilterSetting:
     model, questions = data.get("model_requested"), data.get("question_set")
     if not isinstance(model, str) or not isinstance(questions, str):
         raise FilterFileError(f"{path.name}: model_requested and question_set must be strings")
+    sha = data.get("strategy_config_sha256")
+    if not isinstance(sha, str) or len(sha) != 64:
+        raise FilterFileError(f"{path.name}: strategy_config_sha256 must be a sha256 hex string")
     return FilterSetting(
         mode=cast(FilterMode, mode),
         theta_block=None if theta is None else float(theta),
         model_requested=model,
         question_set=questions,
+        strategy_config_sha256=sha,
     )
 
 

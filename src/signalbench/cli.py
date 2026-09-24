@@ -22,6 +22,7 @@ from signalbench.backtest.runner import (
     JevMode,
     RunSetup,
     UnsupportedRunError,
+    last_complete_session,
     run_backtest,
     setups_for_run,
 )
@@ -76,6 +77,7 @@ from signalbench.jev.store import (
     calibration_samples,
     load_document_readings,
     reading_builds,
+    resolved_builds,
 )
 from signalbench.market.calendar import HISTORY_START, NyseSessions
 from signalbench.market.legal_close import LegalCloses
@@ -390,7 +392,7 @@ def backtest_run(
         raise typer.Exit(1) from None
     jev_inputs: JevInputs | None = None
     if jev_mode == "filter":
-        jev_inputs = _jev_filter_inputs()
+        jev_inputs = _jev_filter_inputs(strategy.version, sha)
     elif run_setup == "sentiment":
         jev_inputs = JevInputs(theta_block=None)
     try:
@@ -421,8 +423,9 @@ def backtest_run(
     typer.echo(f"report: {path}")
 
 
-def _jev_filter_inputs() -> JevInputs:
-    """The committed filter decision; --jev filter runs only when it is ON (spec 03)."""
+def _jev_filter_inputs(version: str, config_sha256: str) -> JevInputs:
+    """The committed filter decision; --jev filter runs only when it is ON (spec 03), and only
+    against the v1 config it was fitted on."""
     if not JEV_FILTER_PATH.exists():
         typer.echo(
             f"{JEV_FILTER_PATH.name} not found. Run `signalbench jev fit-filter --write` and "
@@ -446,6 +449,15 @@ def _jev_filter_inputs() -> JevInputs:
         typer.echo(
             "The Jev filter is information-only (data/jev_filter_v1.yaml), so --jev filter runs "
             "are refused (spec 03).",
+            err=True,
+        )
+        raise typer.Exit(1)
+    if version != "v1" or config_sha256 != setting.strategy_config_sha256:
+        typer.echo(
+            f"{JEV_FILTER_PATH.name} was fitted on a different data/strategy_v1.yaml "
+            f"(config_sha256 {setting.strategy_config_sha256}) than the running config "
+            f"(version {version!r}, config_sha256 {config_sha256}). Refit the filter against "
+            "the current strategy_v1.yaml, or run against the config it was fitted on (spec 03).",
             err=True,
         )
         raise typer.Exit(1)
@@ -513,6 +525,10 @@ def _openrouter_key() -> str:
 
 def _universe_symbols() -> list[str]:
     return [entry.us_symbol for entry in load_universe(UNIVERSE_PATH)]
+
+
+def _now() -> datetime:
+    return datetime.now(NEW_YORK)
 
 
 @jev_app.command("test")
@@ -611,7 +627,7 @@ def jev_fit_filter(
         documents = load_document_readings(
             session, symbols, LegalCloses(calendar.session_closes(HISTORY_START, last))
         )
-        builds = reading_builds(session)
+        builds = resolved_builds(documents)
     readings = sum(len(rows) for rows in documents.values())
     if readings == 0:
         typer.echo("No Jev readings. Run `signalbench jev backfill` first (spec 03).", err=True)
@@ -668,14 +684,16 @@ def jev_fit_filter(
 def jev_calibration() -> None:
     """Write reports/jev/<date>-calibration.md (information only; nothing is adjusted)."""
     calendar = NyseSessions()
-    today = datetime.now(NEW_YORK).date()
+    now = _now()
+    today = now.date()
+    last = last_complete_session(calendar, now)
     with get_session() as session:
         samples, unlabeled = calibration_samples(
             session,
             _universe_symbols(),
             BENCHMARK_SYMBOL,
-            LegalCloses(calendar.session_closes(HISTORY_START, today)),
-            calendar.sessions_between(HISTORY_START, today),
+            LegalCloses(calendar.session_closes(HISTORY_START, last)),
+            calendar.sessions_between(HISTORY_START, last),
         )
         builds = reading_builds(session)
     if not samples and not unlabeled:

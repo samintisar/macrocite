@@ -350,6 +350,25 @@ def test_a_sentiment_run_without_readings_is_refused(
     assert sentiment_seeded.exec(select(BacktestRun)).all() == []
 
 
+def test_a_sentiment_run_is_refused_by_the_version_unchanged_guard(
+    sentiment_seeded: Session, tmp_path: Path
+) -> None:
+    """`check_version_unchanged` must run before the Sentiment date override (which replaces
+    `config.backtest` with 2016-onward params): a stored run of this version under a different
+    config_sha256 refuses the run, even for `--setup sentiment`."""
+    sentiment_seeded.add(
+        BacktestRun(
+            strategy_version=load_test_config().version, config_sha256="e" * 64, git_sha="abc123",
+            setup="pullback", jev_mode="off", start_date=date(2012, 1, 3), end_date=date(2026, 9, 23),
+            data_fingerprint="d" * 64, metrics={}, pass_bar={}, passed=False,
+            trade_log={"trades": [], "events": []},
+        )
+    )
+    sentiment_seeded.commit()
+    with pytest.raises(RunRefusedError, match="already has runs with config_sha256"):
+        _jev_run(sentiment_seeded, tmp_path, "sentiment", "off", None)
+
+
 def test_a_filtered_run_blocks_a_negative_reading(seeded: Session, tmp_path: Path) -> None:
     _reading(seeded, "AAA", _morning(DAYS[DIP - 2]), p_negative=0.9, p_positive=0.02)
     run, path = _jev_run(seeded, tmp_path, "pullback", "filter", 0.7)
@@ -360,8 +379,24 @@ def test_a_filtered_run_blocks_a_negative_reading(seeded: Session, tmp_path: Pat
     ]
     assert blocked[0]["date"] == DAYS[DIP].isoformat()
     assert run.metrics["jev"]["theta_block"] == 0.7
+    assert run.metrics["jev"]["information_only"] is True
     assert path.name == "2026-09-24-pullback-filter.md"
     assert "cannot change the v1 result" in path.read_text(encoding="utf-8")
+
+
+def test_filtered_run_builds_count_only_readings_it_used(
+    seeded: Session, tmp_path: Path
+) -> None:
+    """`metrics["jev"]["builds"]` must sum to `metrics["jev"]["readings"]`: a stored reading for
+    a ticker outside this run's universe must not inflate the resolved-build count."""
+    _reading(seeded, "AAA", _morning(DAYS[DIP - 2]), p_negative=0.9, p_positive=0.02)
+    seeded.add(Ticker(symbol="CCC", company_name="Ccc", kind=TickerKind.us_stock))
+    seeded.commit()
+    _reading(seeded, "CCC", _morning(DAYS[DIP - 2]), p_negative=0.9, p_positive=0.02)
+    run, _ = _jev_run(seeded, tmp_path, "pullback", "filter", 0.7)
+    jev = run.metrics["jev"]
+    assert jev["readings"] == 1
+    assert sum(jev["builds"].values()) == 1
 
 
 def test_a_filter_run_needs_theta(seeded: Session, tmp_path: Path) -> None:

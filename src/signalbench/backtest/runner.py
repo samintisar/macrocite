@@ -30,7 +30,7 @@ from signalbench.db.models import BacktestRun, Ticker
 from signalbench.ingest.cdr import CdrEntry
 from signalbench.ingest.earnings import sec_earnings_dates
 from signalbench.jev.questions import JEV_RELEASE, MODEL, QUESTION_SET
-from signalbench.jev.store import load_document_readings, reading_builds
+from signalbench.jev.store import load_document_readings, resolved_builds
 from signalbench.market.bars import AdjustedBar, adjusted_bars
 from signalbench.market.calendar import HISTORY_START, Sessions
 from signalbench.market.legal_close import LegalCloses
@@ -139,6 +139,24 @@ def drop_partial_session(inputs: MarketInputs, now: datetime) -> MarketInputs:
         ],
         benchmark=[bar for bar in inputs.benchmark if bar.date < today],
     )
+
+
+def last_complete_session(calendar: Sessions, now: datetime) -> date:
+    """The most recent NYSE session complete as of `now` (spec 03), on the same cutoff as
+    `drop_partial_session`: a session dated today is not yet complete before 16:15 New York, so
+    it is not used as a legal close or a calibration label input either.
+
+    `now` must be timezone-aware, like `drop_partial_session`.
+    """
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise ValueError(f"now must be timezone-aware, got naive {now.isoformat()}")
+    local = now.astimezone(NEW_YORK)
+    today = local.date()
+    end = today if local.time() >= DAILY_BAR_FINAL else today - timedelta(days=1)
+    sessions = calendar.sessions_between(HISTORY_START, end)
+    if not sessions:
+        raise ValueError(f"No NYSE sessions on or before {end.isoformat()}")
+    return sessions[-1]
 
 
 def _series_end(bars: Sequence[AdjustedBar]) -> str:
@@ -255,7 +273,7 @@ def run_backtest(
             model_requested=jev.model_requested,
             question_set=jev.question_set,
             readings=sum(len(rows) for rows in documents.values()),
-            builds=reading_builds(session, model=jev.model_requested, question_set=jev.question_set),
+            builds=resolved_builds(documents),
             theta_block=jev.theta_block if jev_mode == "filter" else None,
             information_only=jev_mode == "filter" or metrics.trades < config.backtest.min_trades,
             out_of_sample=trade_stats([t for t in result.trades if t.signal_date >= JEV_RELEASE]),

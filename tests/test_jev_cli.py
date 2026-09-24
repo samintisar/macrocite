@@ -275,6 +275,35 @@ def test_calibration_writes_the_report(
     assert "labeled 1 | not labeled 0" in result.stdout
 
 
+def test_calibration_ends_at_the_last_complete_session(
+    session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Spec 03: before 16:15 New York, today's bar may be a stored partial, so calibration must
+    stop its sessions and legal closes at the previous session (the runner's partial-session
+    rule). A reading whose label needs today's bar is counted as not labeled."""
+    aaa = Ticker(symbol="AAA", company_name="Aaa Corp", kind=TickerKind.us_stock)
+    qqq = Ticker(symbol="QQQ", company_name="QQQ", kind=TickerKind.benchmark)
+    session.add_all([aaa, qqq])
+    session.commit()
+    days = WeekdaySessions().sessions_between(date(2024, 5, 27), date(2024, 6, 14))
+    for day in days:
+        _price(session, aaa, day, 90.0 if day > date(2024, 5, 31) else 100.0)
+        _price(session, qqq, day, 100.0)
+    session.commit()
+    # legal close 2024-06-07 + 5 sessions = 2024-06-14, the last (today) day in `days`.
+    _negative_reading(session, aaa, date(2024, 6, 7))
+    monkeypatch.setattr(cli, "get_session", lambda: session)
+    monkeypatch.setattr(cli, "load_universe", lambda _path: UNIVERSE)
+    monkeypatch.setattr(cli, "NyseSessions", WeekdaySessions)
+    monkeypatch.setattr(cli, "JEV_REPORTS_DIR", tmp_path)
+    monkeypatch.setattr(cli, "_now", lambda: datetime(2024, 6, 14, 16, 14, tzinfo=NEW_YORK))
+    result = runner.invoke(app, ["jev", "calibration"])
+    assert result.exit_code == 0, result.stderr
+    assert "labeled 0 | not labeled 1" in result.stdout
+    [report] = list(tmp_path.glob("*-calibration.md"))
+    assert "| Labeled | 0 |" in report.read_text(encoding="utf-8")
+
+
 def test_calibration_without_readings_is_refused(
     session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:

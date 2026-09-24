@@ -14,7 +14,7 @@ from signalbench.ingest.cdr import CdrEntry
 from signalbench.ingest.finnhub import FinnhubClient
 from signalbench.ingest.prices import PriceIngestResult
 from signalbench.ingest.ratelimit import RateLimiter
-from signalbench.strategy.config import load_strategy_config
+from signalbench.strategy.config import config_sha256, load_strategy_config
 
 runner = CliRunner()
 
@@ -216,12 +216,17 @@ def _survey_rows(bid: float, ask: float) -> str:
     )
 
 
-def _registered_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
-    """The fixture config at <repo>/data/strategy_test.yaml with REPO_ROOT = tmp_path, and a
+def _registered_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, version: str = "test"
+) -> Path:
+    """The fixture config at <repo>/data/strategy_<version>.yaml with REPO_ROOT = tmp_path, and a
     survey whose 0.2% median spread gives the fixture's cost_per_side of 0.002."""
     (tmp_path / "data").mkdir(exist_ok=True)
-    config = tmp_path / "data" / "strategy_test.yaml"
-    config.write_bytes(FIXTURE_CONFIG.read_bytes())
+    config = tmp_path / "data" / f"strategy_{version}.yaml"
+    body = FIXTURE_CONFIG.read_bytes()
+    if version != "test":
+        body = body.replace(b"version: test", f"version: {version}".encode())
+    config.write_bytes(body)
     survey = tmp_path / "data" / "cdr_spread_survey.yaml"
     survey.write_text(_survey_rows(99.9, 100.1), encoding="utf-8")
     monkeypatch.setattr(cli, "REPO_ROOT", tmp_path)
@@ -470,20 +475,27 @@ def _filter_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, body: str | No
     return path
 
 
+# The v1-version config filter tests run against: same bytes `_registered_config(version="v1")`
+# writes, so this sha256 is the one `backtest run --jev filter` computes from that file.
+V1_CONFIG_SHA256 = config_sha256(
+    FIXTURE_CONFIG.read_bytes().replace(b"version: test", b"version: v1")
+)
 FILTER_ON = (
     "mode: 'on'\ntheta_fit: 0.7\ntheta_block: 0.7\nquestion_set: q1\n"
     "model_requested: typesafe/jev-1.13\n"
+    f"strategy_config_sha256: {V1_CONFIG_SHA256}\n"
 )
 FILTER_INFO = (
     "mode: information_only\ntheta_block: null\nquestion_set: q1\n"
     "model_requested: typesafe/jev-1.13\n"
+    f"strategy_config_sha256: {'a' * 64}\n"
 )
 
 
 def test_backtest_run_filter_uses_the_committed_theta(
     session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    config = _registered_config(monkeypatch, tmp_path)
+    config = _registered_config(monkeypatch, tmp_path, version="v1")
     _filter_file(monkeypatch, tmp_path, FILTER_ON)
     calls = _capture_run(session, monkeypatch, tmp_path)
     result = runner.invoke(
@@ -498,7 +510,7 @@ def test_backtest_run_filter_uses_the_committed_theta(
 def test_backtest_run_filter_pass_stays_information_only(
     session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    config = _registered_config(monkeypatch, tmp_path)
+    config = _registered_config(monkeypatch, tmp_path, version="v1")
     _filter_file(monkeypatch, tmp_path, FILTER_ON)
     _capture_run(session, monkeypatch, tmp_path, passed=True)
     result = runner.invoke(
@@ -536,4 +548,39 @@ def test_backtest_run_filter_refusals(
     )
     assert result.exit_code == 1
     assert message in result.stderr
+    assert calls == {}
+
+
+def test_backtest_run_filter_refuses_a_config_the_filter_was_not_fitted_on(
+    session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The filter file records the sha256 of the strategy_v1.yaml it was fitted on; a run
+    against a different config (even one that also claims version v1) must be refused (spec 03),
+    since applying a theta fitted on other trades would silently change the result."""
+    config = _registered_config(monkeypatch, tmp_path, version="v1")
+    stale = FILTER_ON.replace(V1_CONFIG_SHA256, "f" * 64)
+    _filter_file(monkeypatch, tmp_path, stale)
+    calls = _capture_run(session, monkeypatch, tmp_path)
+    result = runner.invoke(
+        app, ["backtest", "run", "--setup", "breakout", "--jev", "filter", "--config", str(config)]
+    )
+    assert result.exit_code == 1
+    assert "was fitted on a different" in result.stderr
+    assert calls == {}
+
+
+def test_backtest_run_filter_refuses_a_config_version_other_than_v1(
+    session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """jev_filter_v1.yaml is fitted from stored v1 runs only; a --config outside version v1 (even
+    with a matching sha, which can't really happen since the sha is content-derived) is refused."""
+    config = _registered_config(monkeypatch, tmp_path, version="test")
+    body = FILTER_ON.replace(V1_CONFIG_SHA256, config_sha256(config.read_bytes()))
+    _filter_file(monkeypatch, tmp_path, body)
+    calls = _capture_run(session, monkeypatch, tmp_path)
+    result = runner.invoke(
+        app, ["backtest", "run", "--setup", "breakout", "--jev", "filter", "--config", str(config)]
+    )
+    assert result.exit_code == 1
+    assert "was fitted on a different" in result.stderr
     assert calls == {}
