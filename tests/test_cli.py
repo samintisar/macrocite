@@ -9,6 +9,7 @@ from typer.testing import CliRunner
 from signalbench import cli
 from signalbench.cli import app
 from signalbench.db.models import BacktestRun, EarningsEvent, Ticker, TickerKind
+from signalbench.ingest.cdr import CdrEntry
 from signalbench.ingest.finnhub import FinnhubClient
 from signalbench.ingest.prices import PriceIngestResult
 from signalbench.ingest.ratelimit import RateLimiter
@@ -380,3 +381,55 @@ def test_backtest_cost_refuses_an_unfilled_survey(tmp_path: Path) -> None:
     result = runner.invoke(app, ["backtest", "cost", "--survey", str(survey)])
     assert result.exit_code == 1
     assert "has 0 readings with both bid and ask" in result.stderr
+
+
+def _assert_clean_exit(result: object, needle: str) -> None:
+    """Exit 1 through typer.Exit (no uncaught exception), with one error line on stderr."""
+    exception = getattr(result, "exception", None)
+    assert getattr(result, "exit_code", None) == 1
+    assert isinstance(exception, SystemExit), exception
+    stderr = str(getattr(result, "stderr", ""))
+    assert needle in stderr
+    assert "Traceback" not in stderr
+    assert len(stderr.strip().splitlines()) == 1
+
+
+def test_backtest_run_prints_a_config_error_cleanly(
+    session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = _registered_config(monkeypatch, tmp_path)
+    config.write_text(FIXTURE_CONFIG.read_text(encoding="utf-8") + "surprise: 1\n", encoding="utf-8")
+    monkeypatch.setattr(cli, "get_session", lambda: session)
+    result = runner.invoke(app, ["backtest", "run", "--setup", "pullback", "--config", str(config)])
+    _assert_clean_exit(result, "unknown keys ['surprise']")
+
+
+def test_backtest_run_prints_an_unseeded_universe_cleanly(
+    session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = _registered_config(monkeypatch, tmp_path)
+    monkeypatch.setattr(cli, "get_session", lambda: session)
+    monkeypatch.setattr(cli, "git_sha", lambda _repo: "abc123")
+    monkeypatch.setattr(cli, "REPORTS_DIR", tmp_path / "reports")
+    monkeypatch.setattr(cli, "load_universe", lambda _path: [
+        CdrEntry("AAA", "ZAAA", "ZAAA.NE", "Aaa", "Information Technology"),
+    ])
+    result = runner.invoke(app, ["backtest", "run", "--setup", "pullback", "--config", str(config)])
+    _assert_clean_exit(result, "Not seeded: AAA, QQQ")
+
+
+def test_backtest_run_prints_missing_benchmark_prices_cleanly(
+    session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = _registered_config(monkeypatch, tmp_path)
+    _stocks(session, ["AAA"])
+    session.add(Ticker(symbol="QQQ", company_name="QQQ", kind=TickerKind.benchmark))
+    session.commit()
+    monkeypatch.setattr(cli, "get_session", lambda: session)
+    monkeypatch.setattr(cli, "git_sha", lambda _repo: "abc123")
+    monkeypatch.setattr(cli, "REPORTS_DIR", tmp_path / "reports")
+    monkeypatch.setattr(cli, "load_universe", lambda _path: [
+        CdrEntry("AAA", "ZAAA", "ZAAA.NE", "Aaa", "Information Technology"),
+    ])
+    result = runner.invoke(app, ["backtest", "run", "--setup", "pullback", "--config", str(config)])
+    _assert_clean_exit(result, "No QQQ prices")

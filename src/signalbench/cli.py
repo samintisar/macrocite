@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 import typer
+import yaml
 from sqlmodel import Session, col, select
 
 from signalbench.backtest.preregistration import (
@@ -49,7 +50,7 @@ from signalbench.ingest.prices import fetch_yfinance_daily, ingest_daily_prices
 from signalbench.ingest.seed import BENCHMARKS, seed_universe
 from signalbench.ingest.stats import collect_stats
 from signalbench.market.calendar import NyseSessions
-from signalbench.strategy.config import load_strategy_config
+from signalbench.strategy.config import ConfigError, load_strategy_config
 from signalbench.strategy.spread import SpreadSurveyError, load_spread_survey
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -338,7 +339,12 @@ def backtest_run(
             err=True,
         )
         raise typer.Exit(1)
-    strategy, sha = load_strategy_config(config)
+    try:
+        strategy, sha = load_strategy_config(config)
+    except (ConfigError, yaml.YAMLError) as error:
+        message = " ".join(f"{config.name}: {error}".split())  # YAML errors span lines
+        typer.echo(message, err=True)
+        raise typer.Exit(1) from None
     try:
         now = datetime.now(NEW_YORK)
         check_config_path(REPO_ROOT, config, strategy.version)

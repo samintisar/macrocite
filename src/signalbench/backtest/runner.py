@@ -74,7 +74,7 @@ def load_market_inputs(
     tickers = {ticker.symbol: ticker for ticker in rows}
     missing = sorted(set(wanted) - set(tickers))
     if missing:
-        raise ValueError(f"Not seeded: {', '.join(missing)}. Run `signalbench seed` first.")
+        raise RunRefusedError(f"Not seeded: {', '.join(missing)}. Run `signalbench seed` first.")
     symbols = [
         SymbolInput(
             symbol=entry.us_symbol,
@@ -86,7 +86,7 @@ def load_market_inputs(
     ]
     benchmark = adjusted_bars(session, tickers[benchmark_symbol].id, end=end)
     if not benchmark:
-        raise ValueError(f"No {benchmark_symbol} prices. Run `signalbench ingest prices` first.")
+        raise RunRefusedError(f"No {benchmark_symbol} prices. Run `signalbench ingest prices` first.")
     return MarketInputs(symbols=symbols, benchmark=benchmark)
 
 
