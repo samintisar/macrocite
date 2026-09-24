@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import date
 
 from pytest import approx
@@ -147,3 +148,37 @@ def test_r_and_target_use_the_risk_planned_at_the_signal_not_the_fill() -> None:
     assert trade.r == approx((148.5 * (1 - COST) - fill) / planned)  # about +1.90
     assert trade.r == approx(trade.pnl / (trade.units * planned))
     assert 1.8 < trade.r < 2.0
+
+
+def _batch(gap: float) -> SimulationResult:
+    # Three identical signals on 251, each sized at equity / 3 = 33.33 on the close of 146.
+    # AAA and BBB open `gap` higher (the gap limit is widened for this test) and eat the cash,
+    # so CCC, which opens at 146, is trimmed to what is left.
+    config = replace(CONFIG, gap_up_limit=0.6)
+    plain = series(DAYS, pullback_closes(len(DAYS)))
+    gapped = with_bar(plain, ENTRY, open=146.0 * (1 + gap))
+    sectors = {"AAA": "Energy", "BBB": "Utilities", "CCC": "Financials"}
+    market = make_market(
+        {"AAA": gapped, "BBB": gapped, "CCC": plain}, trend_bars(DAYS, 300.0, 0.5), DAYS, config,
+        sectors=sectors,
+    )
+    return simulate(market, NullReadingsView(), config, DAYS[240], DAYS[260])
+
+
+def test_an_entry_trimmed_to_dust_at_the_open_is_a_no_cash_skip() -> None:
+    # Each gapped fill costs 33.33 x 1.485 x 1.002 = 49.60, so 100 - 2 x 49.60 = 0.80 is left:
+    # CCC would be worth 0.8% of the 100 equity at that open, below MIN_POSITION_FRACTION.
+    result = _batch(0.485)
+    entries = _events(result, "entry")
+    assert [e["symbol"] for e in entries] == ["AAA", "BBB"]
+    assert {"date": DAYS[ENTRY].isoformat(), "event": "skip", "symbol": "CCC",
+            "setup": "pullback", "reason": "no_cash"} in result.events
+    assert result.equity_curve[ENTRY - 240].cash == approx(100.0 - 2 * (100 / 3) * 1.485 * 1.002)
+
+
+def test_a_trimmed_entry_worth_at_least_one_percent_still_fills() -> None:
+    # At a 48% gap each costs 33.33 x 1.48 x 1.002 = 49.43, leaving 1.14 (1.1% of equity).
+    entries = _events(_batch(0.48), "entry")
+    assert [(e["symbol"], e["trimmed"]) for e in entries] == [
+        ("AAA", False), ("BBB", False), ("CCC", True),
+    ]

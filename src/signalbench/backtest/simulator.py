@@ -10,7 +10,8 @@ from datetime import date
 from signalbench.strategy.config import SetupName, StrategyConfig
 from signalbench.strategy.decide import decide
 from signalbench.strategy.decision import EntryOrder, ExitOrder, ExitReason, SkipReason
-from signalbench.strategy.market_view import MarketView
+from signalbench.strategy.entries import MIN_POSITION_FRACTION
+from signalbench.strategy.market_view import AsOfView, MarketView
 from signalbench.strategy.portfolio import PortfolioState, Position
 from signalbench.strategy.readings import ReadingsView
 
@@ -193,18 +194,21 @@ def simulate(
                     _event(day, "exit", position_id=position.id, symbol=position.symbol,
                            reason=order.reason, price=fill, r=trade.r)
                 )
+            open_equity = cash + _held_value_at_open(view, day, positions)
             for entry in orders.entries:
                 snap = view.snapshot(entry.symbol)
                 skip = "no_bar" if snap is None or snap.date != day else None
                 if snap is not None and skip is None:
                     skip = entry_skip(entry, snap.open, cash, config)
+                fill = 0.0 if snap is None else snap.open * (1.0 + config.cost_per_side)
+                units = 0.0 if skip is not None else min(entry.units, cash / fill)  # cash cap
+                if skip is None and units * fill < MIN_POSITION_FRACTION * open_equity:
+                    skip = "no_cash"  # trimmed to dust by earlier fills in this batch
                 if snap is None or skip is not None:
                     events.append(
                         _event(day, "skip", symbol=entry.symbol, setup=entry.setup, reason=skip)
                     )
                     continue
-                fill = snap.open * (1.0 + config.cost_per_side)
-                units = min(entry.units, cash / fill)  # never spend more cash than there is
                 cash -= units * fill
                 position_id = f"P{next_id:05d}"
                 next_id += 1
@@ -310,6 +314,19 @@ def _open_at_end(
             )
         )
     return records
+
+
+def _held_value_at_open(view: AsOfView, day: date, positions: dict[str, Position]) -> float:
+    """Held units marked at today's open (the last close when a symbol has no bar today)."""
+    value = 0.0
+    for position in positions.values():
+        snap = view.snapshot(position.symbol)
+        if snap is None:
+            mark = position.entry_price
+        else:
+            mark = snap.open if snap.date == day else snap.close
+        value += position.units * mark
+    return value
 
 
 def _event(day: date, kind: str, **fields: object) -> Event:
