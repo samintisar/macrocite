@@ -1,14 +1,31 @@
+import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
+from enum import Enum
 from pathlib import Path
 from typing import Annotated
+from zoneinfo import ZoneInfo
 
 import httpx
 import typer
+import yaml
 from sqlmodel import Session, col, select
 
+from signalbench.backtest.preregistration import (
+    check_config_path,
+    check_cost_matches_survey,
+)
+from signalbench.backtest.provenance import committed_unchanged, git_sha
+from signalbench.backtest.report import render_report, result_label
+from signalbench.backtest.runner import (
+    JevMode,
+    RequiresSpec03Error,
+    RunSetup,
+    run_backtest,
+    setups_for_run,
+)
 from signalbench.config import settings
-from signalbench.db.models import Ticker, TickerKind
+from signalbench.db.models import BacktestRun, Ticker, TickerKind
 from signalbench.db.session import get_session
 from signalbench.ingest.cdr import (
     build_entries,
@@ -31,14 +48,37 @@ from signalbench.ingest.news import ingest_company_news, last_news_date, news_wi
 from signalbench.ingest.prices import fetch_yfinance_daily, ingest_daily_prices
 from signalbench.ingest.seed import BENCHMARKS, seed_universe
 from signalbench.ingest.stats import collect_stats
+from signalbench.market.calendar import NyseSessions
+from signalbench.strategy.config import ConfigError, load_strategy_config
+from signalbench.strategy.spread import SpreadSurveyError, load_spread_survey
 
-UNIVERSE_PATH = Path(__file__).resolve().parents[2] / "data" / "cdr_universe.yaml"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+UNIVERSE_PATH = REPO_ROOT / "data" / "cdr_universe.yaml"
+STRATEGY_V1_PATH = REPO_ROOT / "data" / "strategy_v1.yaml"
+SPREAD_SURVEY_PATH = REPO_ROOT / "data" / "cdr_spread_survey.yaml"
+REPORTS_DIR = REPO_ROOT / "reports" / "backtests"
+NEW_YORK = ZoneInfo("America/New_York")
 
 app = typer.Typer(help="SignalBench swing assistant.")
 ingest_app = typer.Typer(help="Load research data into Postgres.")
 universe_app = typer.Typer(help="Manage the checked-in CDR universe.")
 app.add_typer(ingest_app, name="ingest")
 app.add_typer(universe_app, name="universe")
+
+backtest_app = typer.Typer(help="Pre-registered strategy backtests (spec 02).")
+app.add_typer(backtest_app, name="backtest")
+
+
+class SetupChoice(str, Enum):
+    pullback = "pullback"
+    breakout = "breakout"
+    sentiment = "sentiment"
+    combined = "combined"
+
+
+class JevChoice(str, Enum):
+    off = "off"
+    filter = "filter"
 
 
 @universe_app.command("refresh")
@@ -260,3 +300,117 @@ def _universe_tickers(session: Session, kinds: set[TickerKind] | None = None) ->
         (ticker for ticker in rows if kinds is None or ticker.kind in kinds),
         key=lambda ticker: ticker.symbol,
     )
+
+
+@backtest_app.command("run")
+def backtest_run(
+    setup: Annotated[SetupChoice, typer.Option("--setup", help="Which setup to simulate.")],
+    jev: Annotated[JevChoice, typer.Option("--jev", help="Jev filter mode.")] = JevChoice.off,
+    config: Annotated[
+        Path, typer.Option("--config", help="Pre-registered strategy parameters.")
+    ] = STRATEGY_V1_PATH,
+) -> None:
+    run_setup: RunSetup = setup.value
+    jev_mode: JevMode = jev.value
+    try:
+        setups_for_run(run_setup, jev_mode)
+    except RequiresSpec03Error as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(2) from None
+    if not config.exists():
+        typer.echo(
+            f"{config} not found. It is written after the spread survey is approved "
+            "(spec 02 pre-registration).",
+            err=True,
+        )
+        raise typer.Exit(1)
+    if not committed_unchanged(REPO_ROOT, config):
+        typer.echo(
+            f"{config.name} must be committed, unchanged, before a backtest on real data "
+            "(spec 02 pre-registration).",
+            err=True,
+        )
+        raise typer.Exit(1)
+    if not SPREAD_SURVEY_PATH.exists() or not committed_unchanged(REPO_ROOT, SPREAD_SURVEY_PATH):
+        typer.echo(
+            f"{SPREAD_SURVEY_PATH.name} must be committed, unchanged, before a backtest on real "
+            "data: it sets cost_per_side (spec 02 pre-registration).",
+            err=True,
+        )
+        raise typer.Exit(1)
+    try:
+        strategy, sha = load_strategy_config(config)
+    except (ConfigError, yaml.YAMLError) as error:
+        message = " ".join(f"{config.name}: {error}".split())  # YAML errors span lines
+        typer.echo(message, err=True)
+        raise typer.Exit(1) from None
+    try:
+        now = datetime.now(NEW_YORK)
+        check_config_path(REPO_ROOT, config, strategy.version)
+        check_cost_matches_survey(
+            strategy.cost_per_side, load_spread_survey(SPREAD_SURVEY_PATH).cost_per_side
+        )
+        with get_session() as session:
+            run, path = run_backtest(
+                session,
+                setup=run_setup,
+                jev_mode=jev_mode,
+                config=strategy,
+                config_sha256=sha,
+                universe=load_universe(UNIVERSE_PATH),
+                calendar=NyseSessions(),
+                git_sha=git_sha(REPO_ROOT),
+                run_date=now.date(),
+                reports_dir=REPORTS_DIR,
+                now=now,
+            )
+            _print_run(run)
+    except ValueError as error:  # RunRefusedError, SpreadSurveyError, and data/calendar gaps
+        typer.echo(str(error), err=True)
+        raise typer.Exit(1) from None
+    typer.echo(f"report: {path}")
+
+
+def _print_run(run: BacktestRun) -> None:
+    typer.echo(f"run {run.id}: {result_label(run)}")
+    for name, row in run.pass_bar.items():
+        mark = "ok" if row["passed"] else "--"
+        typer.echo(f"  {mark} {name}: {row['value']:.3f} vs {row['threshold']:.3f}")
+
+
+@backtest_app.command("show")
+def backtest_show(
+    run_id: Annotated[str, typer.Argument(help="Run id printed by `backtest run`.")],
+) -> None:
+    try:
+        key = uuid.UUID(run_id)
+    except ValueError:
+        typer.echo(f"Not a run id: {run_id}", err=True)
+        raise typer.Exit(1) from None
+    with get_session() as session:
+        run = session.get(BacktestRun, key)
+        if run is None:
+            typer.echo(f"No backtest run {run_id}", err=True)
+            raise typer.Exit(1)
+        typer.echo(render_report(run), nl=False)
+
+
+@backtest_app.command("cost")
+def backtest_cost(
+    survey: Annotated[
+        Path, typer.Option("--survey", help="The CDR bid/ask survey.")
+    ] = SPREAD_SURVEY_PATH,
+) -> None:
+    try:
+        result = load_spread_survey(survey)
+    except (SpreadSurveyError, FileNotFoundError) as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(1) from None
+    for reading in result.readings:
+        typer.echo(
+            f"{reading.cdr_symbol}: bid {reading.bid} ask {reading.ask} "
+            f"spread {reading.spread_pct:.3%}"
+        )
+    typer.echo(f"complete readings: {len(result.readings)} (incomplete: {result.incomplete})")
+    typer.echo(f"median spread: {result.median_spread:.3%}")
+    typer.echo(f"cost_per_side: {result.cost_per_side}")

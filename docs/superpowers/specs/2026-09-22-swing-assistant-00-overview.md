@@ -62,7 +62,7 @@ Go live with $100 after 05, using only setups that passed.
 - **Legal close** for a document: the first NYSE session close strictly after the document's acceptance or publish time (America/New_York). A document accepted before 16:00 ET on a session day is visible at that day's close. Accepted at or after 16:00, or on a non-session day, it becomes visible at the next session's close.
 - **As-of**: `decide(as_of)` may only see prices with date ≤ `as_of` and documents whose legal close ≤ `as_of`.
 - **ATR**: 14-session Average True Range (Wilder smoothing) on adjusted OHLC.
-- **R**: the per-unit risk, `entry − stop`. A +2R exit gains twice what the stop would lose.
+- **R**: the per-unit risk planned at the signal, `signal close − stop`. A trade's R is its P&L after costs divided by units × R. A +2R exit gains twice what the planned stop would lose.
 - **Equity peak**: the highest end-of-day equity seen so far.
 
 ## Spread survey (required before the first real backtest)
@@ -88,3 +88,6 @@ On 2026-09-22 the median CDR traded value was tiny (ZNVD about C$15k/day, ZMSF a
 
 - 2026-09-22: created.
 - 2026-09-22: CDR findings. The universe is BMO `Z`-prefixed CDRs (~40 US names), and yfinance serves them as `<SYMBOL>.NE`. CDR volume is too thin for a traded-value filter, so a spread survey was added as a spec 02 prerequisite, and CDR liquidity became "priced in the last 5 sessions".
+- 2026-09-24: R is the risk planned at the signal (`signal close − stop`), not `entry fill − stop` (owner decision, spec 02 changelog).
+- 2026-09-24: spread survey done. Yahoo quotes for all 40 CDRs, sampled every 30 minutes from 10:00 to 15:30 ET on 2026-09-24, gave a median spread of 0.106%, so `cost_per_side` is the 0.2% floor (`data/cdr_spread_survey.yaml`). The owner didn't type readings from Wealthsimple. Quotes after the close are much wider (about 1.2%), so orders belong in regular hours.
+- 2026-09-24: spec 02 go/no-go. Pullback FAIL (mean R −0.071, Sharpe −0.19). Breakout FAIL on Sharpe only (mean R +0.311, both halves positive, Sharpe 0.949 vs QQQ 0.996). Live setups: none. Owner's decision: "no-go on both". Per the spec 02 gate, specs 04–05 wait unless spec 03's Sentiment setup passes; spec 03 can also test Breakout with the Jev filter as a pre-registered run.

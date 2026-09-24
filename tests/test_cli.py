@@ -1,4 +1,5 @@
-from datetime import date
+from datetime import date, datetime
+from pathlib import Path
 
 import httpx
 import pytest
@@ -7,10 +8,12 @@ from typer.testing import CliRunner
 
 from signalbench import cli
 from signalbench.cli import app
-from signalbench.db.models import EarningsEvent, Ticker, TickerKind
+from signalbench.db.models import BacktestRun, EarningsEvent, Ticker, TickerKind
+from signalbench.ingest.cdr import CdrEntry
 from signalbench.ingest.finnhub import FinnhubClient
 from signalbench.ingest.prices import PriceIngestResult
 from signalbench.ingest.ratelimit import RateLimiter
+from signalbench.strategy.config import load_strategy_config
 
 runner = CliRunner()
 
@@ -158,3 +161,278 @@ def test_liquidity_failure_is_reported_and_later_steps_still_run(
     assert "liquidity FAILED: RuntimeError:" in result.stderr
     assert filings == ["AAPL"]
     assert "prices: 1 failed: liquidity" in result.stderr
+
+
+FIXTURE_CONFIG = Path(__file__).parent / "fixtures" / "strategy_test.yaml"
+
+
+def test_backtest_help_lists_run_and_show() -> None:
+    result = runner.invoke(app, ["backtest", "--help"])
+    assert result.exit_code == 0
+    for command in ("run", "show"):
+        assert command in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("args", "message"),
+    [
+        (["--setup", "sentiment"], "--setup sentiment requires Jev readings (spec 03)."),
+        (["--setup", "pullback", "--jev", "filter"], "--jev filter requires Jev readings (spec 03)."),
+    ],
+)
+def test_backtest_run_refuses_spec_03_modes(args: list[str], message: str) -> None:
+    result = runner.invoke(app, ["backtest", "run", *args])
+    assert result.exit_code == 2
+    assert message in result.stderr
+
+
+def test_backtest_run_needs_the_config_file(tmp_path: Path) -> None:
+    missing = tmp_path / "strategy_v1.yaml"
+    result = runner.invoke(app, ["backtest", "run", "--setup", "pullback", "--config", str(missing)])
+    assert result.exit_code == 1
+    assert "not found" in result.stderr
+
+
+def test_backtest_run_needs_a_committed_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cli, "committed_unchanged", lambda _repo, _path: False)
+    result = runner.invoke(
+        app, ["backtest", "run", "--setup", "pullback", "--config", str(FIXTURE_CONFIG)]
+    )
+    assert result.exit_code == 1
+    assert "must be committed, unchanged" in result.stderr
+
+
+def _stored_run(session: Session) -> BacktestRun:
+    run = BacktestRun(
+        strategy_version="test", config_sha256="c" * 64, git_sha="abc123", setup="breakout",
+        jev_mode="off", start_date=date(2012, 1, 3), end_date=date(2026, 9, 23),
+        data_fingerprint="d" * 64, metrics={},
+        pass_bar={"trades": {"value": 12.0, "threshold": 30.0, "passed": False}},
+        passed=False, trade_log={"trades": [], "events": []},
+    )
+    session.add(run)
+    session.commit()
+    session.refresh(run)
+    return run
+
+
+def _survey_rows(bid: float, ask: float) -> str:
+    return "readings:\n" + "".join(
+        f"  - {{cdr_symbol: Z{i}, bid: {bid}, ask: {ask}}}\n" for i in range(5)
+    )
+
+
+def _registered_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """The fixture config at <repo>/data/strategy_test.yaml with REPO_ROOT = tmp_path, and a
+    survey whose 0.2% median spread gives the fixture's cost_per_side of 0.002."""
+    (tmp_path / "data").mkdir(exist_ok=True)
+    config = tmp_path / "data" / "strategy_test.yaml"
+    config.write_bytes(FIXTURE_CONFIG.read_bytes())
+    survey = tmp_path / "data" / "cdr_spread_survey.yaml"
+    survey.write_text(_survey_rows(99.9, 100.1), encoding="utf-8")
+    monkeypatch.setattr(cli, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(cli, "SPREAD_SURVEY_PATH", survey)
+    monkeypatch.setattr(cli, "committed_unchanged", lambda _repo, _path: True)
+    return config
+
+
+def test_backtest_run_needs_a_committed_survey(
+    session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = _registered_config(monkeypatch, tmp_path)
+    monkeypatch.setattr(cli, "committed_unchanged", lambda _repo, path: path == config)
+    monkeypatch.setattr(cli, "get_session", lambda: session)
+    result = runner.invoke(app, ["backtest", "run", "--setup", "pullback", "--config", str(config)])
+    assert result.exit_code == 1
+    assert "cdr_spread_survey.yaml must be committed, unchanged" in result.stderr
+
+
+def test_backtest_run_refuses_an_unfilled_survey(
+    session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = _registered_config(monkeypatch, tmp_path)
+    (tmp_path / "data" / "cdr_spread_survey.yaml").write_text(
+        "readings:\n  - {cdr_symbol: ZNVD, bid: , ask: }\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(cli, "get_session", lambda: session)
+    result = runner.invoke(app, ["backtest", "run", "--setup", "pullback", "--config", str(config)])
+    assert result.exit_code == 1
+    assert "readings with both bid and ask" in result.stderr
+
+
+def test_backtest_run_refuses_a_cost_that_differs_from_the_survey(
+    session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = _registered_config(monkeypatch, tmp_path)
+    # A 0.4% median spread gives 0.003; the config says 0.002.
+    (tmp_path / "data" / "cdr_spread_survey.yaml").write_text(
+        _survey_rows(99.8, 100.2), encoding="utf-8"
+    )
+    monkeypatch.setattr(cli, "get_session", lambda: session)
+    result = runner.invoke(app, ["backtest", "run", "--setup", "pullback", "--config", str(config)])
+    assert result.exit_code == 1
+    assert "cost_per_side 0.002" in result.stderr
+    assert "0.003" in result.stderr
+
+
+def test_backtest_run_refuses_a_config_outside_data_strategy_version(
+    session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Committed and unchanged, but not data/strategy_<version>.yaml: refused before any data.
+    survey = tmp_path / "cdr_spread_survey.yaml"
+    survey.write_text(_survey_rows(99.9, 100.1), encoding="utf-8")
+    monkeypatch.setattr(cli, "SPREAD_SURVEY_PATH", survey)
+    monkeypatch.setattr(cli, "get_session", lambda: session)
+    monkeypatch.setattr(cli, "committed_unchanged", lambda _repo, _path: True)
+    result = runner.invoke(
+        app, ["backtest", "run", "--setup", "pullback", "--config", str(FIXTURE_CONFIG)]
+    )
+    assert result.exit_code == 1
+    assert "data/strategy_test.yaml" in result.stderr
+
+
+def test_backtest_run_refuses_a_version_whose_file_name_differs(
+    session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = _registered_config(monkeypatch, tmp_path)
+    renamed = config.with_name("strategy_v1.yaml")  # holds `version: test`
+    config.rename(renamed)
+    monkeypatch.setattr(cli, "get_session", lambda: session)
+    result = runner.invoke(app, ["backtest", "run", "--setup", "pullback", "--config", str(renamed)])
+    assert result.exit_code == 1
+    assert "data/strategy_test.yaml" in result.stderr
+
+
+def test_backtest_run_refuses_a_changed_config_under_a_used_version(
+    session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = _registered_config(monkeypatch, tmp_path)
+    _stored_run(session)  # version "test" with config_sha256 "c" * 64
+    monkeypatch.setattr(cli, "get_session", lambda: session)
+    monkeypatch.setattr(cli, "git_sha", lambda _repo: "abc123")
+    monkeypatch.setattr(cli, "REPORTS_DIR", tmp_path / "reports")
+    result = runner.invoke(app, ["backtest", "run", "--setup", "pullback", "--config", str(config)])
+    assert result.exit_code == 1
+    assert "must be a new version" in result.stderr
+    assert not (tmp_path / "reports").exists()
+
+
+def test_backtest_run_wires_config_calendar_and_git(
+    session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls: dict[str, object] = {}
+
+    def fake_run(_session: Session, **kwargs: object) -> tuple[BacktestRun, Path]:
+        calls.update(kwargs)
+        return _stored_run(session), tmp_path / "2026-09-24-breakout-off.md"
+
+    config = _registered_config(monkeypatch, tmp_path)
+    monkeypatch.setattr(cli, "get_session", lambda: session)
+    monkeypatch.setattr(cli, "git_sha", lambda _repo: "abc123")
+    monkeypatch.setattr(cli, "NyseSessions", lambda: "calendar")
+    monkeypatch.setattr(cli, "run_backtest", fake_run)
+    result = runner.invoke(app, ["backtest", "run", "--setup", "breakout", "--config", str(config)])
+    assert result.exit_code == 0, result.stderr
+    assert (calls["setup"], calls["jev_mode"], calls["git_sha"]) == ("breakout", "off", "abc123")
+    assert calls["calendar"] == "calendar"
+    now = calls["now"]
+    assert isinstance(now, datetime) and now.utcoffset() is not None  # an aware clock
+    assert calls["run_date"] == now.date()
+    assert calls["config_sha256"] == load_strategy_config(FIXTURE_CONFIG)[1]
+    assert "FAIL" in result.stdout
+    assert "-- trades: 12.000 vs 30.000" in result.stdout
+    assert "report: " in result.stdout
+
+
+def test_backtest_show_prints_the_stored_report(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = _stored_run(session)
+    monkeypatch.setattr(cli, "get_session", lambda: session)
+    monkeypatch.setattr(cli, "render_report", lambda stored: f"report for {stored.id}\n")
+    result = runner.invoke(app, ["backtest", "show", str(run.id)])
+    assert result.exit_code == 0
+    assert result.stdout == f"report for {run.id}\n"
+
+
+def test_backtest_show_unknown_or_bad_id(session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cli, "get_session", lambda: session)
+    unknown = runner.invoke(app, ["backtest", "show", "00000000-0000-0000-0000-000000000000"])
+    assert unknown.exit_code == 1
+    assert "No backtest run" in unknown.stderr
+    bad = runner.invoke(app, ["backtest", "show", "not-a-uuid"])
+    assert bad.exit_code == 1
+    assert "Not a run id" in bad.stderr
+
+
+def test_backtest_cost_prints_the_cost_per_side(tmp_path: Path) -> None:
+    survey = tmp_path / "survey.yaml"
+    rows = "".join(
+        f"  - {{cdr_symbol: Z{i}, bid: 99.8, ask: 100.2}}\n" for i in range(5)
+    )
+    survey.write_text("readings:\n" + rows + "  - {cdr_symbol: ZMET, bid: , ask: }\n", encoding="utf-8")
+    result = runner.invoke(app, ["backtest", "cost", "--survey", str(survey)])
+    assert result.exit_code == 0, result.stderr
+    assert "complete readings: 5 (incomplete: 1)" in result.stdout
+    assert "median spread: 0.400%" in result.stdout
+    assert "cost_per_side: 0.003" in result.stdout
+
+
+def test_backtest_cost_refuses_an_unfilled_survey(tmp_path: Path) -> None:
+    survey = tmp_path / "survey.yaml"
+    survey.write_text("readings:\n  - {cdr_symbol: ZNVD, bid: , ask: }\n", encoding="utf-8")
+    result = runner.invoke(app, ["backtest", "cost", "--survey", str(survey)])
+    assert result.exit_code == 1
+    assert "has 0 readings with both bid and ask" in result.stderr
+
+
+def _assert_clean_exit(result: object, needle: str) -> None:
+    """Exit 1 through typer.Exit (no uncaught exception), with one error line on stderr."""
+    exception = getattr(result, "exception", None)
+    assert getattr(result, "exit_code", None) == 1
+    assert isinstance(exception, SystemExit), exception
+    stderr = str(getattr(result, "stderr", ""))
+    assert needle in stderr
+    assert "Traceback" not in stderr
+    assert len(stderr.strip().splitlines()) == 1
+
+
+def test_backtest_run_prints_a_config_error_cleanly(
+    session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = _registered_config(monkeypatch, tmp_path)
+    config.write_text(FIXTURE_CONFIG.read_text(encoding="utf-8") + "surprise: 1\n", encoding="utf-8")
+    monkeypatch.setattr(cli, "get_session", lambda: session)
+    result = runner.invoke(app, ["backtest", "run", "--setup", "pullback", "--config", str(config)])
+    _assert_clean_exit(result, "unknown keys ['surprise']")
+
+
+def test_backtest_run_prints_an_unseeded_universe_cleanly(
+    session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = _registered_config(monkeypatch, tmp_path)
+    monkeypatch.setattr(cli, "get_session", lambda: session)
+    monkeypatch.setattr(cli, "git_sha", lambda _repo: "abc123")
+    monkeypatch.setattr(cli, "REPORTS_DIR", tmp_path / "reports")
+    monkeypatch.setattr(cli, "load_universe", lambda _path: [
+        CdrEntry("AAA", "ZAAA", "ZAAA.NE", "Aaa", "Information Technology"),
+    ])
+    result = runner.invoke(app, ["backtest", "run", "--setup", "pullback", "--config", str(config)])
+    _assert_clean_exit(result, "Not seeded: AAA, QQQ")
+
+
+def test_backtest_run_prints_missing_benchmark_prices_cleanly(
+    session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = _registered_config(monkeypatch, tmp_path)
+    _stocks(session, ["AAA"])
+    session.add(Ticker(symbol="QQQ", company_name="QQQ", kind=TickerKind.benchmark))
+    session.commit()
+    monkeypatch.setattr(cli, "get_session", lambda: session)
+    monkeypatch.setattr(cli, "git_sha", lambda _repo: "abc123")
+    monkeypatch.setattr(cli, "REPORTS_DIR", tmp_path / "reports")
+    monkeypatch.setattr(cli, "load_universe", lambda _path: [
+        CdrEntry("AAA", "ZAAA", "ZAAA.NE", "Aaa", "Information Technology"),
+    ])
+    result = runner.invoke(app, ["backtest", "run", "--setup", "pullback", "--config", str(config)])
+    _assert_clean_exit(result, "No QQQ prices")

@@ -2,8 +2,10 @@ import uuid
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from enum import Enum
+from typing import Any
 
 from sqlalchemy import (
+    JSON,
     BigInteger,
     Column,
     DateTime,
@@ -144,3 +146,27 @@ class EarningsEvent(SQLModel, table=True):
     ticker_id: uuid.UUID = Field(foreign_key="tickers.id", ondelete="RESTRICT")
     event_date: date
     source: str
+
+
+class BacktestRun(SQLModel, table=True):
+    """One stored spec 02 backtest run. JSON payloads are written by backtest/runner.py."""
+
+    __tablename__ = "backtest_runs"
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    strategy_version: str
+    config_sha256: str
+    git_sha: str
+    setup: str  # pullback | breakout | sentiment | combined
+    jev_mode: str  # off | filter
+    start_date: date
+    end_date: date
+    data_fingerprint: str
+    metrics: dict[str, Any] = Field(sa_column=Column(JSON, nullable=False))
+    pass_bar: dict[str, Any] = Field(sa_column=Column(JSON, nullable=False))
+    passed: bool
+    trade_log: dict[str, Any] = Field(sa_column=Column(JSON, nullable=False))
+    run_at: datetime = Field(
+        default_factory=utcnow,
+        sa_column=Column(UTCDateTime(), nullable=False),
+    )

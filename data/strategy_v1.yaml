@@ -1,0 +1,55 @@
+# Pre-registered v1 parameters (spec 02). Committed before the first backtest on real data.
+# Do not edit: any change is a new version (strategy_v2.yaml), and its reports are post-hoc.
+# cost_per_side comes from data/cdr_spread_survey.yaml via `signalbench backtest cost`.
+version: v1
+start_equity: 100
+risk_pct: 0.02
+max_positions: 3
+max_per_sector: 2
+pause_drawdown: 0.15
+auto_resume_sessions: 10
+gap_up_limit: 0.01
+cost_per_side: 0.002
+setup_priority: [pullback, breakout, sentiment]
+regime:
+  symbol: QQQ
+  sma: 200
+indicators:
+  atr_period: 14
+  rsi_period: 2
+liquidity:
+  min_median_traded_value_usd: 50000000
+  sessions: 20
+earnings:
+  blackout_sessions: 3
+  exit_sessions: 2
+setups:
+  pullback:
+    trend_sma_fast: 50
+    trend_sma_slow: 200
+    rsi_max: 10
+    stop_low_sessions: 3
+    stop_atr_mult: 0.5
+    target_r: 2.0
+    time_limit: 10
+  breakout:
+    trend_sma: 50
+    lookback: 20
+    volume_lookback: 50
+    volume_mult: 1.5
+    stop_atr_mult: 2.0
+    trail_atr_mult: 3.0
+    time_limit: 30
+  sentiment:
+    trend_sma: 20
+    stop_atr_mult: 2.0
+    target_r: 2.0
+    time_limit: 10
+backtest:
+  start: 2012-01-01
+  h1_end: 2018-12-31
+  h2_start: 2019-01-01
+  recent_since: 2026-09-15
+  pass_bar:
+    min_trades: 30
+    min_mean_r: 0.10

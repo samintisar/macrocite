@@ -26,14 +26,14 @@ All values are computed on adjusted OHLC of the **US** stock (`adjusted_bars()` 
 | Trend | close > SMA50 **and** SMA50 > SMA200 | close > SMA50 | close > SMA20 |
 | Trigger | RSI(2) < 10 (Wilder) | close > max(close of prior 20 sessions) **and** volume ≥ 1.5 × mean(volume of prior 50 sessions) | Positive reading (spec 03) on a document whose legal close is within the last 3 sessions **and** close > prior session high |
 | Stop level (set at signal) | min(low of last 3 sessions) − 0.5 × ATR | close − 2 × ATR | close − 2 × ATR |
-| Trailing stop | none | max(current stop, highest close since entry − 3 × ATR(today)); only ratchets up | none |
+| Trailing stop | none | max(current stop, highest close since entry − 3 × ATR(today)); only ratchets up. Timing: at each close, the close is first checked against the stop set at the previous close; only then does the stop ratchet (the highest close includes today's), so a raised stop first applies at the next close | none |
 | Target | entry + 2R | none | entry + 2R |
 | Time limit | 10 sessions held | 30 sessions held | 10 sessions held |
 
 **Execution** (identical in backtest and live):
 - A signal on the close of day D is an entry order for the open of D+1 (the next session). Call this *next open*.
 - **Skip entry** if next open > signal close × 1.01 (`gap_up`) or next open ≤ stop (`gap_below_stop`).
-- `R = entry fill − stop`. The 2R target is set from the actual entry fill.
+- **R is the risk planned at the signal:** per-unit `R = signal close − stop`. A trade's R = its P&L after costs ÷ (units × R), i.e. (exit fill − entry fill) ÷ (signal close − stop). The 2R target = entry fill + 2 × (signal close − stop): it is anchored on the actual fill but sized by the planned risk, so an open just above the stop cannot inflate R.
 - Exits are evaluated on each close, in this order: stop (close ≤ stop), earnings (event on D+1 or D+2), target (close ≥ target), time (sessions held ≥ limit). The first match fills at the next open. Day of entry counts as session 1 held.
 - **Cost:** `cost_per_side` = max(0.2%, median surveyed spread ÷ 2 + 0.1%). For example, a 0.4% median spread gives 0.3%. Buys fill at open × (1 + cost_per_side), sells at open × (1 − cost_per_side).
 
@@ -114,7 +114,7 @@ A **combined** run of all passing setups is reported for information only. It do
 ## Persistence and output
 
 - **New table `backtest_runs`** (migration `0009`): id, strategy_version, config_sha256, git_sha, setup (`pullback|breakout|sentiment|combined`), jev_mode (`off|filter`), start_date, end_date, data_fingerprint, metrics JSON, pass_bar JSON (`{criterion: {value, threshold, passed}}`), passed, trade_log JSON, run_at.
-- `data_fingerprint` = SHA-256 of sorted `(symbol, first_date, last_date, row_count, round(sum(adj_close), 4))` over all input price series. It reuses `backtest/fingerprint.py` hashing helpers.
+- `data_fingerprint` = SHA-256 of sorted `(symbol, first_date, last_date, row_count, round(sum(adj_close), 4))` over all input price series, plus one entry `earnings|<count>|<SHA-256 of the sorted, distinct (symbol, date) earnings dates the run used>`. It reuses `backtest/fingerprint.py` hashing helpers.
 - **CLI:** `signalbench backtest run --setup {pullback,breakout,sentiment,combined} [--jev {off,filter}]` stores a run and writes `reports/backtests/<YYYY-MM-DD>-<setup>-<jev>.md`, which is committed to git as the record. `signalbench backtest show <run_id>` reprints a report.
 
 ## Testing
@@ -139,3 +139,24 @@ A **combined** run of all passing setups is reported for information only. It do
 
 - 2026-09-22: created.
 - 2026-09-22: cost per side now comes from the spread survey, not a fixed 0.2%.
+- 2026-09-24: implementation choices (plan `2026-09-24-swing-02-strategy-backtest.md`):
+  - `backtest_runs` is migration `0010`, because spec 01 used `0009` for `raw_documents.form`. Specs 03–05 shift to `0011`–`0013`.
+  - Extra skip reasons: `held`, `no_cash`, and `no_bar`. Symbols that fail the liquidity filter are ignored without a skip record. Gate order: held, regime, paused, earnings_blackout, blocked.
+  - `EntryOrder.risk_amount` is the risk after the caps. If the open plus cost would spend more than the cash left, the entry is trimmed to the cash and logged as `trimmed`.
+  - Halves and the recent sample are split by entry date. `cost_per_side` is rounded to 6 decimals. `config_sha256` hashes the file with CRLF normalised to LF.
+  - `backtest run` refuses a config that is not committed and unchanged in git. `git_sha` carries `-dirty` when tracked code or data files have uncommitted changes.
+  - The trade log also records `stop_update` and `exit_deferred` events.
+- 2026-09-24: owner decision: R is measured on the risk planned at the signal (signal close − stop), not on the fill (entry fill − stop). Trade R = P&L after costs ÷ (units × planned per-unit risk); the target is entry fill + target_r × planned per-unit risk. Gap rules, stops, and costs are unchanged. Reason: an open just above the stop made fill − stop tiny and inflated R (a normal 2R target read as +4.27R).
+- 2026-09-24: `backtest run` only accepts a config at `data/strategy_<version>.yaml` whose `version` matches the file name (still committed and unchanged from HEAD), and refuses when stored runs of that version used a different `config_sha256`: a changed config must become a new version.
+- 2026-09-24: `backtest run` also requires `data/cdr_spread_survey.yaml` to be committed and unchanged from HEAD, and refuses unless the config's `cost_per_side` equals the survey's (after its 6-decimal rounding).
+- 2026-09-24: before simulating, the runner drops today's bars when the latest QQQ bar is dated today (America/New_York) and it is before 16:15 there (a partial bar), then refuses to run unless every universe series ends on the run's last session, listing each stale or empty series and pointing to `signalbench ingest prices`.
+- 2026-09-24: the backtest's earnings dates (blackout and earnings exit) are every realized SEC Item 2.02 date (`sec_2.02` events only), unclustered. Unlike `earnings_dates()`, it does not collapse dates within 3 days to the first, so an earlier 2.02 8-K (e.g. a pre-announcement) cannot absorb the real release date; every filing date triggers the blackout and the earnings exit. Finnhub calendar dates are not used in the backtest.
+- 2026-09-24: `data_fingerprint` also covers the earnings dates the run used (see Persistence). `git_sha` also gets `-dirty` for untracked, non-ignored files under `src/`, `data/`, or `alembic/`. The committed-config check treats a path outside the repo as not committed.
+- 2026-09-24: dust entries are skipped with `no_cash`: when the sized position (units × signal close) is worth less than `MIN_POSITION_FRACTION` = 1% of equity.
+- 2026-09-24: the spread survey needs at least 5 distinct `cdr_symbol`s with both bid and ask (repeat readings of one CDR still count toward the median). A row that is not a mapping, lacks `cdr_symbol`, or has a non-numeric bid/ask is an error naming its row index.
+- 2026-09-24: the config loader requires `h2_start` to be exactly the day after `h1_end`, so the halves are contiguous.
+- 2026-09-24: positions still open when a run ends are stored in the trade log (`open_at_end`) and listed in their own report section (symbol, setup, entry date, entry price, last close, unrealized P&L before exit costs). They are excluded from the trade stats; the equity metrics include them.
+- 2026-09-24: trailing-stop timing written down (unchanged behaviour): each close is checked against the stop set at the previous close, then the stop ratchets.
+- 2026-09-24: `MIN_POSITION_FRACTION` also applies at the fill: an entry whose filled value (units × fill, after trimming to the cash left) is below 1% of equity at that open (cash after the exits + held units at the open) is skipped as `no_cash`.
+- 2026-09-24: the run's last session is the latest bar date in any input series, and QQQ is checked with the universe, so a stale QQQ series is named in the refusal instead of every universe symbol.
+- 2026-09-24: follow-up, not fixed yet: a partial bar stored on an earlier day, by an intraday ingest that was never refreshed, is not detected, because `Price` has no fetched-at field (the partial-bar check only covers a bar dated today). Candidate fixes: always run `signalbench ingest prices` right before a backtest, or add a fetched-at column to `prices` later.

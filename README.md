@@ -102,6 +102,9 @@ uv run signalbench ingest stats
 | `uv run signalbench ingest news` | Fetch Finnhub company news per ticker |
 | `uv run signalbench ingest all` | Run prices, filings, earnings, and news in order |
 | `uv run signalbench ingest stats` | Print per-table row counts |
+| `uv run signalbench backtest cost [--survey PATH]` | Median CDR spread from `data/cdr_spread_survey.yaml` and the resulting cost per side |
+| `uv run signalbench backtest run --setup {pullback,breakout,combined} [--jev off] [--config PATH]` | Simulate on stored data with the committed `data/strategy_v1.yaml`, store the run, and write `reports/backtests/<date>-<setup>-<jev>.md`. `sentiment` and `--jev filter` need spec 03 |
+| `uv run signalbench backtest show RUN_ID` | Reprint a stored run's report |
 
 ## Run the API locally
 
@@ -145,11 +148,13 @@ Tests cover CDR universe parsing, price ingestion and adjustment, the liquidity 
 ```text
 src/signalbench/
 ├── api/            FastAPI application and health endpoint
-├── backtest/       Metrics and fingerprint helpers reused by the strategy backtest (spec 02)
+├── backtest/       Simulator, run metrics, benchmarks, pass bar, reports, and the backtest runner (spec 02)
+├── strategy/       Pre-registered config, indicators, market view, and the pure decide() (spec 02)
 ├── db/             SQLModel models and database sessions
 ├── ingest/         CDR universe, prices, filings, earnings, news, and seeding
-└── market/         Adjusted OHLC bar calculations
-data/               Checked-in CDR universe (cdr_universe.yaml)
+└── market/         Adjusted OHLC bars and the NYSE session calendar
+data/               Checked-in CDR universe, spread survey, and strategy parameters
+reports/            Committed backtest reports
 alembic/            Database migrations
 tests/              Unit, integration, and regression tests
 ```
@@ -158,7 +163,7 @@ tests/              Unit, integration, and regression tests
 
 SignalBench is a personal research and data-ingestion project, not an investment product or advice.
 
-- There is no strategy, backtest, or trading signal yet — this spec only builds the data foundation (universe, prices, filings, earnings dates, news). Strategy and backtest land in spec 02.
+- The strategy and backtest exist (spec 02), but nothing sends signals yet; live signals arrive with the bot in spec 05. Every backtest report prints its caveats: survivorship, US prices standing in for CDR prices, realized earnings dates, and US-only liquidity.
 - The project does not connect to a broker, place trades, manage capital, or provide financial advice. The owner places every trade by hand on Wealthsimple.
 - The current data scope is prices, SEC 8-K filings since 2016, earnings dates, and Finnhub news for the checked-in CDR universe.
 - The interface today is the CLI, database, and a minimal health API; there is no dashboard or bot yet (the bot lands in spec 05).

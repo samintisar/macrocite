@@ -55,6 +55,7 @@ Why: <one line from Claude>
 ```
 - The Jev line is one of: no negative / ⭐ catalyst: `<event_type>` (`<source>`) / ⚠️ Jev check unavailable — read the filing yourself.
 - Breakout shows "Trailing stop, no target".
+- R is the risk planned at the signal (signal − stop, C$2.30 above), not fill − stop. The target is the fill + 2 × that planned R (spec 04).
 - ✅ offers [Use suggested] or asks for a reply like `1 38.52` (units, price; date defaults to today, and a third token can override it) → `Ledger.record_fill` → confirmation.
 - ⏭ asks for a reason: [Disagree] [No time] [Price moved >1%] [Spread too wide] [Other].
 - A second tap on a handled signal replies "already logged".
@@ -88,7 +89,7 @@ Sell at the open.
 | --- | --- |
 | `/signals` | Today's open signals |
 | `/portfolio` | Positions, cash, equity, drawdown |
-| `/pnl` | Realized and unrealized P&L, all-time and this month; closed managed trades: count, win rate, mean R vs backtest |
+| `/pnl` | Realized and unrealized P&L, all-time and this month; closed managed trades: count, win rate, mean R vs backtest (both R on planned risk: spec 04, spec 02) |
 | `/buy SYMBOL QTY PRICE [DATE]` | Manual or unsignalled buy |
 | `/sell SYMBOL QTY\|all PRICE [DATE]` | Sell; linked to an open exit alert for that symbol if one exists |
 | `/void FILL_ID REASON` | Void a fill |
@@ -141,3 +142,4 @@ Symbols are CDR symbols. The bot resolves US symbols to their CDR when they're u
 
 - 2026-09-22: created.
 - 2026-09-22: the entry message includes the spread limit from the survey (default 0.5%); `wide_spread` skip button added.
+- 2026-09-24: R in messages, the pause review, and `/pnl` is R on planned risk (signal − stop), as in spec 02 and spec 04; the target is the fill + 2 × planned R.

@@ -35,7 +35,8 @@ All money is CAD, stored as `Numeric`, and computed with `Decimal`.
 **Strategy levels for a managed position.** Exits are evaluated on the US series, the same as the backtest:
 - US-equivalent entry: `entry_us = us_signal_close × (cdr_fill_price / cdr_signal_close)`
 - stop: `us_stop` from the signal
-- target: `entry_us + 2 × (entry_us − us_stop)` for setups with a target
+- target: `entry_us + target_r × (us_signal_close − us_stop)` for setups with a target (anchored on the fill, sized by the risk planned at the signal, as in the backtest)
+- trade R (managed positions, US-equivalent terms): realized P&L ÷ (filled units × (us_signal_close − us_stop)), i.e. R on the planned risk, the same definition as the backtest (spec 02), so spec 05's `/pnl` can compare live mean R with the backtest
 - the trailing stop (Breakout) is persisted on the position and updated from `Decision.stop_updates`
 - sessions held count NYSE sessions from the buy's trade date (session 1)
 - CDR display levels: `cdr_stop = cdr_signal_close × (1 − stop_pct)`; the target in CAD uses the same ratio
@@ -116,3 +117,4 @@ class Ledger:
 
 - 2026-09-22: created.
 - 2026-09-22: CDR mark from US close × last traded ratio; `wide_spread` skip reason added.
+- 2026-09-24: target is `entry_us + target_r × (us_signal_close − us_stop)` and live trade R is P&L ÷ (filled units × (us_signal_close − us_stop)) in US-equivalent terms: R on planned risk, matching the spec 02 owner decision of 2026-09-24.

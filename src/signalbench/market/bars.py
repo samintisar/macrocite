@@ -15,6 +15,7 @@ class AdjustedBar:
     low: float
     close: float
     volume: int
+    traded_value: float  # raw close x volume, US$ (the liquidity measure in spec 01)
 
 
 def adjust(row: Price) -> AdjustedBar:
@@ -27,6 +28,7 @@ def adjust(row: Price) -> AdjustedBar:
         low=float(row.low) * factor,
         close=float(row.adj_close),
         volume=row.volume,
+        traded_value=float(row.close) * row.volume,
     )
 
 
