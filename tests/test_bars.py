@@ -37,3 +37,26 @@ def test_adjusted_bars_scale_ohl_by_adj_factor_in_date_order(session: Session) -
     assert [bar.date for bar in adjusted_bars(session, ticker.id, end=date(2024, 1, 2))] == [
         date(2024, 1, 2)
     ]
+
+
+def test_traded_value_uses_the_raw_close(session: Session) -> None:
+    ticker = Ticker(symbol="MSFT", company_name="Microsoft")
+    session.add(ticker)
+    session.commit()
+    session.refresh(ticker)
+    session.add(
+        Price(
+            ticker_id=ticker.id,
+            date=date(2024, 1, 2),
+            open=Decimal("100.0000"),
+            high=Decimal("101.0000"),
+            low=Decimal("99.0000"),
+            close=Decimal("100.0000"),
+            adj_close=Decimal("50.0000"),
+            volume=3_000,
+        )
+    )
+    session.commit()
+    [bar] = adjusted_bars(session, ticker.id)
+    assert bar.close == 50.0
+    assert bar.traded_value == 300_000.0
