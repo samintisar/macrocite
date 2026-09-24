@@ -138,6 +138,14 @@ def test_the_filter_file_is_written_once(tmp_path: Path) -> None:
         ("mode: on\ntheta_block: 0.5\nquestion_set: q1\nmodel_requested: m\n", "quoted"),
         ("mode: 'on'\ntheta_block: null\nquestion_set: q1\nmodel_requested: m\n", "theta_block"),
         ("mode: 'on'\ntheta_block: 0.55\nquestion_set: q1\nmodel_requested: m\n", "theta_block"),
+        (
+            "mode: information_only\ntheta_block: 0.5\nquestion_set: q1\nmodel_requested: m\n",
+            "theta_block",
+        ),
+        (
+            "mode: 'on'\ntheta_fit: 0.6\ntheta_block: 0.5\nquestion_set: q1\nmodel_requested: m\n",
+            "theta_block",
+        ),
         ("- not a mapping\n", "mapping"),
     ],
 )

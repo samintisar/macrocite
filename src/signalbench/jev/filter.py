@@ -91,7 +91,7 @@ def split(trades: Sequence[ScoredTrade], theta: float) -> Split:
     )
 
 
-def _eligible(row: Split) -> bool:
+def eligible(row: Split) -> bool:
     """At least MIN_BLOCKED blocked trades, and at least one kept trade to compare against."""
     return row.blocked >= MIN_BLOCKED and row.kept > 0
 
@@ -120,8 +120,8 @@ def decide_filter(trades: Sequence[ScoredTrade]) -> FilterDecision:
     fit_trades = [t for t in trades if FIT_START <= t.signal_date <= FIT_END]
     confirm_trades = [t for t in trades if t.signal_date >= CONFIRM_START]
     fit = tuple(split(fit_trades, theta) for theta in THETA_GRID)
-    eligible = [row for row in fit if _eligible(row)]
-    if not eligible:
+    eligible_rows = [row for row in fit if eligible(row)]
+    if not eligible_rows:
         return FilterDecision(
             mode="information_only",
             theta=None,
@@ -132,7 +132,7 @@ def decide_filter(trades: Sequence[ScoredTrade]) -> FilterDecision:
             confirm=None,
         )
     # max() keeps the first maximum, so a tie goes to the lower theta.
-    best = max(eligible, key=lambda row: row.difference or 0.0)
+    best = max(eligible_rows, key=lambda row: row.difference or 0.0)
     check = split(confirm_trades, best.theta)
     mode, reason = _confirmation(check)
     return FilterDecision(

@@ -646,13 +646,13 @@ def jev_fit_filter(
         decided_on=today,
         report_path=report.relative_to(REPO_ROOT).as_posix(),
     )
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text(render_filter_report(record), encoding="utf-8")
     try:
         write_filter_file(JEV_FILTER_PATH, record)
     except FilterFileError as error:
         typer.echo(str(error), err=True)
         raise typer.Exit(1) from None
-    report.parent.mkdir(parents=True, exist_ok=True)
-    report.write_text(render_filter_report(record), encoding="utf-8")
     typer.echo(f"wrote {JEV_FILTER_PATH}")
     typer.echo(f"report: {report}")
 

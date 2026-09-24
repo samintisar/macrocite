@@ -20,6 +20,7 @@ from signalbench.jev.filter import (
     FilterMode,
     Split,
     TradeRow,
+    eligible,
 )
 from signalbench.jev.questions import MODEL, QUESTION_SET
 
@@ -142,14 +143,16 @@ def filter_file_payload(record: FilterRecord) -> dict[str, Any]:
 
 def write_filter_file(path: Path, record: FilterRecord) -> None:
     """Write the decision once. An existing file is never overwritten."""
-    if path.exists():
+    body = yaml.safe_dump(filter_file_payload(record), sort_keys=False, allow_unicode=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with path.open("x", encoding="utf-8") as handle:
+            handle.write(FILE_HEADER + body)
+    except FileExistsError:
         raise FilterFileError(
             f"{path.name} already exists. The filter decision is made once; a new decision "
             "needs a new question set (spec 03)."
-        )
-    body = yaml.safe_dump(filter_file_payload(record), sort_keys=False, allow_unicode=True)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(FILE_HEADER + body, encoding="utf-8")
+        ) from None
 
 
 @dataclass(frozen=True)
@@ -173,6 +176,11 @@ def load_filter_setting(path: Path) -> FilterSetting:
     theta = data.get("theta_block")
     if mode == "on" and theta not in THETA_GRID:
         raise FilterFileError(f"{path.name}: theta_block must be one of {THETA_GRID} when on")
+    if mode == "on" and theta != data.get("theta_fit"):
+        raise FilterFileError(
+            f"{path.name}: theta_block must equal theta_fit when on, got "
+            f"theta_block={theta!r} and theta_fit={data.get('theta_fit')!r}"
+        )
     if mode == "information_only" and theta is not None:
         raise FilterFileError(f"{path.name}: theta_block must be null when information_only")
     model, questions = data.get("model_requested"), data.get("question_set")
@@ -237,10 +245,10 @@ def render_filter_report(record: FilterRecord) -> str:
         "| --- | --- | --- | --- | --- | --- | --- |",
     ]
     for row in decision.fit:
-        eligible = "yes" if row.blocked >= MIN_BLOCKED and row.kept > 0 else "no"
+        is_eligible = "yes" if eligible(row) else "no"
         lines.append(
             f"| {row.theta} | {row.blocked} | {row.kept} | {_r(row.mean_r_blocked)} "
-            f"| {_r(row.mean_r_kept)} | {_r(row.difference)} | {eligible} |"
+            f"| {_r(row.mean_r_kept)} | {_r(row.difference)} | {is_eligible} |"
         )
     lines += [
         "",

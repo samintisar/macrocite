@@ -433,7 +433,7 @@ def test_backtest_run_prints_missing_benchmark_prices_cleanly(
 
 
 def _capture_run(
-    session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, passed: bool = False
 ) -> dict[str, object]:
     calls: dict[str, object] = {}
 
@@ -441,6 +441,7 @@ def _capture_run(
         calls.update(kwargs)
         run = _stored_run(session)
         run.jev_mode = str(kwargs["jev_mode"])
+        run.passed = passed
         return run, tmp_path / "report.md"
 
     monkeypatch.setattr(cli, "get_session", lambda: session)
@@ -469,7 +470,10 @@ def _filter_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, body: str | No
     return path
 
 
-FILTER_ON = "mode: 'on'\ntheta_block: 0.7\nquestion_set: q1\nmodel_requested: typesafe/jev-1.13\n"
+FILTER_ON = (
+    "mode: 'on'\ntheta_fit: 0.7\ntheta_block: 0.7\nquestion_set: q1\n"
+    "model_requested: typesafe/jev-1.13\n"
+)
 FILTER_INFO = (
     "mode: information_only\ntheta_block: null\nquestion_set: q1\n"
     "model_requested: typesafe/jev-1.13\n"
@@ -489,6 +493,19 @@ def test_backtest_run_filter_uses_the_committed_theta(
     assert calls["jev_mode"] == "filter"
     assert calls["jev"] == JevInputs(theta_block=0.7)
     assert "FAIL (information only: the Jev-off v1 result stands)" in result.stdout
+
+
+def test_backtest_run_filter_pass_stays_information_only(
+    session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = _registered_config(monkeypatch, tmp_path)
+    _filter_file(monkeypatch, tmp_path, FILTER_ON)
+    _capture_run(session, monkeypatch, tmp_path, passed=True)
+    result = runner.invoke(
+        app, ["backtest", "run", "--setup", "breakout", "--jev", "filter", "--config", str(config)]
+    )
+    assert result.exit_code == 0, result.stderr
+    assert "PASS (information only: the Jev-off v1 result stands)" in result.stdout
 
 
 @pytest.mark.parametrize(

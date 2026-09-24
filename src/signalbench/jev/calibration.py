@@ -207,7 +207,10 @@ def render_calibration_report(
         f"| Written on | {written_on.isoformat()} |",
         f"| Readings | {readings} |",
         f"| Labeled | {sections[0].samples if sections else 0} |",
-        f"| Not labeled (no price 5 sessions after the legal close) | {unlabeled} |",
+        (
+            "| Not labeled (no symbol or QQQ price at the legal close or 5 sessions later) "
+            f"| {unlabeled} |"
+        ),
         f"| Resolved builds | {', '.join(f'{b} ({n})' for b, n in sorted(builds.items()))} |",
         "",
         (

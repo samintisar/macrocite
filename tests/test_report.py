@@ -167,6 +167,22 @@ def test_filtered_report_is_information_only() -> None:
     assert "Sentiment status" not in text
 
 
+def test_filtered_report_pass_stays_information_only() -> None:
+    run = _run(setup="breakout")
+    run.jev_mode = "filter"
+    run.passed = True
+    text = render_report(_with_jev(run, theta=0.7, information_only=True))
+    assert "**Result:** PASS (information only)" in text
+    assert "**Result:** PASS\n" not in text
+
+
+def test_sentiment_report_pass_says_may_go_live() -> None:
+    run = _with_jev(_run(setup="sentiment"), theta=None, information_only=True)
+    run.passed = True
+    text = render_report(run)
+    assert "**Sentiment status:** PASS: the Sentiment setup may go live (spec 03)" in text
+
+
 def test_jev_off_reports_have_no_jev_section() -> None:
     text = render_report(_run())
     assert "## Jev readings" not in text
