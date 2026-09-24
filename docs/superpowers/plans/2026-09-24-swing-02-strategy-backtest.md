@@ -2662,6 +2662,8 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 ### Task 10: Simulator
 
+> **Changed after execution:** R and the target now use the risk planned at the signal (signal close − stop), not the fill (owner decision; see the spec 02 changelog, 2026-09-24). The code blocks below show the original fill-based version; the repo and its tests hold the current one.
+
 **Files:**
 - Create: `src/signalbench/backtest/simulator.py`, `tests/test_simulator.py`
 
@@ -3087,6 +3089,8 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ---
 
 ### Task 11: Known-date scenarios for every exit reason
+
+> **Changed after execution:** R and the target now use the risk planned at the signal (signal close − stop), not the fill (owner decision; see the spec 02 changelog, 2026-09-24). The code blocks below show the original fill-based version; the repo and its tests hold the current one.
 
 **Files:**
 - Create: `tests/test_scenarios.py`
@@ -5521,7 +5525,7 @@ If both setups fail: stop before specs 04–05 unless spec 03's Sentiment setup 
 | Pullback, Breakout, Sentiment trend/trigger/stop/target/time rules | 6, 7 |
 | Breakout trailing stop that only ratchets up | 7, 9, 11 |
 | Signal at close D → entry at the open of D+1; `gap_up` and `gap_below_stop` skips | 10 |
-| R from the entry fill; 2R target from the fill | 10, 11 |
+| R from the entry fill; 2R target from the fill (changed after execution to planned risk, signal close − stop; spec 02 changelog 2026-09-24) | 10, 11 |
 | Exit order stop → earnings → target → time; fill at next open; entry day = session 1 | 7, 10, 11 |
 | Cost per side on buys and sells | 10, 20 |
 | Equity, 2% risk units, equity/3 cap, uncommitted-cash cap, fractional units | 8, 10 |

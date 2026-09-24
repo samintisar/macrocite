@@ -71,7 +71,7 @@ Extend `raw_documents` (also migration `0008`):
 ## Part E — Earnings dates
 
 - **History (for backtests):** the acceptance date of each 8-K whose `items` contains `2.02` (Results of Operations). No extra source is needed. Store in `earnings_events(ticker_id, event_date, source='sec_2.02')` (migration `0008`).
-- **Upcoming (for live blackout and exits):** the Finnhub earnings calendar for the next 30 days, source `finnhub`. Upsert daily. When a `sec_2.02` row later lands within 3 days of a `finnhub` row, keep both. Readers take the earliest date in any 3-day cluster.
+- **Upcoming (for live blackout and exits):** the Finnhub earnings calendar for the next 30 days, source `finnhub`. Upsert daily. When a `sec_2.02` row later lands within 3 days of a `finnhub` row, keep both. Readers take the earliest date in any 3-day cluster. Exception: the spec 02 backtest reads only `sec_2.02` dates, unclustered (every realized Item 2.02 date).
 - **Known look-ahead, accepted:** earnings dates are announced weeks in advance, so the backtest using realized 2.02 dates is a close stand-in for knowing them ahead. Every backtest report states this.
 
 ## Part F — Finnhub news
@@ -131,3 +131,4 @@ signalbench ingest all                # in order: prices, filings, earnings, new
 - 2026-09-23: gate run. `us_stocks: 46` (40 in the universe plus 6 deactivated old watchlist names), `active_us_stocks: 35`, `cdrs: 40`, `cdrs_with_prices: 40`, `price_rows: 235402`, `eight_ks_since: 5082`, `eight_ks_with_exhibit_text: 2934`, `news_rows: 82761`, `earnings_events: 1702`. A second `ingest all` added nothing (+0 for all 82 price tickers, 40 filing tickers and 40 news tickers) and had no failures.
   - 5 names are inactive because their CDR has no price in the last 5 sessions (CRM, HD, PFE, UNH, V).
   - 13 CDRs have almost no Yahoo history; most were listed 2026-07-17 and have barely traded. Examples: ZMET, ZV and ZCRM each have a single bar. The backtest uses US prices, so this doesn't block spec 02, but it adds weight to the spread survey.
+- 2026-09-24: the spec 02 backtest uses unclustered `sec_2.02` dates only; the 3-day clustering and Finnhub dates apply to live readers (spec 02 changelog).
