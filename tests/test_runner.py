@@ -217,3 +217,15 @@ def test_backtest_earnings_are_every_sec_2_02_date_unclustered(seeded: Session) 
     inputs = load_market_inputs(seeded, UNIVERSE, "QQQ", None)
     earnings = {item.symbol: item.earnings for item in inputs.symbols}
     assert earnings == {"AAA": [date(2015, 1, 5), date(2015, 1, 7)], "BBB": []}
+
+
+def test_a_stale_benchmark_is_named_in_the_refusal(session: Session, tmp_path: Path) -> None:
+    _store(session, "AAA", TickerKind.us_stock, series(DAYS, pullback_closes(len(DAYS), dip=DIP)))
+    _store(session, "BBB", TickerKind.us_stock, trend_bars(DAYS, 50.0, 0.1))
+    _store(session, "QQQ", TickerKind.benchmark, trend_bars(DAYS, 300.0, 0.5)[:-2])  # 2 stale
+    with pytest.raises(RunRefusedError) as refused:
+        _run(session, tmp_path)
+    message = str(refused.value)
+    assert f"QQQ (last bar {DAYS[-3].isoformat()})" in message
+    assert DAYS[-1].isoformat() in message  # the latest session in the data
+    assert "AAA" not in message and "BBB" not in message

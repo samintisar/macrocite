@@ -1,5 +1,6 @@
 """Load real data, run one backtest, store it, and write its report (spec 02)."""
 
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import date, datetime, time
 from pathlib import Path
@@ -104,16 +105,25 @@ def drop_partial_session(inputs: MarketInputs, now: datetime) -> MarketInputs:
     )
 
 
-def _series_end(item: SymbolInput) -> str:
-    return f"last bar {item.bars[-1].date.isoformat()}" if item.bars else "no bars"
+def _series_end(bars: Sequence[AdjustedBar]) -> str:
+    return f"last bar {bars[-1].date.isoformat()}" if bars else "no bars"
 
 
-def check_series_current(symbols: list[SymbolInput], last_session: date) -> None:
-    """Every universe series must end on the run's last session (no stale or truncated data)."""
+def latest_bar_date(inputs: MarketInputs) -> date:
+    """The latest bar date in any input series, the benchmark included."""
+    every = [inputs.benchmark, *(item.bars for item in inputs.symbols)]
+    return max(bars[-1].date for bars in every if bars)
+
+
+def check_series_current(inputs: MarketInputs, benchmark_symbol: str, last_session: date) -> None:
+    """Every universe series and the benchmark must end on the run's last session (no stale or
+    truncated data)."""
+    series = [(item.symbol, item.bars) for item in inputs.symbols]
+    series.append((benchmark_symbol, inputs.benchmark))
     behind = [
-        f"{item.symbol} ({_series_end(item)})"
-        for item in symbols
-        if not item.bars or item.bars[-1].date != last_session
+        f"{symbol} ({_series_end(bars)})"
+        for symbol, bars in series
+        if not bars or bars[-1].date != last_session
     ]
     if behind:
         raise RunRefusedError(
@@ -151,12 +161,12 @@ def run_backtest(
     )
     if not inputs.benchmark:
         raise RunRefusedError(f"No complete {config.regime_symbol} bars yet.")
-    last = inputs.benchmark[-1].date if end is None else end
+    last = latest_bar_date(inputs) if end is None else end
     start = config.backtest.start
     run_sessions = calendar.sessions_between(start, last)
     if not run_sessions:
         raise RunRefusedError(f"No sessions between {start} and {last}.")
-    check_series_current(inputs.symbols, run_sessions[-1])
+    check_series_current(inputs, config.regime_symbol, run_sessions[-1])
     lookahead = max(config.earnings_blackout_sessions, config.earnings_exit_sessions)
     sessions = run_sessions + calendar.next_sessions(last, lookahead)
     market = MarketView(inputs.symbols, inputs.benchmark, sessions, config)
