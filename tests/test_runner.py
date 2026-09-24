@@ -6,6 +6,7 @@ import pytest
 from sqlmodel import Session, select
 
 from signalbench.backtest.fingerprint import data_fingerprint
+from signalbench.backtest.preregistration import RunRefusedError
 from signalbench.backtest.runner import (
     RequiresSpec03Error,
     run_backtest,
@@ -123,3 +124,15 @@ def test_sentiment_and_jev_filter_need_spec_03() -> None:
 def test_unseeded_universe_is_an_error(session: Session, tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="Not seeded: AAA, BBB, QQQ"):
         _run(session, tmp_path)
+
+
+def test_a_changed_config_under_a_used_version_is_refused(seeded: Session, tmp_path: Path) -> None:
+    _run(seeded, tmp_path)  # stores version "test" with config_sha256 "f" * 64
+    with pytest.raises(RunRefusedError, match="must be a new version"):
+        run_backtest(
+            seeded, setup="pullback", jev_mode="off", config=load_test_config(),
+            config_sha256="e" * 64, universe=UNIVERSE, calendar=WeekdaySessions(),
+            git_sha="abc123", run_date=date(2026, 9, 24), reports_dir=tmp_path / "other",
+        )
+    assert len(seeded.exec(select(BacktestRun)).all()) == 1
+    assert not (tmp_path / "other").exists()

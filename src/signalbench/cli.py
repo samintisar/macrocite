@@ -10,6 +10,7 @@ import httpx
 import typer
 from sqlmodel import Session, col, select
 
+from signalbench.backtest.preregistration import RunRefusedError, check_config_path
 from signalbench.backtest.provenance import committed_unchanged, git_sha
 from signalbench.backtest.report import render_report
 from signalbench.backtest.runner import (
@@ -327,24 +328,33 @@ def backtest_run(
         )
         raise typer.Exit(1)
     strategy, sha = load_strategy_config(config)
-    with get_session() as session:
-        run, path = run_backtest(
-            session,
-            setup=run_setup,
-            jev_mode=jev_mode,
-            config=strategy,
-            config_sha256=sha,
-            universe=load_universe(UNIVERSE_PATH),
-            calendar=NyseSessions(),
-            git_sha=git_sha(REPO_ROOT),
-            run_date=datetime.now(NEW_YORK).date(),
-            reports_dir=REPORTS_DIR,
-        )
-        typer.echo(f"run {run.id}: {'PASS' if run.passed else 'FAIL'}")
-        for name, row in run.pass_bar.items():
-            mark = "ok" if row["passed"] else "--"
-            typer.echo(f"  {mark} {name}: {row['value']:.3f} vs {row['threshold']:.3f}")
+    try:
+        check_config_path(REPO_ROOT, config, strategy.version)
+        with get_session() as session:
+            run, path = run_backtest(
+                session,
+                setup=run_setup,
+                jev_mode=jev_mode,
+                config=strategy,
+                config_sha256=sha,
+                universe=load_universe(UNIVERSE_PATH),
+                calendar=NyseSessions(),
+                git_sha=git_sha(REPO_ROOT),
+                run_date=datetime.now(NEW_YORK).date(),
+                reports_dir=REPORTS_DIR,
+            )
+            _print_run(run)
+    except RunRefusedError as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(1) from None
     typer.echo(f"report: {path}")
+
+
+def _print_run(run: BacktestRun) -> None:
+    typer.echo(f"run {run.id}: {'PASS' if run.passed else 'FAIL'}")
+    for name, row in run.pass_bar.items():
+        mark = "ok" if row["passed"] else "--"
+        typer.echo(f"  {mark} {name}: {row['value']:.3f} vs {row['threshold']:.3f}")
 
 
 @backtest_app.command("show")

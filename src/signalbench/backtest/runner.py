@@ -11,6 +11,7 @@ from signalbench.backtest.benchmarks import benchmark_stats, buy_and_hold, equal
 from signalbench.backtest.fingerprint import data_fingerprint
 from signalbench.backtest.metrics import run_metrics
 from signalbench.backtest.passbar import evaluate_pass_bar, passes
+from signalbench.backtest.preregistration import check_version_unchanged
 from signalbench.backtest.report import (
     metrics_payload,
     pass_bar_payload,
@@ -96,8 +97,12 @@ def run_backtest(
     reports_dir: Path,
     end: date | None = None,
 ) -> tuple[BacktestRun, Path]:
-    """Run one setup (or the combined set) with Jev off, store it, and write the report."""
+    """Run one setup (or the combined set) with Jev off, store it, and write the report.
+
+    Refuses (RunRefusedError) when stored runs of this strategy version used another config.
+    """
     config = config.with_setups(setups_for_run(setup, jev_mode))
+    check_version_unchanged(session, config.version, config_sha256)
     inputs = load_market_inputs(session, universe, config.regime_symbol, end)
     last = inputs.benchmark[-1].date if end is None else end
     start = config.backtest.start

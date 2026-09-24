@@ -215,6 +215,55 @@ def _stored_run(session: Session) -> BacktestRun:
     return run
 
 
+def _registered_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """The fixture config copied to <repo>/data/strategy_test.yaml, with REPO_ROOT = tmp_path."""
+    (tmp_path / "data").mkdir(exist_ok=True)
+    config = tmp_path / "data" / "strategy_test.yaml"
+    config.write_bytes(FIXTURE_CONFIG.read_bytes())
+    monkeypatch.setattr(cli, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(cli, "committed_unchanged", lambda _repo, _path: True)
+    return config
+
+
+def test_backtest_run_refuses_a_config_outside_data_strategy_version(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Committed and unchanged, but not data/strategy_<version>.yaml: refused before any data.
+    monkeypatch.setattr(cli, "get_session", lambda: session)
+    monkeypatch.setattr(cli, "committed_unchanged", lambda _repo, _path: True)
+    result = runner.invoke(
+        app, ["backtest", "run", "--setup", "pullback", "--config", str(FIXTURE_CONFIG)]
+    )
+    assert result.exit_code == 1
+    assert "data/strategy_test.yaml" in result.stderr
+
+
+def test_backtest_run_refuses_a_version_whose_file_name_differs(
+    session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = _registered_config(monkeypatch, tmp_path)
+    renamed = config.with_name("strategy_v1.yaml")  # holds `version: test`
+    config.rename(renamed)
+    monkeypatch.setattr(cli, "get_session", lambda: session)
+    result = runner.invoke(app, ["backtest", "run", "--setup", "pullback", "--config", str(renamed)])
+    assert result.exit_code == 1
+    assert "data/strategy_test.yaml" in result.stderr
+
+
+def test_backtest_run_refuses_a_changed_config_under_a_used_version(
+    session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = _registered_config(monkeypatch, tmp_path)
+    _stored_run(session)  # version "test" with config_sha256 "c" * 64
+    monkeypatch.setattr(cli, "get_session", lambda: session)
+    monkeypatch.setattr(cli, "git_sha", lambda _repo: "abc123")
+    monkeypatch.setattr(cli, "REPORTS_DIR", tmp_path / "reports")
+    result = runner.invoke(app, ["backtest", "run", "--setup", "pullback", "--config", str(config)])
+    assert result.exit_code == 1
+    assert "must be a new version" in result.stderr
+    assert not (tmp_path / "reports").exists()
+
+
 def test_backtest_run_wires_config_calendar_and_git(
     session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -224,14 +273,12 @@ def test_backtest_run_wires_config_calendar_and_git(
         calls.update(kwargs)
         return _stored_run(session), tmp_path / "2026-09-24-breakout-off.md"
 
+    config = _registered_config(monkeypatch, tmp_path)
     monkeypatch.setattr(cli, "get_session", lambda: session)
-    monkeypatch.setattr(cli, "committed_unchanged", lambda _repo, _path: True)
     monkeypatch.setattr(cli, "git_sha", lambda _repo: "abc123")
     monkeypatch.setattr(cli, "NyseSessions", lambda: "calendar")
     monkeypatch.setattr(cli, "run_backtest", fake_run)
-    result = runner.invoke(
-        app, ["backtest", "run", "--setup", "breakout", "--config", str(FIXTURE_CONFIG)]
-    )
+    result = runner.invoke(app, ["backtest", "run", "--setup", "breakout", "--config", str(config)])
     assert result.exit_code == 0, result.stderr
     assert (calls["setup"], calls["jev_mode"], calls["git_sha"]) == ("breakout", "off", "abc123")
     assert calls["calendar"] == "calendar"
