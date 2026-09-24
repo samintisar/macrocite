@@ -159,12 +159,14 @@ def simulate(
         view = market.at(day)
 
         # Open: exits first, then entries, both decided at the previous close.
+        deferred: list[ExitOrder] = []  # exits with no bar today, retried at the next open
         if orders is not None:
             for order in orders.exits:
                 position = positions[order.position_id]
                 snap = view.snapshot(position.symbol)
                 if snap is None or snap.date != day:
                     events.append(_event(day, "exit_deferred", position_id=position.id))
+                    deferred.append(order)
                     continue
                 fill = snap.open * (1.0 - config.cost_per_side)
                 cash += position.units * fill
@@ -275,7 +277,9 @@ def simulate(
             events.append(
                 _event(day, "skip", symbol=skipped.symbol, setup=skipped.setup, reason=skipped.reason)
             )
-        orders = _Orders(day, decision.exits, decision.entries)
+        carried = {order.position_id for order in deferred}
+        exits = deferred + [e for e in decision.exits if e.position_id not in carried]
+        orders = _Orders(day, sorted(exits, key=lambda e: e.position_id), decision.entries)
 
     return SimulationResult(
         start=sessions[0],

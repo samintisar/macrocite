@@ -200,7 +200,7 @@ def run_backtest(
         ),
         metrics=metrics_payload(metrics, [qqq, survivor], config.backtest),
         pass_bar=pass_bar_payload(bar),
-        passed=passes(bar),
+        passed=setup != "combined" and passes(bar),  # a combined run is information only
         trade_log=trade_log_payload(result),
     )
     session.add(run)

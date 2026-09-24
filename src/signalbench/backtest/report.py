@@ -66,6 +66,13 @@ def report_path(directory: Path, run_date: date, setup: str, jev_mode: str) -> P
     return directory / f"{run_date.isoformat()}-{setup}-{jev_mode}.md"
 
 
+def result_label(run: BacktestRun) -> str:
+    """PASS or FAIL; a combined run is information only and never passes or fails."""
+    if run.setup == "combined":
+        return "INFO"
+    return "PASS" if run.passed else "FAIL"
+
+
 def _pct(value: float) -> str:
     return f"{value * 100:.1f}%"
 
@@ -74,7 +81,7 @@ def _header(run: BacktestRun) -> list[str]:
     lines = [
         f"# Backtest: {run.setup} (Jev {run.jev_mode})",
         "",
-        f"**Strategy:** {run.strategy_version} · **Result:** {'PASS' if run.passed else 'FAIL'}",
+        f"**Strategy:** {run.strategy_version} · **Result:** {result_label(run)}",
         "",
     ]
     if run.setup == "combined":

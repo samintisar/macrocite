@@ -12,12 +12,11 @@ import yaml
 from sqlmodel import Session, col, select
 
 from signalbench.backtest.preregistration import (
-    RunRefusedError,
     check_config_path,
     check_cost_matches_survey,
 )
 from signalbench.backtest.provenance import committed_unchanged, git_sha
-from signalbench.backtest.report import render_report
+from signalbench.backtest.report import render_report, result_label
 from signalbench.backtest.runner import (
     JevMode,
     RequiresSpec03Error,
@@ -366,14 +365,14 @@ def backtest_run(
                 now=now,
             )
             _print_run(run)
-    except (RunRefusedError, SpreadSurveyError) as error:
+    except ValueError as error:  # RunRefusedError, SpreadSurveyError, and data/calendar gaps
         typer.echo(str(error), err=True)
         raise typer.Exit(1) from None
     typer.echo(f"report: {path}")
 
 
 def _print_run(run: BacktestRun) -> None:
-    typer.echo(f"run {run.id}: {'PASS' if run.passed else 'FAIL'}")
+    typer.echo(f"run {run.id}: {result_label(run)}")
     for name, row in run.pass_bar.items():
         mark = "ok" if row["passed"] else "--"
         typer.echo(f"  {mark} {name}: {row['value']:.3f} vs {row['threshold']:.3f}")
