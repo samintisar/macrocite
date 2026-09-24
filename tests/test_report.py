@@ -2,6 +2,8 @@ import json
 from datetime import date
 from pathlib import Path
 
+from pytest import approx
+
 from signalbench.backtest.benchmarks import BenchmarkStats
 from signalbench.backtest.metrics import run_metrics
 from signalbench.backtest.passbar import evaluate_pass_bar, passes
@@ -29,11 +31,11 @@ CONFIG = load_test_config().with_setups(("pullback",))
 DAYS = weekdays(date(2023, 1, 2), 300)
 
 
-def _run(setup: str = "pullback", version: str = "v1") -> BacktestRun:
+def _run(setup: str = "pullback", version: str = "v1", end: int = 290) -> BacktestRun:
     closes = pullback_closes(len(DAYS))
     closes[252:] = [147.0] * (len(DAYS) - 252)
     market = make_market({"AAA": series(DAYS, closes)}, trend_bars(DAYS, 300.0, 0.5), DAYS, CONFIG)
-    result = simulate(market, NullReadingsView(), CONFIG, DAYS[240], DAYS[290])
+    result = simulate(market, NullReadingsView(), CONFIG, DAYS[240], DAYS[end])
     metrics = run_metrics(result, CONFIG.backtest)
     benchmarks = [
         BenchmarkStats("QQQ buy-and-hold", 0.2, 0.1, 1.5, 0.05),
@@ -95,3 +97,28 @@ def test_passed_run_says_pass() -> None:
     run = _run()
     run.passed = True
     assert "**Result:** PASS" in render_report(run)
+
+
+def test_positions_open_at_the_end_are_listed_apart_from_the_trades() -> None:
+    # Signal on 251 (close 146, sized at equity / 3 on it), entry at the 252 open of 147
+    # (x 1.002 cost); the run ends on 256, before the time exit, with closes of 147.
+    run = _run(end=256)
+    assert run.trade_log["trades"] == []
+    [row] = run.trade_log["open_at_end"]
+    fill = 147.0 * 1.002
+    units = 100.0 / 3 / 146.0
+    assert (row["symbol"], row["setup"], row["entry_date"]) == ("AAA", "pullback", DAYS[252].isoformat())
+    assert row["last_close"] == approx(147.0)
+    assert row["unrealized_pnl"] == approx(units * (147.0 - fill))
+    text = render_report(run)
+    assert "## Positions open at the end" in text
+    assert "excluded from the trade stats" in text
+    assert (
+        f"| AAA | pullback | {DAYS[252].isoformat()} | {fill:.2f} | 147.00 "
+        f"| {units * (147.0 - fill):.2f} |"
+    ) in text
+
+
+def test_no_open_positions_says_none() -> None:
+    text = render_report(_run())
+    assert "## Positions open at the end\n\nNone." in text

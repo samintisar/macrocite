@@ -57,6 +57,7 @@ def pass_bar_payload(bar: dict[str, Criterion]) -> dict[str, Any]:
 def trade_log_payload(result: SimulationResult) -> dict[str, Any]:
     return {
         "trades": [_jsonable(asdict(trade)) for trade in result.trades],
+        "open_at_end": [_jsonable(asdict(position)) for position in result.open_at_end],
         "events": _jsonable(result.events),
     }
 
@@ -200,6 +201,29 @@ def _trades(run: BacktestRun) -> list[str]:
     return lines
 
 
+def _open_at_end(run: BacktestRun) -> list[str]:
+    rows: list[dict[str, Any]] = run.trade_log.get("open_at_end", [])
+    lines = ["## Positions open at the end", ""]
+    if not rows:
+        return [*lines, "None."]
+    return [
+        *lines,
+        (
+            "Still held at the last close, marked at that close before exit costs. They are "
+            "excluded from the trade stats (trades, win rate, mean and median R, halves); "
+            "the equity metrics include them."
+        ),
+        "",
+        "| Symbol | Setup | Entry | Entry price | Last close | Unrealized P&L |",
+        "| --- | --- | --- | --- | --- | --- |",
+        *[
+            f"| {row['symbol']} | {row['setup']} | {row['entry_date']} "
+            f"| {row['entry_price']:.2f} | {row['last_close']:.2f} | {row['unrealized_pnl']:.2f} |"
+            for row in rows
+        ],
+    ]
+
+
 def render_report(run: BacktestRun) -> str:
     sections = [
         _header(run),
@@ -208,5 +232,6 @@ def render_report(run: BacktestRun) -> str:
         _benchmarks(run.metrics),
         _skips_and_caveats(run.metrics),
         _trades(run),
+        _open_at_end(run),
     ]
     return "\n\n".join("\n".join(section) for section in sections) + "\n"

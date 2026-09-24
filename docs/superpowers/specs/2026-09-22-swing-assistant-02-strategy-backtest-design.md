@@ -155,3 +155,4 @@ A **combined** run of all passing setups is reported for information only. It do
 - 2026-09-24: dust entries are skipped with `no_cash`: when the sized position (units × signal close) is worth less than `MIN_POSITION_FRACTION` = 1% of equity.
 - 2026-09-24: the spread survey needs at least 5 distinct `cdr_symbol`s with both bid and ask (repeat readings of one CDR still count toward the median). A row that is not a mapping, lacks `cdr_symbol`, or has a non-numeric bid/ask is an error naming its row index.
 - 2026-09-24: the config loader requires `h2_start` to be exactly the day after `h1_end`, so the halves are contiguous.
+- 2026-09-24: positions still open when a run ends are stored in the trade log (`open_at_end`) and listed in their own report section (symbol, setup, entry date, entry price, last close, unrealized P&L before exit costs). They are excluded from the trade stats; the equity metrics include them.

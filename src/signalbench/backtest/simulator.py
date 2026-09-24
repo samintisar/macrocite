@@ -4,7 +4,7 @@ For each session t: at the open, fill the exits and then the entries decided at 
 at the close, mark to market, update the peak and pause state, and call decide(t).
 """
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import date
 
 from signalbench.strategy.config import SetupName, StrategyConfig
@@ -47,6 +47,24 @@ class EquityPoint:
 
 
 @dataclass(frozen=True)
+class OpenPositionRecord:
+    """A position still open when the run ends. It is not a trade and has no R."""
+
+    position_id: str
+    symbol: str
+    setup: SetupName
+    sector: str
+    signal_date: date
+    entry_date: date
+    entry_price: float
+    units: float
+    stop: float
+    sessions_held: int
+    last_close: float
+    unrealized_pnl: float  # units * (last close - entry fill), before any exit cost
+
+
+@dataclass(frozen=True)
 class SimulationResult:
     start: date
     end: date
@@ -54,6 +72,7 @@ class SimulationResult:
     trades: list[TradeRecord]
     events: list[Event]
     open_positions: list[Position]
+    open_at_end: list[OpenPositionRecord] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -261,7 +280,36 @@ def simulate(
         trades=trades,
         events=events,
         open_positions=list(positions.values()),
+        open_at_end=_open_at_end(market, sessions[-1], positions, opened),
     )
+
+
+def _open_at_end(
+    market: MarketView, end: date, positions: dict[str, Position], opened: dict[str, _Opened]
+) -> list[OpenPositionRecord]:
+    """Positions still held at the last close, marked the way the equity curve marks them."""
+    view = market.at(end)
+    records: list[OpenPositionRecord] = []
+    for position in positions.values():
+        snap = view.snapshot(position.symbol)
+        close = position.entry_price if snap is None else snap.close
+        records.append(
+            OpenPositionRecord(
+                position_id=position.id,
+                symbol=position.symbol,
+                setup=position.setup,
+                sector=position.sector,
+                signal_date=opened[position.id].signal_date,
+                entry_date=position.entry_date,
+                entry_price=position.entry_price,
+                units=position.units,
+                stop=position.stop,
+                sessions_held=position.sessions_held,
+                last_close=close,
+                unrealized_pnl=position.units * (close - position.entry_price),
+            )
+        )
+    return records
 
 
 def _event(day: date, kind: str, **fields: object) -> Event:
