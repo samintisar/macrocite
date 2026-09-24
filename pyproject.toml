@@ -17,6 +17,7 @@ dependencies = [
   "beautifulsoup4>=4.12",
   "lxml>=5.0",
   "tzdata>=2024.1",
+  "exchange-calendars>=4.13",
 ]
 
 [project.scripts]
@@ -53,7 +54,7 @@ packages = ["signalbench"]
 follow_imports_for_stubs = true
 
 [[tool.mypy.overrides]]
-module = ["yfinance"]
+module = ["yfinance", "exchange_calendars"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
