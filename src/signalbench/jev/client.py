@@ -1,11 +1,20 @@
 """Jev through OpenRouter's decisions endpoint (spec 03): response parsing and the HTTP client."""
 
 import math
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
-from signalbench.jev.questions import EVENT_TYPES, IMPACT_OPTIONS
+import httpx
 
+from signalbench.jev.questions import EVENT_TYPES, IMPACT_OPTIONS, MODEL, request_body
+
+ENDPOINT = "https://openrouter.ai/api/alpha/decisions"
+TIMEOUT_SECONDS = 10.0
+MAX_RETRIES = 3
+BACKOFF_SECONDS = 1.0  # waits 1, 2, 4 s between attempts
+FATAL_STATUSES = frozenset({401, 402, 404})  # bad key, no credits, unknown model: stop the run
 PRICE_PER_INPUT_TOKEN_USD = 0.042 / 1_000_000  # output tokens are free (checked 2026-09-24)
 PROBABILITY_TOLERANCE = 0.01
 
@@ -16,6 +25,22 @@ class JevError(Exception):
 
 class JevResponseError(JevError):
     """A 200 response that does not match question set q1. The document is skipped."""
+
+
+class JevRejectedError(JevError):
+    """A non-retryable status about this request (400, 403, 413, ...). The document is skipped."""
+
+    def __init__(self, status: int, message: str) -> None:
+        super().__init__(f"HTTP {status}: {message}")
+        self.status = status
+
+
+class JevFatalError(JevError):
+    """401 (key), 402 (credits), or 404 (model): every later request would fail too."""
+
+
+class JevUnavailableError(JevError):
+    """429, 5xx, or a transport error on every attempt. The document is skipped."""
 
 
 @dataclass(frozen=True)
@@ -110,3 +135,73 @@ def parse_response(body: object, latency_ms: int) -> JevResult:
         cost_usd=float(cost),
         latency_ms=latency_ms,
     )
+
+
+class JevClient(Protocol):
+    def read(self, state: str) -> JevResult:
+        """Ask question set q1 about one document state."""
+        ...
+
+
+def _error_message(response: httpx.Response) -> str:
+    """OpenRouter errors look like {"error": {"code": 402, "message": "..."}}."""
+    try:
+        body = response.json()
+    except ValueError:
+        return response.text[:200] or response.reason_phrase
+    if isinstance(body, dict) and isinstance(body.get("error"), dict):
+        return str(body["error"].get("message", body["error"]))
+    return str(body)[:200]
+
+
+class OpenRouterJevClient:
+    """Sync client. Retries 429, 5xx, and transport errors with exponential backoff; never retries
+    other 4xx. Safe to share across the backfill's worker threads (httpx.Client is thread-safe)."""
+
+    def __init__(
+        self,
+        api_key: str,
+        http: httpx.Client,
+        *,
+        model: str = MODEL,
+        max_retries: int = MAX_RETRIES,
+        backoff_seconds: float = BACKOFF_SECONDS,
+        sleep: Callable[[float], None] = time.sleep,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        self._http = http
+        self._model = model
+        self._max_retries = max_retries
+        self._backoff = backoff_seconds
+        self._sleep = sleep
+        self._clock = clock
+
+    def read(self, state: str) -> JevResult:
+        body = request_body(state, self._model)
+        failure = ""
+        for attempt in range(self._max_retries + 1):
+            if attempt:
+                self._sleep(self._backoff * 2 ** (attempt - 1))
+            started = self._clock()
+            try:
+                response = self._http.post(
+                    ENDPOINT, json=body, headers=self._headers, timeout=TIMEOUT_SECONDS
+                )
+            except httpx.TransportError as error:  # timeouts and connection failures
+                failure = f"{type(error).__name__}: {error}"
+                continue
+            latency_ms = round((self._clock() - started) * 1000)
+            status = response.status_code
+            if status == 200:
+                try:
+                    payload = response.json()
+                except ValueError as error:
+                    raise JevResponseError(f"200 with a body that is not JSON: {error}") from None
+                return parse_response(payload, latency_ms)
+            if status in FATAL_STATUSES:
+                raise JevFatalError(f"HTTP {status}: {_error_message(response)}")
+            if status != 429 and status < 500:
+                raise JevRejectedError(status, _error_message(response))
+            failure = f"HTTP {status}"
+        raise JevUnavailableError(f"gave up after {self._max_retries + 1} attempts: {failure}")
