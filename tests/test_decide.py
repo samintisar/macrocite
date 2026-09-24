@@ -194,3 +194,22 @@ def test_decide_is_deterministic() -> None:
 def test_direct_future_access_raises() -> None:
     with pytest.raises(LookAheadError):
         _market().at(DAYS[SIGNAL]).snapshot("AAA", DAYS[SIGNAL + 1])
+
+
+def test_todays_close_is_checked_against_yesterdays_stop_before_the_trail_moves() -> None:
+    # At SIGNAL the close is 146 and ATR is 30/14. The trail from a highest close of 160 is
+    # 160 - 3 x ATR, about 153.6, above today's close. Today's exit check still uses the stop
+    # set at the previous close (140), so there is no exit; the stop then ratchets up.
+    market = _market()
+    atr = 30 / 14
+    held = make_position(
+        "P00001", "AAA", setup="breakout", stop=140.0, target=None, time_limit=30, highest_close=160.0
+    )
+    decision = decide(DAYS[SIGNAL], market, NULL, replace(empty_portfolio(100.0), positions=(held,)), CONFIG)
+    assert decision.exits == []
+    assert decision.stop_updates == [StopUpdate("P00001", 140.0, approx(160.0 - 3 * atr))]
+    # The ratcheted stop applies from the next close check on: the same close now stops out.
+    ratcheted = replace(held, stop=160.0 - 3 * atr)
+    after = decide(DAYS[SIGNAL], market, NULL, replace(empty_portfolio(100.0), positions=(ratcheted,)), CONFIG)
+    assert after.exits == [ExitOrder("P00001", "AAA", "stop")]
+    assert after.stop_updates == []

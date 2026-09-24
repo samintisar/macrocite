@@ -26,7 +26,7 @@ All values are computed on adjusted OHLC of the **US** stock (`adjusted_bars()` 
 | Trend | close > SMA50 **and** SMA50 > SMA200 | close > SMA50 | close > SMA20 |
 | Trigger | RSI(2) < 10 (Wilder) | close > max(close of prior 20 sessions) **and** volume ≥ 1.5 × mean(volume of prior 50 sessions) | Positive reading (spec 03) on a document whose legal close is within the last 3 sessions **and** close > prior session high |
 | Stop level (set at signal) | min(low of last 3 sessions) − 0.5 × ATR | close − 2 × ATR | close − 2 × ATR |
-| Trailing stop | none | max(current stop, highest close since entry − 3 × ATR(today)); only ratchets up | none |
+| Trailing stop | none | max(current stop, highest close since entry − 3 × ATR(today)); only ratchets up. Timing: at each close, the close is first checked against the stop set at the previous close; only then does the stop ratchet (the highest close includes today's), so a raised stop first applies at the next close | none |
 | Target | entry + 2R | none | entry + 2R |
 | Time limit | 10 sessions held | 30 sessions held | 10 sessions held |
 
@@ -156,3 +156,4 @@ A **combined** run of all passing setups is reported for information only. It do
 - 2026-09-24: the spread survey needs at least 5 distinct `cdr_symbol`s with both bid and ask (repeat readings of one CDR still count toward the median). A row that is not a mapping, lacks `cdr_symbol`, or has a non-numeric bid/ask is an error naming its row index.
 - 2026-09-24: the config loader requires `h2_start` to be exactly the day after `h1_end`, so the halves are contiguous.
 - 2026-09-24: positions still open when a run ends are stored in the trade log (`open_at_end`) and listed in their own report section (symbol, setup, entry date, entry price, last close, unrealized P&L before exit costs). They are excluded from the trade stats; the equity metrics include them.
+- 2026-09-24: trailing-stop timing written down (unchanged behaviour): each close is checked against the stop set at the previous close, then the stop ratchets.
