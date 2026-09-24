@@ -340,6 +340,7 @@ def backtest_run(
         raise typer.Exit(1)
     strategy, sha = load_strategy_config(config)
     try:
+        now = datetime.now(NEW_YORK)
         check_config_path(REPO_ROOT, config, strategy.version)
         check_cost_matches_survey(
             strategy.cost_per_side, load_spread_survey(SPREAD_SURVEY_PATH).cost_per_side
@@ -354,8 +355,9 @@ def backtest_run(
                 universe=load_universe(UNIVERSE_PATH),
                 calendar=NyseSessions(),
                 git_sha=git_sha(REPO_ROOT),
-                run_date=datetime.now(NEW_YORK).date(),
+                run_date=now.date(),
                 reports_dir=REPORTS_DIR,
+                now=now,
             )
             _print_run(run)
     except (RunRefusedError, SpreadSurveyError) as error:

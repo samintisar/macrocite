@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 import httpx
@@ -331,6 +331,9 @@ def test_backtest_run_wires_config_calendar_and_git(
     assert result.exit_code == 0, result.stderr
     assert (calls["setup"], calls["jev_mode"], calls["git_sha"]) == ("breakout", "off", "abc123")
     assert calls["calendar"] == "calendar"
+    now = calls["now"]
+    assert isinstance(now, datetime) and now.utcoffset() is not None  # an aware clock
+    assert calls["run_date"] == now.date()
     assert calls["config_sha256"] == load_strategy_config(FIXTURE_CONFIG)[1]
     assert "FAIL" in result.stdout
     assert "-- trades: 12.000 vs 30.000" in result.stdout

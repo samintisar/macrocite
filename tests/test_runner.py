@@ -1,6 +1,7 @@
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlmodel import Session, select
@@ -26,6 +27,8 @@ from strategy_helpers import (
 
 DAYS = weekdays(date(2011, 1, 3), 300)  # DAYS[260] is 2012-01-02
 DIP = 265
+NEW_YORK = ZoneInfo("America/New_York")
+LATER = datetime(2026, 9, 24, 20, 0, tzinfo=NEW_YORK)  # long after the last fixture bar
 UNIVERSE = [
     CdrEntry("AAA", "ZAAA", "ZAAA.NE", "Aaa", "Information Technology"),
     CdrEntry("BBB", "ZBBB", "ZBBB.NE", "Bbb", "Energy"),
@@ -61,7 +64,9 @@ def seeded(session: Session) -> Session:
     return session
 
 
-def _run(session: Session, tmp_path: Path, setup: str = "pullback") -> tuple[BacktestRun, Path]:
+def _run(
+    session: Session, tmp_path: Path, setup: str = "pullback", now: datetime = LATER
+) -> tuple[BacktestRun, Path]:
     return run_backtest(
         session,
         setup=setup,  # type: ignore[arg-type]
@@ -73,6 +78,7 @@ def _run(session: Session, tmp_path: Path, setup: str = "pullback") -> tuple[Bac
         git_sha="abc123",
         run_date=date(2026, 9, 24),
         reports_dir=tmp_path,
+        now=now,
     )
 
 
@@ -133,6 +139,55 @@ def test_a_changed_config_under_a_used_version_is_refused(seeded: Session, tmp_p
             seeded, setup="pullback", jev_mode="off", config=load_test_config(),
             config_sha256="e" * 64, universe=UNIVERSE, calendar=WeekdaySessions(),
             git_sha="abc123", run_date=date(2026, 9, 24), reports_dir=tmp_path / "other",
+            now=LATER,
         )
     assert len(seeded.exec(select(BacktestRun)).all()) == 1
     assert not (tmp_path / "other").exists()
+
+
+def test_a_series_that_stops_before_the_last_session_is_refused(
+    session: Session, tmp_path: Path
+) -> None:
+    _store(session, "AAA", TickerKind.us_stock, series(DAYS, pullback_closes(len(DAYS), dip=DIP)))
+    _store(session, "BBB", TickerKind.us_stock, trend_bars(DAYS, 50.0, 0.1)[:-3])  # 3 stale
+    _store(session, "QQQ", TickerKind.benchmark, trend_bars(DAYS, 300.0, 0.5))
+    with pytest.raises(RunRefusedError) as refused:
+        _run(session, tmp_path)
+    message = str(refused.value)
+    assert f"BBB (last bar {DAYS[-4].isoformat()})" in message
+    assert "AAA" not in message
+    assert DAYS[-1].isoformat() in message  # the run's last session
+    assert "signalbench ingest prices" in message
+    assert session.exec(select(BacktestRun)).all() == []
+
+
+def test_a_symbol_with_no_bars_is_refused(session: Session, tmp_path: Path) -> None:
+    _store(session, "AAA", TickerKind.us_stock, series(DAYS, pullback_closes(len(DAYS), dip=DIP)))
+    _store(session, "BBB", TickerKind.us_stock, [])
+    _store(session, "QQQ", TickerKind.benchmark, trend_bars(DAYS, 300.0, 0.5))
+    with pytest.raises(RunRefusedError, match=r"BBB \(no bars\)"):
+        _run(session, tmp_path)
+
+
+def test_todays_partial_bar_is_dropped_before_16_15_new_york(
+    seeded: Session, tmp_path: Path
+) -> None:
+    today = DAYS[-1]  # the fixture's last bar is "today"
+    before = datetime(today.year, today.month, today.day, 16, 14, tzinfo=NEW_YORK)
+    run, _ = _run(seeded, tmp_path, now=before)
+    assert run.end_date == DAYS[-2]
+    stored = {
+        "AAA": series(DAYS, pullback_closes(len(DAYS), dip=DIP))[:-1],
+        "BBB": trend_bars(DAYS, 50.0, 0.1)[:-1],
+        "QQQ": trend_bars(DAYS, 300.0, 0.5)[:-1],
+    }
+    assert run.data_fingerprint == data_fingerprint(stored.items())
+    # The same instant in UTC is still before 16:15 in New York.
+    utc = before.astimezone(ZoneInfo("UTC"))
+    assert _run(seeded, tmp_path, now=utc)[0].end_date == DAYS[-2]
+
+
+def test_todays_bar_is_kept_from_16_15_new_york(seeded: Session, tmp_path: Path) -> None:
+    today = DAYS[-1]
+    at = datetime(today.year, today.month, today.day, 16, 15, tzinfo=NEW_YORK)
+    assert _run(seeded, tmp_path, now=at)[0].end_date == today

@@ -1,9 +1,10 @@
 """Load real data, run one backtest, store it, and write its report (spec 02)."""
 
-from dataclasses import dataclass
-from datetime import date
+from dataclasses import dataclass, replace
+from datetime import date, datetime, time
 from pathlib import Path
 from typing import Literal
+from zoneinfo import ZoneInfo
 
 from sqlmodel import Session, col, select
 
@@ -11,7 +12,10 @@ from signalbench.backtest.benchmarks import benchmark_stats, buy_and_hold, equal
 from signalbench.backtest.fingerprint import data_fingerprint
 from signalbench.backtest.metrics import run_metrics
 from signalbench.backtest.passbar import evaluate_pass_bar, passes
-from signalbench.backtest.preregistration import check_version_unchanged
+from signalbench.backtest.preregistration import (
+    RunRefusedError,
+    check_version_unchanged,
+)
 from signalbench.backtest.report import (
     metrics_payload,
     pass_bar_payload,
@@ -36,6 +40,8 @@ SETUPS_BY_RUN: dict[str, tuple[SetupName, ...]] = {
     "breakout": ("breakout",),
     "combined": ("pullback", "breakout"),
 }
+NEW_YORK = ZoneInfo("America/New_York")
+DAILY_BAR_FINAL = time(16, 15)  # a bar dated today (New York) is partial before this time
 QQQ_BENCHMARK = "QQQ buy-and-hold"
 SURVIVOR_BENCHMARK = "Survivor benchmark (equal weight, not rebalanced)"
 
@@ -83,6 +89,40 @@ def load_market_inputs(
     return MarketInputs(symbols=symbols, benchmark=benchmark)
 
 
+def drop_partial_session(inputs: MarketInputs, now: datetime) -> MarketInputs:
+    """Drop today's bars when the latest benchmark bar is today (New York) and it is before 16:15."""
+    local = now.astimezone(NEW_YORK)
+    today = local.date()
+    if inputs.benchmark[-1].date != today or local.time() >= DAILY_BAR_FINAL:
+        return inputs
+    return MarketInputs(
+        symbols=[
+            replace(item, bars=[bar for bar in item.bars if bar.date < today])
+            for item in inputs.symbols
+        ],
+        benchmark=[bar for bar in inputs.benchmark if bar.date < today],
+    )
+
+
+def _series_end(item: SymbolInput) -> str:
+    return f"last bar {item.bars[-1].date.isoformat()}" if item.bars else "no bars"
+
+
+def check_series_current(symbols: list[SymbolInput], last_session: date) -> None:
+    """Every universe series must end on the run's last session (no stale or truncated data)."""
+    behind = [
+        f"{item.symbol} ({_series_end(item)})"
+        for item in symbols
+        if not item.bars or item.bars[-1].date != last_session
+    ]
+    if behind:
+        raise RunRefusedError(
+            f"These price series do not end on the run's last session "
+            f"{last_session.isoformat()}: {', '.join(behind)}. "
+            "Run `signalbench ingest prices` and try again."
+        )
+
+
 def run_backtest(
     session: Session,
     *,
@@ -95,23 +135,34 @@ def run_backtest(
     git_sha: str,
     run_date: date,
     reports_dir: Path,
+    now: datetime,
     end: date | None = None,
 ) -> tuple[BacktestRun, Path]:
     """Run one setup (or the combined set) with Jev off, store it, and write the report.
 
-    Refuses (RunRefusedError) when stored runs of this strategy version used another config.
+    Refuses (RunRefusedError) when stored runs of this strategy version used another config, or
+    when a universe series does not end on the run's last session. `now` is the clock: today's
+    bars are dropped as partial before 16:15 New York time.
     """
     config = config.with_setups(setups_for_run(setup, jev_mode))
     check_version_unchanged(session, config.version, config_sha256)
-    inputs = load_market_inputs(session, universe, config.regime_symbol, end)
+    inputs = drop_partial_session(
+        load_market_inputs(session, universe, config.regime_symbol, end), now
+    )
+    if not inputs.benchmark:
+        raise RunRefusedError(f"No complete {config.regime_symbol} bars yet.")
     last = inputs.benchmark[-1].date if end is None else end
     start = config.backtest.start
+    run_sessions = calendar.sessions_between(start, last)
+    if not run_sessions:
+        raise RunRefusedError(f"No sessions between {start} and {last}.")
+    check_series_current(inputs.symbols, run_sessions[-1])
     lookahead = max(config.earnings_blackout_sessions, config.earnings_exit_sessions)
-    sessions = calendar.sessions_between(start, last) + calendar.next_sessions(last, lookahead)
+    sessions = run_sessions + calendar.next_sessions(last, lookahead)
     market = MarketView(inputs.symbols, inputs.benchmark, sessions, config)
     result = simulate(market, NullReadingsView(), config, start, last)
     metrics = run_metrics(result, config.backtest)
-    run_sessions = market.sessions_between(result.start, result.end)
+    run_sessions = market.sessions_between(result.start, result.end)  # the simulated sessions
     qqq = benchmark_stats(QQQ_BENCHMARK, buy_and_hold(inputs.benchmark, run_sessions), run_sessions)
     survivor = benchmark_stats(
         SURVIVOR_BENCHMARK,
