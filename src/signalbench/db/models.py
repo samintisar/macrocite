@@ -170,3 +170,41 @@ class BacktestRun(SQLModel, table=True):
         default_factory=utcnow,
         sa_column=Column(UTCDateTime(), nullable=False),
     )
+
+
+class JevReading(SQLModel, table=True):
+    """One Jev reading of one document for one ticker (spec 03). Written by `jev backfill`."""
+
+    __tablename__ = "jev_readings"
+    __table_args__ = (
+        UniqueConstraint(
+            "document_id",
+            "ticker_id",
+            "model_requested",
+            "question_set",
+            name="uq_jev_readings_document_ticker_model_questions",
+        ),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    document_id: uuid.UUID = Field(
+        foreign_key="raw_documents.id", ondelete="CASCADE", index=True
+    )
+    ticker_id: uuid.UUID = Field(foreign_key="tickers.id", ondelete="RESTRICT")
+    model_requested: str
+    model_resolved: str
+    question_set: str
+    response_id: str
+    p_negative: float
+    p_neutral: float
+    p_positive: float
+    event_type: str
+    p_routine: float
+    answers: dict[str, Any] = Field(sa_column=Column(JSON, nullable=False))
+    input_tokens: int
+    cost_usd: float
+    latency_ms: int
+    read_at: datetime = Field(
+        default_factory=utcnow,
+        sa_column=Column(UTCDateTime(), nullable=False),
+    )

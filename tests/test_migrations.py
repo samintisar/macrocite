@@ -14,7 +14,7 @@ def _script() -> ScriptDirectory:
 
 
 def test_migrations_have_single_head() -> None:
-    assert _script().get_heads() == ["0010_backtest_runs"]
+    assert _script().get_heads() == ["0011_jev_readings"]
 
 
 def test_0007_drops_sentiment_tables_and_enum() -> None:
@@ -38,3 +38,12 @@ def test_0010_creates_backtest_runs_with_json_payloads() -> None:
     assert 'op.create_table(\n        "backtest_runs"' in text
     for column in ("metrics", "pass_bar", "trade_log"):
         assert f'sa.Column("{column}", sa.JSON(), nullable=False)' in text
+
+
+def test_0011_creates_jev_readings_unique_per_document_ticker_model_and_questions() -> None:
+    text = (VERSIONS / "0011_jev_readings.py").read_text(encoding="utf-8")
+    assert 'down_revision: str | None = "0010_backtest_runs"' in text
+    assert 'op.create_table(\n        "jev_readings"' in text
+    assert 'sa.Column("answers", sa.JSON(), nullable=False)' in text
+    assert '["document_id"], ["raw_documents.id"], ondelete="CASCADE"' in text
+    assert '"uq_jev_readings_document_ticker_model_questions"' in text
