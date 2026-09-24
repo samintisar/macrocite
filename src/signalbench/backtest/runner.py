@@ -91,7 +91,12 @@ def load_market_inputs(
 
 
 def drop_partial_session(inputs: MarketInputs, now: datetime) -> MarketInputs:
-    """Drop today's bars when the latest benchmark bar is today (New York) and it is before 16:15."""
+    """Drop today's bars when the latest benchmark bar is today (New York) and it is before 16:15.
+
+    `now` must be timezone-aware: a naive clock would be read in the machine's local zone.
+    """
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise ValueError(f"now must be timezone-aware, got naive {now.isoformat()}")
     local = now.astimezone(NEW_YORK)
     today = local.date()
     if inputs.benchmark[-1].date != today or local.time() >= DAILY_BAR_FINAL:

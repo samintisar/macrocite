@@ -30,9 +30,10 @@ def check_version_unchanged(session: Session, version: str, config_sha256: str) 
     others = sorted(set(stored) - {config_sha256})
     if others:
         raise RunRefusedError(
-            f"Strategy {version} already has runs with config_sha256 {others[0][:12]}..., and this "
-            f"config is {config_sha256[:12]}.... A changed {version} config must be a new version "
-            "(e.g. data/strategy_v2.yaml), reported as post-hoc (spec 02 pre-registration)."
+            f"Strategy {version} already has runs with config_sha256 starting {others[0][:12]}, "
+            f"but this config's starts {config_sha256[:12]}. A changed {version} config must be "
+            "a new version (e.g. data/strategy_v2.yaml), reported as post-hoc "
+            "(spec 02 pre-registration)."
         )
 
 

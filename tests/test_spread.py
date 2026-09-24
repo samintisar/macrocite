@@ -109,3 +109,12 @@ def _raw_survey(tmp_path: Path, body: str) -> Path:
 def test_malformed_rows_name_the_row(tmp_path: Path, body: str, message: str) -> None:
     with pytest.raises(SpreadSurveyError, match=message):
         load_spread_survey(_raw_survey(tmp_path, body))
+
+
+def test_cdr_symbols_are_stripped_before_the_distinct_count(tmp_path: Path) -> None:
+    rows = "".join(f"  - {{cdr_symbol: Z{i}, bid: 99.9, ask: 100.1}}\n" for i in range(4))
+    rows += "  - {cdr_symbol: ' Z0 ', bid: 99.8, ask: 100.2}\n"  # the same CDR, padded
+    path = tmp_path / "cdr_spread_survey.yaml"
+    path.write_text("readings:\n" + rows, encoding="utf-8")
+    with pytest.raises(SpreadSurveyError, match="across 4 distinct CDRs"):
+        load_spread_survey(path)

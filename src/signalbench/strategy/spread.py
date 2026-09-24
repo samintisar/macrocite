@@ -56,10 +56,10 @@ def _symbol(item: object, index: int) -> tuple[dict[str, Any], str]:
     if not isinstance(item, dict):
         raise SpreadSurveyError(f"readings[{index}]: expected a mapping, got {item!r}")
     row = cast(dict[str, Any], item)
-    symbol = row.get("cdr_symbol")
-    if symbol is None or str(symbol).strip() == "":
+    symbol = "" if row.get("cdr_symbol") is None else str(row["cdr_symbol"]).strip()
+    if not symbol:
         raise SpreadSurveyError(f"readings[{index}]: missing cdr_symbol")
-    return row, str(symbol)
+    return row, symbol
 
 
 def load_spread_survey(path: Path) -> SpreadSurvey:

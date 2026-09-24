@@ -229,3 +229,8 @@ def test_a_stale_benchmark_is_named_in_the_refusal(session: Session, tmp_path: P
     assert f"QQQ (last bar {DAYS[-3].isoformat()})" in message
     assert DAYS[-1].isoformat() in message  # the latest session in the data
     assert "AAA" not in message and "BBB" not in message
+
+
+def test_a_naive_clock_is_rejected(seeded: Session, tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="timezone-aware"):
+        _run(seeded, tmp_path, now=datetime(2026, 9, 24, 12, 0))  # noqa: DTZ001  # naive on purpose
