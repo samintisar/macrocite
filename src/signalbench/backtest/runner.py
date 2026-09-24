@@ -26,7 +26,7 @@ from signalbench.backtest.report import (
 from signalbench.backtest.simulator import simulate
 from signalbench.db.models import BacktestRun, Ticker
 from signalbench.ingest.cdr import CdrEntry
-from signalbench.ingest.earnings import earnings_dates
+from signalbench.ingest.earnings import sec_earnings_dates
 from signalbench.market.bars import AdjustedBar, adjusted_bars
 from signalbench.market.calendar import Sessions
 from signalbench.strategy.config import SetupName, StrategyConfig
@@ -67,7 +67,7 @@ class MarketInputs:
 def load_market_inputs(
     session: Session, universe: list[CdrEntry], benchmark_symbol: str, end: date | None
 ) -> MarketInputs:
-    """Adjusted US bars, clustered earnings dates, and sectors for every universe name."""
+    """Adjusted US bars, every SEC Item 2.02 date (unclustered), and sectors per universe name."""
     wanted = [entry.us_symbol for entry in universe] + [benchmark_symbol]
     rows = session.exec(select(Ticker).where(col(Ticker.symbol).in_(wanted))).all()
     tickers = {ticker.symbol: ticker for ticker in rows}
@@ -79,7 +79,7 @@ def load_market_inputs(
             symbol=entry.us_symbol,
             sector=entry.sector,
             bars=adjusted_bars(session, tickers[entry.us_symbol].id, end=end),
-            earnings=earnings_dates(session, tickers[entry.us_symbol].id),
+            earnings=sec_earnings_dates(session, tickers[entry.us_symbol].id),
         )
         for entry in sorted(universe, key=lambda e: e.us_symbol)
     ]

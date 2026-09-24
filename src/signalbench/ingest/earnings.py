@@ -130,3 +130,18 @@ def earnings_dates(session: Session, ticker_id: uuid.UUID) -> list[date]:
         select(col(EarningsEvent.event_date)).where(EarningsEvent.ticker_id == ticker_id)
     ).all()
     return cluster_earliest(list(dates))
+
+
+def sec_earnings_dates(session: Session, ticker_id: uuid.UUID) -> list[date]:
+    """Every realized SEC Item 2.02 date, sorted and unclustered (the backtest's earnings dates).
+
+    Stricter than earnings_dates(): no Finnhub calendar dates, and no clustering, so every
+    2.02 filing date triggers the blackout and the earnings exit.
+    """
+    dates = session.exec(
+        select(col(EarningsEvent.event_date)).where(
+            EarningsEvent.ticker_id == ticker_id,
+            EarningsEvent.source == SEC_EARNINGS_SOURCE,
+        )
+    ).all()
+    return sorted(set(dates))

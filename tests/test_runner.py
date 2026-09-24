@@ -10,10 +10,11 @@ from signalbench.backtest.fingerprint import data_fingerprint
 from signalbench.backtest.preregistration import RunRefusedError
 from signalbench.backtest.runner import (
     RequiresSpec03Error,
+    load_market_inputs,
     run_backtest,
     setups_for_run,
 )
-from signalbench.db.models import BacktestRun, Price, Ticker, TickerKind
+from signalbench.db.models import BacktestRun, EarningsEvent, Price, Ticker, TickerKind
 from signalbench.ingest.cdr import CdrEntry
 from signalbench.market.bars import AdjustedBar
 from strategy_helpers import (
@@ -191,3 +192,18 @@ def test_todays_bar_is_kept_from_16_15_new_york(seeded: Session, tmp_path: Path)
     today = DAYS[-1]
     at = datetime(today.year, today.month, today.day, 16, 15, tzinfo=NEW_YORK)
     assert _run(seeded, tmp_path, now=at)[0].end_date == today
+
+
+def test_backtest_earnings_are_every_sec_2_02_date_unclustered(seeded: Session) -> None:
+    aaa = seeded.exec(select(Ticker).where(Ticker.symbol == "AAA")).one()
+    for day, source in (
+        (date(2015, 1, 5), "sec_2.02"),
+        (date(2015, 1, 7), "sec_2.02"),  # within 3 days: clustered away by earnings_dates()
+        (date(2015, 1, 5), "finnhub"),
+        (date(2015, 4, 20), "finnhub"),  # calendar-only dates are not used by the backtest
+    ):
+        seeded.add(EarningsEvent(ticker_id=aaa.id, event_date=day, source=source))
+    seeded.commit()
+    inputs = load_market_inputs(seeded, UNIVERSE, "QQQ", None)
+    earnings = {item.symbol: item.earnings for item in inputs.symbols}
+    assert earnings == {"AAA": [date(2015, 1, 5), date(2015, 1, 7)], "BBB": []}
