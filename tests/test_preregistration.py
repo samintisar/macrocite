@@ -9,6 +9,7 @@ from sqlmodel import Session
 from signalbench.backtest.preregistration import (
     RunRefusedError,
     check_config_path,
+    check_cost_matches_survey,
     check_version_unchanged,
 )
 from signalbench.db.models import BacktestRun
@@ -57,3 +58,12 @@ def test_a_changed_config_under_the_same_version_is_refused(session: Session) ->
     _stored(session, "v1", "a" * 64)
     with pytest.raises(RunRefusedError, match="new version"):
         check_version_unchanged(session, "v1", "c" * 64)
+
+
+def test_config_cost_must_equal_the_survey_cost() -> None:
+    check_cost_matches_survey(0.003, 0.003)
+    check_cost_matches_survey(0.0025, round(0.0025000001, 6))  # the survey rounds to 6 decimals
+    with pytest.raises(RunRefusedError, match=r"0.002.*0.003"):
+        check_cost_matches_survey(0.002, 0.003)
+    with pytest.raises(RunRefusedError):
+        check_cost_matches_survey(0.003001, 0.003)

@@ -10,7 +10,11 @@ import httpx
 import typer
 from sqlmodel import Session, col, select
 
-from signalbench.backtest.preregistration import RunRefusedError, check_config_path
+from signalbench.backtest.preregistration import (
+    RunRefusedError,
+    check_config_path,
+    check_cost_matches_survey,
+)
 from signalbench.backtest.provenance import committed_unchanged, git_sha
 from signalbench.backtest.report import render_report
 from signalbench.backtest.runner import (
@@ -327,9 +331,19 @@ def backtest_run(
             err=True,
         )
         raise typer.Exit(1)
+    if not SPREAD_SURVEY_PATH.exists() or not committed_unchanged(REPO_ROOT, SPREAD_SURVEY_PATH):
+        typer.echo(
+            f"{SPREAD_SURVEY_PATH.name} must be committed, unchanged, before a backtest on real "
+            "data: it sets cost_per_side (spec 02 pre-registration).",
+            err=True,
+        )
+        raise typer.Exit(1)
     strategy, sha = load_strategy_config(config)
     try:
         check_config_path(REPO_ROOT, config, strategy.version)
+        check_cost_matches_survey(
+            strategy.cost_per_side, load_spread_survey(SPREAD_SURVEY_PATH).cost_per_side
+        )
         with get_session() as session:
             run, path = run_backtest(
                 session,
@@ -344,7 +358,7 @@ def backtest_run(
                 reports_dir=REPORTS_DIR,
             )
             _print_run(run)
-    except RunRefusedError as error:
+    except (RunRefusedError, SpreadSurveyError) as error:
         typer.echo(str(error), err=True)
         raise typer.Exit(1) from None
     typer.echo(f"report: {path}")

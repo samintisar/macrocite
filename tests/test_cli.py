@@ -215,14 +215,63 @@ def _stored_run(session: Session) -> BacktestRun:
     return run
 
 
+def _survey_rows(bid: float, ask: float) -> str:
+    return "readings:\n" + "".join(
+        f"  - {{cdr_symbol: Z{i}, bid: {bid}, ask: {ask}}}\n" for i in range(5)
+    )
+
+
 def _registered_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
-    """The fixture config copied to <repo>/data/strategy_test.yaml, with REPO_ROOT = tmp_path."""
+    """The fixture config at <repo>/data/strategy_test.yaml with REPO_ROOT = tmp_path, and a
+    survey whose 0.2% median spread gives the fixture's cost_per_side of 0.002."""
     (tmp_path / "data").mkdir(exist_ok=True)
     config = tmp_path / "data" / "strategy_test.yaml"
     config.write_bytes(FIXTURE_CONFIG.read_bytes())
+    survey = tmp_path / "data" / "cdr_spread_survey.yaml"
+    survey.write_text(_survey_rows(99.9, 100.1), encoding="utf-8")
     monkeypatch.setattr(cli, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(cli, "SPREAD_SURVEY_PATH", survey)
     monkeypatch.setattr(cli, "committed_unchanged", lambda _repo, _path: True)
     return config
+
+
+def test_backtest_run_needs_a_committed_survey(
+    session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = _registered_config(monkeypatch, tmp_path)
+    monkeypatch.setattr(cli, "committed_unchanged", lambda _repo, path: path == config)
+    monkeypatch.setattr(cli, "get_session", lambda: session)
+    result = runner.invoke(app, ["backtest", "run", "--setup", "pullback", "--config", str(config)])
+    assert result.exit_code == 1
+    assert "cdr_spread_survey.yaml must be committed, unchanged" in result.stderr
+
+
+def test_backtest_run_refuses_an_unfilled_survey(
+    session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = _registered_config(monkeypatch, tmp_path)
+    (tmp_path / "data" / "cdr_spread_survey.yaml").write_text(
+        "readings:\n  - {cdr_symbol: ZNVD, bid: , ask: }\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(cli, "get_session", lambda: session)
+    result = runner.invoke(app, ["backtest", "run", "--setup", "pullback", "--config", str(config)])
+    assert result.exit_code == 1
+    assert "readings with both bid and ask" in result.stderr
+
+
+def test_backtest_run_refuses_a_cost_that_differs_from_the_survey(
+    session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = _registered_config(monkeypatch, tmp_path)
+    # A 0.4% median spread gives 0.003; the config says 0.002.
+    (tmp_path / "data" / "cdr_spread_survey.yaml").write_text(
+        _survey_rows(99.8, 100.2), encoding="utf-8"
+    )
+    monkeypatch.setattr(cli, "get_session", lambda: session)
+    result = runner.invoke(app, ["backtest", "run", "--setup", "pullback", "--config", str(config)])
+    assert result.exit_code == 1
+    assert "cost_per_side 0.002" in result.stderr
+    assert "0.003" in result.stderr
 
 
 def test_backtest_run_refuses_a_config_outside_data_strategy_version(

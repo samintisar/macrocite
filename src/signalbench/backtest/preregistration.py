@@ -34,3 +34,13 @@ def check_version_unchanged(session: Session, version: str, config_sha256: str) 
             f"config is {config_sha256[:12]}.... A changed {version} config must be a new version "
             "(e.g. data/strategy_v2.yaml), reported as post-hoc (spec 02 pre-registration)."
         )
+
+
+def check_cost_matches_survey(config_cost: float, survey_cost: float) -> None:
+    """The config's cost_per_side must be the committed survey's (already rounded to 6 dp)."""
+    if config_cost != survey_cost:
+        raise RunRefusedError(
+            f"The config has cost_per_side {config_cost}, but the committed spread survey gives "
+            f"{survey_cost}. Set cost_per_side from `signalbench backtest cost` "
+            "(spec 02 pre-registration)."
+        )
