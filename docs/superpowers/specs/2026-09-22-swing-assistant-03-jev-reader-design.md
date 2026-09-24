@@ -144,3 +144,11 @@ signalbench jev calibration
 
 - 2026-09-22: created.
 - 2026-09-24: API facts checked live: the endpoint is `https://openrouter.ai/api/alpha/decisions`; the error codes and retry rules above; $0.042 per 1M input tokens, output free. `jev_readings` is migration `0011`. The filter decision is written to `data/jev_filter_v1.yaml` instead of `data/strategy_v1.yaml`, which must not change. Step 4 now follows the spec 02 go/no-go (both v1 setups failed): a filtered run is information only, and `--jev filter` is refused while the filter is information-only. Plan: `2026-09-24-swing-03-jev-reader.md`.
+- 2026-09-24: implementation choices (plan `2026-09-24-swing-03-jev-reader.md`):
+  - Readings are per (document, ticker): `jev_readings` adds `ticker_id` and `response_id` and is unique on (`document_id`, `ticker_id`, `model_requested`, `question_set`), because 17.6% of universe documents name two or more universe tickers and the state names one company. Only the 40 universe tickers' documents are read.
+  - Failed documents are not stored; each prints a `skip` line and is retried on the next run. 401, 402, and 404 stop the backfill; 20 failures in a row stop it too. A state over 100,000 characters is skipped before any call.
+  - The budget guard stops submitting once the summed cost reaches `--max-cost-usd` (on `jev backfill`); at most 3 calls in flight still finish. A budget stop exits 0.
+  - Legal close uses real NYSE close times, so a document after a 13:00 early close waits for the next session.
+  - Filter: the latest stored v1 Jev-off run of each setup, pooled; an eligible θ also needs one kept trade; ties go to the lower θ. `data/jev_filter_v1.yaml` records `theta_fit` and `theta_block` (null unless ON) and is written once. `--jev filter` uses block and catalyst ranking, as live will; `--setup sentiment --jev filter` is refused.
+  - Sentiment runs use the committed v1 config with only `start`, `h1_end`, and `h2_start` overridden. Runs that read Jev store `metrics.jev` (readings, builds, `information_only`, and the out-of-sample stats by signal date) and add a readings entry to `data_fingerprint`.
+  - A filtered run's result is printed and reported as `PASS (information only)` or `FAIL (information only)`. `NyseSessions.sessions_between` clamps a start before the calendar's first session (2010-01-01 is a holiday).

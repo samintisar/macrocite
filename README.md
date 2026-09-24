@@ -2,7 +2,7 @@
 
 SignalBench is a personal swing-trading research assistant for US-company CDRs (Canadian Depositary Receipts) traded on Cboe Canada.
 
-The project is deliberately **not a trading bot**. It does not connect to a broker, place orders, or make autonomous investment decisions. Trading setups are rule-based and run as code, not model guesses; a future reader called Jev (spec 03) will read recent SEC filings and news as a supporting signal. The owner reviews every candidate and places every trade by hand on Wealthsimple. Nothing here is investment advice.
+The project is deliberately **not a trading bot**. It does not connect to a broker, place orders, or make autonomous investment decisions. Trading setups are rule-based and run as code, not model guesses; a reader called Jev (spec 03, TypeSafe's decision model through OpenRouter) reads SEC filings and news as a supporting signal. The owner reviews every candidate and places every trade by hand on Wealthsimple. Nothing here is investment advice.
 
 ## Why this project exists
 
@@ -20,6 +20,7 @@ Discretionary swing trading is hard to evaluate honestly — it's easy to rememb
 - Ingests SEC 8-K filings since 2016, with acceptance time, item codes, EX-99 exhibits, and cleaned filing text.
 - Records earnings dates from SEC Item 2.02 filings and the Finnhub earnings calendar.
 - Ingests Finnhub company news per ticker.
+- Has Jev read each stored 8-K and news item once per ticker, decides by a pre-registered rule whether a negative reading may block entries, backtests the Sentiment setup, and writes a calibration report (spec 03).
 - Stores tickers, prices, filings/news, and earnings events in PostgreSQL.
 - Provides a minimal FastAPI health endpoint for service checks.
 
@@ -73,6 +74,12 @@ SEC_USER_AGENT=SignalBench/0.1 (you@example.com)
 FINNHUB_API_KEY=your-finnhub-api-key
 ```
 
+For the Jev reader (spec 03), also add an OpenRouter key. `signalbench jev test` and `jev backfill` stop with a clear message without it:
+
+```dotenv
+OPENROUTER_API_KEY=your-openrouter-api-key
+```
+
 The default database URL matches `docker-compose.yml` (port 5432). If you run Postgres on 5433 via `docker-compose.port.yml`, update the port to match:
 
 ```dotenv
@@ -103,8 +110,12 @@ uv run signalbench ingest stats
 | `uv run signalbench ingest all` | Run prices, filings, earnings, and news in order |
 | `uv run signalbench ingest stats` | Print per-table row counts |
 | `uv run signalbench backtest cost [--survey PATH]` | Median CDR spread from `data/cdr_spread_survey.yaml` and the resulting cost per side |
-| `uv run signalbench backtest run --setup {pullback,breakout,combined} [--jev off] [--config PATH]` | Simulate on stored data with the committed `data/strategy_v1.yaml`, store the run, and write `reports/backtests/<date>-<setup>-<jev>.md`. `sentiment` and `--jev filter` need spec 03 |
+| `uv run signalbench backtest run --setup {pullback,breakout,sentiment,combined} [--jev {off,filter}] [--config PATH]` | Simulate on stored data with the committed `data/strategy_v1.yaml`, store the run, and write `reports/backtests/<date>-<setup>-<jev>.md`. `sentiment` needs Jev readings and runs 2016 → end; `--jev filter` is information only and needs a committed `data/jev_filter_v1.yaml` with the filter ON |
 | `uv run signalbench backtest show RUN_ID` | Reprint a stored run's report |
+| `uv run signalbench jev test` | One real Jev call on a small made-up 8-K; prints the answers, latency, cost, and resolved build |
+| `uv run signalbench jev backfill [--source filings\|news\|all] [--since DATE] [--max-cost-usd N]` | Read every unread 8-K and news item once per universe ticker (news capped at 20 per symbol per day); resumable; stops cleanly at the budget (default $10) |
+| `uv run signalbench jev fit-filter [--write]` | The pre-registered filter decision; `--write` records `data/jev_filter_v1.yaml` and `reports/jev/<date>-filter-decision.md` once |
+| `uv run signalbench jev calibration` | Write `reports/jev/<date>-calibration.md` (information only) |
 
 ## Run the API locally
 
@@ -141,7 +152,7 @@ uv run ruff check .
 uv run mypy src
 ```
 
-Tests cover CDR universe parsing, price ingestion and adjustment, the liquidity filter, filing ingestion and text cleaning, earnings-date clustering, Finnhub news ingestion, CLI wiring, migrations, and API health. All tests run against in-memory SQLite or fixtures and make no network calls.
+Tests cover CDR universe parsing, price ingestion and adjustment, the liquidity filter, filing ingestion and text cleaning, earnings-date clustering, Finnhub news ingestion, the Jev client and backfill (against a fake client and mocked HTTP), the filter decision, calibration, CLI wiring, migrations, and API health. All tests run against in-memory SQLite or fixtures and make no network calls.
 
 ## Project layout
 
@@ -152,9 +163,10 @@ src/signalbench/
 ├── strategy/       Pre-registered config, indicators, market view, and the pure decide() (spec 02)
 ├── db/             SQLModel models and database sessions
 ├── ingest/         CDR universe, prices, filings, earnings, news, and seeding
+├── jev/            Jev client, backfill, filter decision, and calibration (spec 03)
 └── market/         Adjusted OHLC bars and the NYSE session calendar
-data/               Checked-in CDR universe, spread survey, and strategy parameters
-reports/            Committed backtest reports
+data/               Checked-in CDR universe, spread survey, strategy parameters, and the Jev filter decision
+reports/            Committed backtest, filter-decision, and calibration reports
 alembic/            Database migrations
 tests/              Unit, integration, and regression tests
 ```
