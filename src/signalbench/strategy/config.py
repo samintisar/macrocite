@@ -2,7 +2,7 @@
 
 import hashlib
 from dataclasses import dataclass, replace
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Literal, cast, get_args
 
@@ -227,8 +227,11 @@ def parse_strategy_config(raw: object, where: str = "config") -> StrategyConfig:
     )
     for section in (top, regime, indicators, liquidity, earnings, setups, pull, brk, sent, back, bar):
         section.done()
-    if config.backtest.h2_start <= config.backtest.h1_end:
-        raise ConfigError(f"{where}.backtest: h2_start must be after h1_end")
+    if config.backtest.h2_start != config.backtest.h1_end + timedelta(days=1):
+        raise ConfigError(
+            f"{where}.backtest: h2_start must be the day after h1_end (contiguous halves), "
+            f"got h1_end {config.backtest.h1_end} and h2_start {config.backtest.h2_start}"
+        )
     return config
 
 

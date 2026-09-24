@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
@@ -87,3 +87,18 @@ def test_with_setups_keeps_priority_order() -> None:
     assert config.with_setups(("breakout", "pullback")).enabled_setups == ("pullback", "breakout")
     assert config.with_setups(("breakout",)).enabled_setups == ("breakout",)
     assert config.sma_periods() == frozenset({20, 50, 200})
+
+
+@pytest.mark.parametrize(
+    "h2_start",
+    [date(2019, 1, 2), date(2019, 6, 1), date(2018, 12, 31), date(2018, 6, 1)],  # gap or overlap
+)
+def test_halves_must_be_contiguous(h2_start: date) -> None:
+    raw = _raw()
+    backtest = raw["backtest"]
+    assert isinstance(backtest, dict)
+    backtest["h2_start"] = h2_start
+    with pytest.raises(ConfigError, match="h2_start must be the day after h1_end"):
+        parse_strategy_config(raw)
+    backtest["h1_end"] = h2_start - timedelta(days=1)
+    assert parse_strategy_config(raw).backtest.h2_start == h2_start

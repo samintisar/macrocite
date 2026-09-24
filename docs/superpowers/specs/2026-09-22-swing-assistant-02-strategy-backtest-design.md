@@ -154,3 +154,4 @@ A **combined** run of all passing setups is reported for information only. It do
 - 2026-09-24: `data_fingerprint` also covers the earnings dates the run used (see Persistence). `git_sha` also gets `-dirty` for untracked, non-ignored files under `src/`, `data/`, or `alembic/`. The committed-config check treats a path outside the repo as not committed.
 - 2026-09-24: dust entries are skipped with `no_cash`: when the sized position (units × signal close) is worth less than `MIN_POSITION_FRACTION` = 1% of equity.
 - 2026-09-24: the spread survey needs at least 5 distinct `cdr_symbol`s with both bid and ask (repeat readings of one CDR still count toward the median). A row that is not a mapping, lacks `cdr_symbol`, or has a non-numeric bid/ask is an error naming its row index.
+- 2026-09-24: the config loader requires `h2_start` to be exactly the day after `h1_end`, so the halves are contiguous.
