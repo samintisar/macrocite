@@ -276,9 +276,12 @@ def test_backtest_run_refuses_a_cost_that_differs_from_the_survey(
 
 
 def test_backtest_run_refuses_a_config_outside_data_strategy_version(
-    session: Session, monkeypatch: pytest.MonkeyPatch
+    session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     # Committed and unchanged, but not data/strategy_<version>.yaml: refused before any data.
+    survey = tmp_path / "cdr_spread_survey.yaml"
+    survey.write_text(_survey_rows(99.9, 100.1), encoding="utf-8")
+    monkeypatch.setattr(cli, "SPREAD_SURVEY_PATH", survey)
     monkeypatch.setattr(cli, "get_session", lambda: session)
     monkeypatch.setattr(cli, "committed_unchanged", lambda _repo, _path: True)
     result = runner.invoke(
