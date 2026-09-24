@@ -5,10 +5,12 @@ from pathlib import Path
 from pytest import approx
 
 from signalbench.backtest.benchmarks import BenchmarkStats
-from signalbench.backtest.metrics import run_metrics
+from signalbench.backtest.metrics import TradeStats, run_metrics
 from signalbench.backtest.passbar import evaluate_pass_bar, passes
 from signalbench.backtest.report import (
     CAVEATS,
+    JEV_CAVEATS,
+    jev_payload,
     metrics_payload,
     pass_bar_payload,
     render_report,
@@ -122,3 +124,51 @@ def test_positions_open_at_the_end_are_listed_apart_from_the_trades() -> None:
 def test_no_open_positions_says_none() -> None:
     text = render_report(_run())
     assert "## Positions open at the end\n\nNone." in text
+
+
+def _with_jev(run: BacktestRun, *, theta: float | None, information_only: bool) -> BacktestRun:
+    run.metrics["jev"] = jev_payload(
+        model_requested="typesafe/jev-1.13",
+        question_set="q1",
+        readings=42,
+        builds={"typesafe/jev-1.13-20260917": 42},
+        theta_block=theta,
+        information_only=information_only,
+        out_of_sample=TradeStats(trades=2, win_rate=0.5, mean_r=0.25, median_r=0.25, average_hold=4.0),
+    )
+    return run
+
+
+def test_sentiment_report_shows_status_period_readings_and_out_of_sample_trades() -> None:
+    run = _with_jev(_run(setup="sentiment"), theta=None, information_only=True)
+    text = render_report(run)
+    assert text.startswith("# Backtest: sentiment (Jev off)\n")
+    assert "**Sentiment status:** information only (fewer than 30 trades)" in text
+    assert "no Sentiment entries are sent" in text
+    assert "halves split at the calendar midpoint" in text
+    assert "| Readings used | 42 |" in text
+    assert "| Resolved builds | typesafe/jev-1.13-20260917 (42) |" in text
+    assert "## Trades signalled on or after 2026-09-15 (out of sample for Jev)" in text
+    assert "Trades 2 · win rate 50.0% · mean R 0.250" in text
+    for caveat in (*CAVEATS, *JEV_CAVEATS):
+        assert f"- {caveat}" in text
+    failed = render_report(_with_jev(_run(setup="sentiment"), theta=None, information_only=False))
+    assert "**Sentiment status:** FAIL" in failed
+
+
+def test_filtered_report_is_information_only() -> None:
+    run = _run(setup="breakout")
+    run.jev_mode = "filter"
+    text = render_report(_with_jev(run, theta=0.7, information_only=True))
+    assert text.startswith("# Backtest: breakout (Jev filter)\n")
+    assert "**Result:** FAIL (information only)" in text
+    assert "**Information only — cannot change the v1 result.**" in text
+    assert "| Filter theta_block | 0.7 |" in text
+    assert "Sentiment status" not in text
+
+
+def test_jev_off_reports_have_no_jev_section() -> None:
+    text = render_report(_run())
+    assert "## Jev readings" not in text
+    for caveat in JEV_CAVEATS:
+        assert caveat not in text
