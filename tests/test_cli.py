@@ -1,4 +1,5 @@
 from datetime import date
+from pathlib import Path
 
 import httpx
 import pytest
@@ -7,10 +8,11 @@ from typer.testing import CliRunner
 
 from signalbench import cli
 from signalbench.cli import app
-from signalbench.db.models import EarningsEvent, Ticker, TickerKind
+from signalbench.db.models import BacktestRun, EarningsEvent, Ticker, TickerKind
 from signalbench.ingest.finnhub import FinnhubClient
 from signalbench.ingest.prices import PriceIngestResult
 from signalbench.ingest.ratelimit import RateLimiter
+from signalbench.strategy.config import load_strategy_config
 
 runner = CliRunner()
 
@@ -158,3 +160,103 @@ def test_liquidity_failure_is_reported_and_later_steps_still_run(
     assert "liquidity FAILED: RuntimeError:" in result.stderr
     assert filings == ["AAPL"]
     assert "prices: 1 failed: liquidity" in result.stderr
+
+
+FIXTURE_CONFIG = Path(__file__).parent / "fixtures" / "strategy_test.yaml"
+
+
+def test_backtest_help_lists_run_and_show() -> None:
+    result = runner.invoke(app, ["backtest", "--help"])
+    assert result.exit_code == 0
+    for command in ("run", "show"):
+        assert command in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("args", "message"),
+    [
+        (["--setup", "sentiment"], "--setup sentiment requires Jev readings (spec 03)."),
+        (["--setup", "pullback", "--jev", "filter"], "--jev filter requires Jev readings (spec 03)."),
+    ],
+)
+def test_backtest_run_refuses_spec_03_modes(args: list[str], message: str) -> None:
+    result = runner.invoke(app, ["backtest", "run", *args])
+    assert result.exit_code == 2
+    assert message in result.stderr
+
+
+def test_backtest_run_needs_the_config_file(tmp_path: Path) -> None:
+    missing = tmp_path / "strategy_v1.yaml"
+    result = runner.invoke(app, ["backtest", "run", "--setup", "pullback", "--config", str(missing)])
+    assert result.exit_code == 1
+    assert "not found" in result.stderr
+
+
+def test_backtest_run_needs_a_committed_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cli, "committed_unchanged", lambda _repo, _path: False)
+    result = runner.invoke(
+        app, ["backtest", "run", "--setup", "pullback", "--config", str(FIXTURE_CONFIG)]
+    )
+    assert result.exit_code == 1
+    assert "must be committed, unchanged" in result.stderr
+
+
+def _stored_run(session: Session) -> BacktestRun:
+    run = BacktestRun(
+        strategy_version="test", config_sha256="c" * 64, git_sha="abc123", setup="breakout",
+        jev_mode="off", start_date=date(2012, 1, 3), end_date=date(2026, 9, 23),
+        data_fingerprint="d" * 64, metrics={},
+        pass_bar={"trades": {"value": 12.0, "threshold": 30.0, "passed": False}},
+        passed=False, trade_log={"trades": [], "events": []},
+    )
+    session.add(run)
+    session.commit()
+    session.refresh(run)
+    return run
+
+
+def test_backtest_run_wires_config_calendar_and_git(
+    session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls: dict[str, object] = {}
+
+    def fake_run(_session: Session, **kwargs: object) -> tuple[BacktestRun, Path]:
+        calls.update(kwargs)
+        return _stored_run(session), tmp_path / "2026-09-24-breakout-off.md"
+
+    monkeypatch.setattr(cli, "get_session", lambda: session)
+    monkeypatch.setattr(cli, "committed_unchanged", lambda _repo, _path: True)
+    monkeypatch.setattr(cli, "git_sha", lambda _repo: "abc123")
+    monkeypatch.setattr(cli, "NyseSessions", lambda: "calendar")
+    monkeypatch.setattr(cli, "run_backtest", fake_run)
+    result = runner.invoke(
+        app, ["backtest", "run", "--setup", "breakout", "--config", str(FIXTURE_CONFIG)]
+    )
+    assert result.exit_code == 0, result.stderr
+    assert (calls["setup"], calls["jev_mode"], calls["git_sha"]) == ("breakout", "off", "abc123")
+    assert calls["calendar"] == "calendar"
+    assert calls["config_sha256"] == load_strategy_config(FIXTURE_CONFIG)[1]
+    assert "FAIL" in result.stdout
+    assert "-- trades: 12.000 vs 30.000" in result.stdout
+    assert "report: " in result.stdout
+
+
+def test_backtest_show_prints_the_stored_report(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = _stored_run(session)
+    monkeypatch.setattr(cli, "get_session", lambda: session)
+    monkeypatch.setattr(cli, "render_report", lambda stored: f"report for {stored.id}\n")
+    result = runner.invoke(app, ["backtest", "show", str(run.id)])
+    assert result.exit_code == 0
+    assert result.stdout == f"report for {run.id}\n"
+
+
+def test_backtest_show_unknown_or_bad_id(session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cli, "get_session", lambda: session)
+    unknown = runner.invoke(app, ["backtest", "show", "00000000-0000-0000-0000-000000000000"])
+    assert unknown.exit_code == 1
+    assert "No backtest run" in unknown.stderr
+    bad = runner.invoke(app, ["backtest", "show", "not-a-uuid"])
+    assert bad.exit_code == 1
+    assert "Not a run id" in bad.stderr
