@@ -1,6 +1,6 @@
 """NYSE sessions as plain dates. The only module that imports exchange_calendars."""
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any, Protocol
 
 HISTORY_START = date(2010, 1, 1)
@@ -17,6 +17,10 @@ class Sessions(Protocol):
 
     def is_session(self, day: date) -> bool: ...
 
+    def session_closes(self, start: date, end: date) -> list[tuple[date, datetime]]:
+        """(session, its close as an aware datetime) for sessions with start <= session <= end."""
+        ...
+
 
 class NyseSessions:
     """The XNYS calendar from exchange_calendars, exposed as `datetime.date` values."""
@@ -25,8 +29,10 @@ class NyseSessions:
         import exchange_calendars as xcals
 
         self._calendar: Any = xcals.get_calendar("XNYS", start=start.isoformat())
+        self._first: date = self._calendar.first_session.date()
 
     def sessions_between(self, start: date, end: date) -> list[date]:
+        start = max(start, self._first)  # exchange_calendars rejects dates before its first session
         if end < start:
             return []
         return [stamp.date() for stamp in self._calendar.sessions_in_range(start, end)]
@@ -41,3 +47,10 @@ class NyseSessions:
 
     def is_session(self, day: date) -> bool:
         return bool(self._calendar.is_session(day))
+
+    def session_closes(self, start: date, end: date) -> list[tuple[date, datetime]]:
+        """Real closes in UTC, including early closes (13:00 ET on some holiday eves)."""
+        if end < start:
+            return []
+        closes = self._calendar.closes.loc[start.isoformat() : end.isoformat()]
+        return [(stamp.date(), close.to_pydatetime()) for stamp, close in closes.items()]
