@@ -77,3 +77,35 @@ def test_ask_below_bid_is_rejected(tmp_path: Path) -> None:
     path = _survey(tmp_path, [("ZNVD", 100.2, 99.8)] + [(f"Z{i}", 99.9, 100.1) for i in range(5)])
     with pytest.raises(SpreadSurveyError, match="ZNVD: need 0 < bid <= ask"):
         load_spread_survey(path)
+
+
+def test_five_readings_need_five_distinct_cdrs(tmp_path: Path) -> None:
+    rows: list[tuple[str, float | None, float | None]] = [(f"Z{i}", 99.9, 100.1) for i in range(4)]
+    rows.append(("Z0", 99.8, 100.2))  # a second reading of Z0 is not a fifth CDR
+    with pytest.raises(SpreadSurveyError, match="across 4 distinct CDRs"):
+        load_spread_survey(_survey(tmp_path, rows))
+    rows.append(("Z4", 99.8, 100.2))
+    survey = load_spread_survey(_survey(tmp_path, rows))
+    assert len(survey.readings) == 6  # every complete reading counts toward the median
+
+
+def _raw_survey(tmp_path: Path, body: str) -> Path:
+    good = "".join(f"  - {{cdr_symbol: Z{i}, bid: 99.9, ask: 100.1}}\n" for i in range(5))
+    path = tmp_path / "cdr_spread_survey.yaml"
+    path.write_text("readings:\n" + good + body, encoding="utf-8")
+    return path
+
+
+@pytest.mark.parametrize(
+    ("body", "message"),
+    [
+        ("  - ZNVD\n", r"readings\[5\]: expected a mapping"),
+        ("  - {bid: 99.9, ask: 100.1}\n", r"readings\[5\]: missing cdr_symbol"),
+        ("  - {cdr_symbol: '', bid: 99.9, ask: 100.1}\n", r"readings\[5\]: missing cdr_symbol"),
+        ("  - {cdr_symbol: ZNVD, bid: abc, ask: 100.1}\n", r"readings\[5\] ZNVD: bid must be a number"),
+        ("  - {cdr_symbol: ZNVD, bid: 99.9, ask: true}\n", r"readings\[5\] ZNVD: ask must be a number"),
+    ],
+)
+def test_malformed_rows_name_the_row(tmp_path: Path, body: str, message: str) -> None:
+    with pytest.raises(SpreadSurveyError, match=message):
+        load_spread_survey(_raw_survey(tmp_path, body))

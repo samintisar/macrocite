@@ -7,7 +7,7 @@ from typing import Any, cast
 
 import yaml
 
-MIN_COMPLETE_READINGS = 5
+MIN_COMPLETE_READINGS = 5  # distinct CDRs with both bid and ask
 MAX_MEDIAN_SPREAD = 0.01
 COST_FLOOR = 0.002
 COST_ABOVE_HALF_SPREAD = 0.001
@@ -42,13 +42,24 @@ def cost_from_median_spread(median_spread: float) -> float:
     return round(max(COST_FLOOR, median_spread / 2.0 + COST_ABOVE_HALF_SPREAD), 6)
 
 
-def _price(row: dict[str, Any], key: str) -> float | None:
+def _price(row: dict[str, Any], key: str, where: str) -> float | None:
     value = row.get(key)
     if value is None or value == "":
         return None
     if isinstance(value, bool) or not isinstance(value, int | float):
-        raise SpreadSurveyError(f"{row.get('cdr_symbol')}: {key} must be a number, got {value!r}")
+        raise SpreadSurveyError(f"{where}: {key} must be a number, got {value!r}")
     return float(value)
+
+
+def _symbol(item: object, index: int) -> tuple[dict[str, Any], str]:
+    """The row as a mapping and its cdr_symbol, or a SpreadSurveyError naming the row."""
+    if not isinstance(item, dict):
+        raise SpreadSurveyError(f"readings[{index}]: expected a mapping, got {item!r}")
+    row = cast(dict[str, Any], item)
+    symbol = row.get("cdr_symbol")
+    if symbol is None or str(symbol).strip() == "":
+        raise SpreadSurveyError(f"readings[{index}]: missing cdr_symbol")
+    return row, str(symbol)
 
 
 def load_spread_survey(path: Path) -> SpreadSurvey:
@@ -58,19 +69,22 @@ def load_spread_survey(path: Path) -> SpreadSurvey:
         raise SpreadSurveyError(f"{path.name}: expected a top-level `readings:` list")
     readings: list[SpreadReading] = []
     incomplete = 0
-    for item in rows:
-        row = cast(dict[str, Any], item)
-        bid, ask = _price(row, "bid"), _price(row, "ask")
+    for index, item in enumerate(rows):
+        row, symbol = _symbol(item, index)
+        where = f"readings[{index}] {symbol}"
+        bid, ask = _price(row, "bid", where), _price(row, "ask", where)
         if bid is None or ask is None:
             incomplete += 1
             continue
         if bid <= 0.0 or ask < bid:
-            raise SpreadSurveyError(f"{row.get('cdr_symbol')}: need 0 < bid <= ask, got {bid}/{ask}")
-        readings.append(SpreadReading(str(row["cdr_symbol"]), bid, ask))
-    if len(readings) < MIN_COMPLETE_READINGS:
+            raise SpreadSurveyError(f"{where}: need 0 < bid <= ask, got {bid}/{ask}")
+        readings.append(SpreadReading(symbol, bid, ask))
+    distinct = len({reading.cdr_symbol for reading in readings})
+    if distinct < MIN_COMPLETE_READINGS:
         raise SpreadSurveyError(
-            f"{path.name} has {len(readings)} readings with both bid and ask; "
-            f"at least {MIN_COMPLETE_READINGS} are needed. Record them during market hours first."
+            f"{path.name} has {len(readings)} readings with both bid and ask across {distinct} "
+            f"distinct CDRs; at least {MIN_COMPLETE_READINGS} distinct CDRs are needed. "
+            "Record them during market hours first."
         )
     spread = float(median(reading.spread_pct for reading in readings))
     if spread > MAX_MEDIAN_SPREAD:
