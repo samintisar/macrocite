@@ -107,3 +107,14 @@ def test_no_cash_is_a_skip() -> None:
     entries, skips = allocate([_candidate("AAA")], _state(cash=0.0), CONFIG)
     assert entries == []
     assert skips == [Skip("AAA", "pullback", "no_cash")]
+
+
+def test_a_dust_entry_below_one_percent_of_equity_is_a_no_cash_skip() -> None:
+    # 0.99 of cash left buys 0.0099 units at 100: a position worth 0.99% of equity 100.
+    entries, skips = allocate([_candidate("AAA")], _state(cash=0.99), CONFIG)
+    assert entries == []
+    assert skips == [Skip("AAA", "pullback", "no_cash")]
+    # Exactly 1% of equity is still an entry.
+    entries, skips = allocate([_candidate("AAA")], _state(cash=1.0), CONFIG)
+    assert [e.units * e.signal_close for e in entries] == [approx(1.0)]
+    assert skips == []

@@ -9,6 +9,8 @@ from signalbench.strategy.decision import EntryOrder, Skip, SkipReason
 from signalbench.strategy.portfolio import PortfolioState
 from signalbench.strategy.setups import Signal
 
+MIN_POSITION_FRACTION = 0.01  # a position worth less than 1% of equity is dust: skip it
+
 
 @dataclass(frozen=True)
 class Candidate:
@@ -83,7 +85,7 @@ def allocate(
             skips.append(Skip(candidate.symbol, signal.setup, "sector_cap"))
             continue
         units = size(signal.close, signal.stop, portfolio.equity, cash, config)
-        if units <= 0.0:
+        if units <= 0.0 or units * signal.close < MIN_POSITION_FRACTION * portfolio.equity:
             skips.append(Skip(candidate.symbol, signal.setup, "no_cash"))
             continue
         entries.append(
