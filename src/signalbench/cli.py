@@ -18,9 +18,10 @@ from signalbench.backtest.preregistration import (
 from signalbench.backtest.provenance import committed_unchanged, git_sha
 from signalbench.backtest.report import render_report, result_label
 from signalbench.backtest.runner import (
+    JevInputs,
     JevMode,
-    RequiresSpec03Error,
     RunSetup,
+    UnsupportedRunError,
     run_backtest,
     setups_for_run,
 )
@@ -48,6 +49,7 @@ from signalbench.ingest.news import ingest_company_news, last_news_date, news_wi
 from signalbench.ingest.prices import fetch_yfinance_daily, ingest_daily_prices
 from signalbench.ingest.seed import BENCHMARKS, seed_universe
 from signalbench.ingest.stats import collect_stats
+from signalbench.jev.filter_record import FilterFileError, load_filter_setting
 from signalbench.market.calendar import NyseSessions
 from signalbench.strategy.config import ConfigError, load_strategy_config
 from signalbench.strategy.spread import SpreadSurveyError, load_spread_survey
@@ -56,6 +58,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 UNIVERSE_PATH = REPO_ROOT / "data" / "cdr_universe.yaml"
 STRATEGY_V1_PATH = REPO_ROOT / "data" / "strategy_v1.yaml"
 SPREAD_SURVEY_PATH = REPO_ROOT / "data" / "cdr_spread_survey.yaml"
+JEV_FILTER_PATH = REPO_ROOT / "data" / "jev_filter_v1.yaml"
 REPORTS_DIR = REPO_ROOT / "reports" / "backtests"
 NEW_YORK = ZoneInfo("America/New_York")
 
@@ -314,7 +317,7 @@ def backtest_run(
     jev_mode: JevMode = jev.value
     try:
         setups_for_run(run_setup, jev_mode)
-    except RequiresSpec03Error as error:
+    except UnsupportedRunError as error:
         typer.echo(str(error), err=True)
         raise typer.Exit(2) from None
     if not config.exists():
@@ -344,6 +347,11 @@ def backtest_run(
         message = " ".join(f"{config.name}: {error}".split())  # YAML errors span lines
         typer.echo(message, err=True)
         raise typer.Exit(1) from None
+    jev_inputs: JevInputs | None = None
+    if jev_mode == "filter":
+        jev_inputs = _jev_filter_inputs()
+    elif run_setup == "sentiment":
+        jev_inputs = JevInputs(theta_block=None)
     try:
         now = datetime.now(NEW_YORK)
         check_config_path(REPO_ROOT, config, strategy.version)
@@ -363,6 +371,7 @@ def backtest_run(
                 run_date=now.date(),
                 reports_dir=REPORTS_DIR,
                 now=now,
+                jev=jev_inputs,
             )
             _print_run(run)
     except ValueError as error:  # RunRefusedError, SpreadSurveyError, and data/calendar gaps
@@ -371,8 +380,46 @@ def backtest_run(
     typer.echo(f"report: {path}")
 
 
+def _jev_filter_inputs() -> JevInputs:
+    """The committed filter decision; --jev filter runs only when it is ON (spec 03)."""
+    if not JEV_FILTER_PATH.exists():
+        typer.echo(
+            f"{JEV_FILTER_PATH.name} not found. Run `signalbench jev fit-filter --write` and "
+            "commit its output first (spec 03).",
+            err=True,
+        )
+        raise typer.Exit(1)
+    if not committed_unchanged(REPO_ROOT, JEV_FILTER_PATH):
+        typer.echo(
+            f"{JEV_FILTER_PATH.name} must be committed, unchanged, before a --jev filter run "
+            "(spec 03).",
+            err=True,
+        )
+        raise typer.Exit(1)
+    try:
+        setting = load_filter_setting(JEV_FILTER_PATH)
+    except (FilterFileError, yaml.YAMLError) as error:
+        typer.echo(" ".join(str(error).split()), err=True)
+        raise typer.Exit(1) from None
+    if setting.mode != "on":
+        typer.echo(
+            "The Jev filter is information-only (data/jev_filter_v1.yaml), so --jev filter runs "
+            "are refused (spec 03).",
+            err=True,
+        )
+        raise typer.Exit(1)
+    return JevInputs(
+        theta_block=setting.theta_block,
+        model_requested=setting.model_requested,
+        question_set=setting.question_set,
+    )
+
+
 def _print_run(run: BacktestRun) -> None:
-    typer.echo(f"run {run.id}: {result_label(run)}")
+    result = result_label(run)
+    if run.jev_mode == "filter":
+        result += " (information only: the Jev-off v1 result stands)"
+    typer.echo(f"run {run.id}: {result}")
     for name, row in run.pass_bar.items():
         mark = "ok" if row["passed"] else "--"
         typer.echo(f"  {mark} {name}: {row['value']:.3f} vs {row['threshold']:.3f}")

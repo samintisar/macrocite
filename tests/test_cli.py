@@ -7,6 +7,7 @@ from sqlmodel import Session, select
 from typer.testing import CliRunner
 
 from signalbench import cli
+from signalbench.backtest.runner import JevInputs
 from signalbench.cli import app
 from signalbench.db.models import BacktestRun, EarningsEvent, Ticker, TickerKind
 from signalbench.ingest.cdr import CdrEntry
@@ -173,17 +174,10 @@ def test_backtest_help_lists_run_and_show() -> None:
         assert command in result.stdout
 
 
-@pytest.mark.parametrize(
-    ("args", "message"),
-    [
-        (["--setup", "sentiment"], "--setup sentiment requires Jev readings (spec 03)."),
-        (["--setup", "pullback", "--jev", "filter"], "--jev filter requires Jev readings (spec 03)."),
-    ],
-)
-def test_backtest_run_refuses_spec_03_modes(args: list[str], message: str) -> None:
-    result = runner.invoke(app, ["backtest", "run", *args])
+def test_backtest_run_refuses_sentiment_with_the_jev_filter() -> None:
+    result = runner.invoke(app, ["backtest", "run", "--setup", "sentiment", "--jev", "filter"])
     assert result.exit_code == 2
-    assert message in result.stderr
+    assert "--setup sentiment runs with --jev off" in result.stderr
 
 
 def test_backtest_run_needs_the_config_file(tmp_path: Path) -> None:
@@ -436,3 +430,93 @@ def test_backtest_run_prints_missing_benchmark_prices_cleanly(
     ])
     result = runner.invoke(app, ["backtest", "run", "--setup", "pullback", "--config", str(config)])
     _assert_clean_exit(result, "No QQQ prices")
+
+
+def _capture_run(
+    session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> dict[str, object]:
+    calls: dict[str, object] = {}
+
+    def fake_run(_session: Session, **kwargs: object) -> tuple[BacktestRun, Path]:
+        calls.update(kwargs)
+        run = _stored_run(session)
+        run.jev_mode = str(kwargs["jev_mode"])
+        return run, tmp_path / "report.md"
+
+    monkeypatch.setattr(cli, "get_session", lambda: session)
+    monkeypatch.setattr(cli, "git_sha", lambda _repo: "abc123")
+    monkeypatch.setattr(cli, "NyseSessions", lambda: "calendar")
+    monkeypatch.setattr(cli, "run_backtest", fake_run)
+    return calls
+
+
+def test_backtest_run_sentiment_reads_jev_without_a_filter(
+    session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = _registered_config(monkeypatch, tmp_path)
+    calls = _capture_run(session, monkeypatch, tmp_path)
+    result = runner.invoke(app, ["backtest", "run", "--setup", "sentiment", "--config", str(config)])
+    assert result.exit_code == 0, result.stderr
+    assert (calls["setup"], calls["jev_mode"]) == ("sentiment", "off")
+    assert calls["jev"] == JevInputs(theta_block=None)
+
+
+def _filter_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, body: str | None) -> Path:
+    path = tmp_path / "data" / "jev_filter_v1.yaml"
+    if body is not None:
+        path.write_text(body, encoding="utf-8")
+    monkeypatch.setattr(cli, "JEV_FILTER_PATH", path)
+    return path
+
+
+FILTER_ON = "mode: 'on'\ntheta_block: 0.7\nquestion_set: q1\nmodel_requested: typesafe/jev-1.13\n"
+FILTER_INFO = (
+    "mode: information_only\ntheta_block: null\nquestion_set: q1\n"
+    "model_requested: typesafe/jev-1.13\n"
+)
+
+
+def test_backtest_run_filter_uses_the_committed_theta(
+    session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = _registered_config(monkeypatch, tmp_path)
+    _filter_file(monkeypatch, tmp_path, FILTER_ON)
+    calls = _capture_run(session, monkeypatch, tmp_path)
+    result = runner.invoke(
+        app, ["backtest", "run", "--setup", "breakout", "--jev", "filter", "--config", str(config)]
+    )
+    assert result.exit_code == 0, result.stderr
+    assert calls["jev_mode"] == "filter"
+    assert calls["jev"] == JevInputs(theta_block=0.7)
+    assert "FAIL (information only: the Jev-off v1 result stands)" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("body", "committed", "message"),
+    [
+        (None, True, "jev_filter_v1.yaml not found"),
+        (FILTER_ON, False, "jev_filter_v1.yaml must be committed, unchanged"),
+        (FILTER_INFO, True, "information-only"),
+        ("mode: maybe\n", True, "mode must be"),
+    ],
+)
+def test_backtest_run_filter_refusals(
+    session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    body: str | None,
+    committed: bool,
+    message: str,
+) -> None:
+    config = _registered_config(monkeypatch, tmp_path)
+    path = _filter_file(monkeypatch, tmp_path, body)
+    monkeypatch.setattr(
+        cli, "committed_unchanged", lambda _repo, target: committed or target != path
+    )
+    calls = _capture_run(session, monkeypatch, tmp_path)
+    result = runner.invoke(
+        app, ["backtest", "run", "--setup", "pullback", "--jev", "filter", "--config", str(config)]
+    )
+    assert result.exit_code == 1
+    assert message in result.stderr
+    assert calls == {}
