@@ -9,7 +9,9 @@ class LegalCloses:
     """Maps a document's acceptance or publish time to the session whose close first follows it.
 
     Built once from `Sessions.session_closes()`, so early closes are honoured and no calendar
-    lookup happens per document.
+    lookup happens per document. Precondition: `closes` must start before the earliest document
+    passed to `of()` (callers build from HISTORY_START), since any moment before the first close
+    maps to that first session.
     """
 
     def __init__(self, closes: Sequence[tuple[date, datetime]]) -> None:

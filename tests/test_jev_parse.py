@@ -113,6 +113,28 @@ def test_missing_cost_falls_back_to_the_token_price() -> None:
     assert PRICE_PER_INPUT_TOKEN_USD == approx(0.042 / 1_000_000)
 
 
+@pytest.mark.parametrize("bad_cost", [float("nan"), float("inf"), float("-inf")])
+def test_non_finite_cost_falls_back_to_the_token_price(bad_cost: float) -> None:
+    body = _body()
+    body["usage"]["cost"] = bad_cost
+    result = parse_response(body, latency_ms=1)
+    assert result.cost_usd == approx(476 * PRICE_PER_INPUT_TOKEN_USD)
+
+
+def test_non_finite_number_in_answers_is_rejected() -> None:
+    body = _body()
+    body["answers"]["impact"]["confidence"] = float("nan")
+    with pytest.raises(JevResponseError, match="answers: non-finite number"):
+        parse_response(body, latency_ms=1)
+
+
+def test_empty_response_id_is_rejected() -> None:
+    body = _body()
+    body["id"] = ""
+    with pytest.raises(JevResponseError, match="expected string `model` and `id`"):
+        parse_response(body, latency_ms=1)
+
+
 @pytest.mark.parametrize("key", ["model", "usage", "answers", "id"])
 def test_missing_top_level_fields_are_rejected(key: str) -> None:
     body = copy.deepcopy(_body())

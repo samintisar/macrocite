@@ -1,5 +1,6 @@
 """Jev through OpenRouter's decisions endpoint (spec 03): response parsing and the HTTP client."""
 
+import json
 import math
 import time
 from collections.abc import Callable
@@ -113,15 +114,24 @@ def parse_response(body: object, latency_ms: int) -> JevResult:
     routine = _unit(_answer(answers, "routine", "noul").get("noul"), "routine: noul")
     model = top.get("model")
     response_id = top.get("id")
-    if not isinstance(model, str) or not model or not isinstance(response_id, str):
+    if not isinstance(model, str) or not model or not isinstance(response_id, str) or not response_id:
         raise JevResponseError("response: expected string `model` and `id`")
     usage = _mapping(top.get("usage"), "usage")
     tokens = usage.get("input_tokens")
     if isinstance(tokens, bool) or not isinstance(tokens, int) or tokens < 0:
         raise JevResponseError(f"usage.input_tokens must be a whole number, got {tokens!r}")
     cost = usage.get("cost")
-    if isinstance(cost, bool) or not isinstance(cost, int | float) or cost < 0:
+    if (
+        isinstance(cost, bool)
+        or not isinstance(cost, int | float)
+        or cost < 0
+        or not math.isfinite(cost)
+    ):
         cost = tokens * PRICE_PER_INPUT_TOKEN_USD  # not reported: price it ourselves
+    try:
+        json.dumps(answers, allow_nan=False)
+    except ValueError:
+        raise JevResponseError("answers: non-finite number") from None
     return JevResult(
         response_id=response_id,
         model_resolved=model,

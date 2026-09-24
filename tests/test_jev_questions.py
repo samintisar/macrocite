@@ -64,3 +64,11 @@ def test_request_body_has_exactly_the_documented_fields() -> None:
         assert set(question) == {"type", "instructions", "criteria"}
         assert question["type"] in {"choice", "noul", "score"}
     assert json.loads(json.dumps(body)) == body
+
+
+def test_request_body_questions_are_a_copy_not_a_reference() -> None:
+    body = request_body("state")
+    assert body["questions"] == QUESTIONS
+    assert body["questions"] is not QUESTIONS
+    body["questions"]["impact"]["instructions"] = "mutated"
+    assert QUESTIONS["impact"]["instructions"] != "mutated"

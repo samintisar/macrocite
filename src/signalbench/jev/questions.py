@@ -4,6 +4,7 @@ Changing any wording creates q2, and documents must be re-read under q2 before a
 is used. Only public text is sent: SEC filings and news headlines and summaries.
 """
 
+import copy
 from datetime import date
 from typing import Any, Literal
 
@@ -80,4 +81,4 @@ def build_state(
 
 def request_body(state: str, model: str = MODEL) -> dict[str, Any]:
     """The documented body: model, state, questions. No session_id or user is sent."""
-    return {"model": model, "state": state, "questions": QUESTIONS}
+    return {"model": model, "state": state, "questions": copy.deepcopy(QUESTIONS)}
