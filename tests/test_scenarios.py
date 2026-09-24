@@ -24,8 +24,9 @@ BREAKOUT = load_test_config().with_setups(("breakout",))
 COST = 0.002
 # Pullback fixture: signal on 251 (close 146), entry on 252 at the open.
 PB_STOP = 145.0 - 0.5 * (30 / 14)
+PB_RISK = 146.0 - PB_STOP  # R is planned at the signal: signal close - stop, about 2.071
 PB_FILL = 147.0 * (1 + COST)  # every pullback scenario opens 252 at 147
-PB_TARGET = PB_FILL + 2 * (PB_FILL - PB_STOP)  # about 154.03
+PB_TARGET = PB_FILL + 2 * PB_RISK  # about 151.44
 
 
 def _run(
@@ -65,15 +66,15 @@ def test_pullback_stop() -> None:
     assert _dates(trade) == (251, 252, 253, 254)
     assert (trade.entry_price, trade.initial_stop) == (approx(PB_FILL), approx(PB_STOP))
     assert trade.exit_price == approx(143.5 * (1 - COST))
-    assert trade.r == approx((143.5 * (1 - COST) - PB_FILL) / (PB_FILL - PB_STOP))  # about -1.21
+    assert trade.r == approx((143.5 * (1 - COST) - PB_FILL) / PB_RISK)  # about -1.97
 
 
 def test_pullback_target() -> None:
     trade = _first(_run(_pullback({252: 147.0, 255: 155.0}), PULLBACK))
     assert trade.reason == "target"
     assert _dates(trade) == (251, 252, 255, 256)
-    assert 155.0 >= PB_TARGET
-    assert trade.r == approx((155.0 * (1 - COST) - PB_FILL) / (PB_FILL - PB_STOP))  # about 2.2
+    assert 147.0 < PB_TARGET <= 155.0  # closes of 147 on 252-254 stay below it
+    assert trade.r == approx((155.0 * (1 - COST) - PB_FILL) / PB_RISK)  # about 3.57
     assert trade.sessions_held == 4
 
 

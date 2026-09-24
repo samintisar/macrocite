@@ -37,7 +37,7 @@
 | Min low (3) | min low of sessions i−2 … i |
 | Median traded value (20) | median of raw close × volume over sessions i−19 … i (US$), the spec 01 liquidity measure |
 | Equity | cash + Σ units × close at the as-of close |
-| R | entry fill − initial stop; trade R = (exit fill − entry fill) / R, costs included |
+| R | signal close − initial stop (planned at the signal; owner decision 2026-09-24); trade R = (exit fill − entry fill) / R, costs included; target = entry fill + target_r × R |
 
 `None` always means "no signal". Every indicator at index i uses only bars 0…i.
 

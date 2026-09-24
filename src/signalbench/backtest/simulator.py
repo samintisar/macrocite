@@ -27,11 +27,12 @@ class TradeRecord:
     entry_date: date
     exit_signal_date: date
     exit_date: date
+    signal_close: float
     entry_price: float
     exit_price: float
     initial_stop: float
     units: float
-    r: float  # (exit fill - entry fill) / (entry fill - initial stop), costs included
+    r: float  # (exit fill - entry fill) / (signal close - initial stop): planned risk, costs in
     pnl: float
     reason: ExitReason
     sessions_held: int
@@ -85,7 +86,13 @@ def step_risk(
 @dataclass(frozen=True)
 class _Opened:
     signal_date: date
+    signal_close: float
     initial_stop: float
+
+    @property
+    def planned_risk(self) -> float:
+        """Per-unit risk planned at the signal: signal close - stop (the unit of R)."""
+        return self.signal_close - self.initial_stop
 
 
 @dataclass(frozen=True)
@@ -152,11 +159,12 @@ def simulate(
                     entry_date=position.entry_date,
                     exit_signal_date=orders.decided_on,
                     exit_date=day,
+                    signal_close=meta.signal_close,
                     entry_price=position.entry_price,
                     exit_price=fill,
                     initial_stop=meta.initial_stop,
                     units=position.units,
-                    r=(fill - position.entry_price) / (position.entry_price - meta.initial_stop),
+                    r=(fill - position.entry_price) / meta.planned_risk,
                     pnl=position.units * (fill - position.entry_price),
                     reason=order.reason,
                     sessions_held=position.sessions_held,
@@ -181,9 +189,10 @@ def simulate(
                 cash -= units * fill
                 position_id = f"P{next_id:05d}"
                 next_id += 1
+                meta = _Opened(orders.decided_on, entry.signal_close, entry.stop)
                 target = None
                 if entry.target_r is not None:
-                    target = fill + entry.target_r * (fill - entry.stop)
+                    target = fill + entry.target_r * meta.planned_risk
                 positions[position_id] = Position(
                     id=position_id,
                     symbol=entry.symbol,
@@ -198,7 +207,7 @@ def simulate(
                     sessions_held=0,
                     highest_close=0.0,
                 )
-                opened[position_id] = _Opened(orders.decided_on, entry.stop)
+                opened[position_id] = meta
                 events.append(
                     _event(day, "entry", position_id=position_id, symbol=entry.symbol,
                            setup=entry.setup, units=units, price=fill, trimmed=units < entry.units)

@@ -21,7 +21,7 @@ def _trade(entry: date, r: float, held: int = 5) -> TradeRecord:
     return TradeRecord(
         position_id=f"P-{entry}-{r}", symbol="AAA", setup="pullback", sector="Energy",
         signal_date=entry, entry_date=entry, exit_signal_date=entry, exit_date=entry,
-        entry_price=100.0, exit_price=100.0 + r, initial_stop=99.0, units=1.0, r=r,
+        signal_close=100.0, entry_price=100.0, exit_price=100.0 + r, initial_stop=99.0, units=1.0, r=r,
         pnl=r, reason="time", sessions_held=held,
     )
 

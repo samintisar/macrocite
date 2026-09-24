@@ -62,7 +62,7 @@ Go live with $100 after 05, using only setups that passed.
 - **Legal close** for a document: the first NYSE session close strictly after the document's acceptance or publish time (America/New_York). A document accepted before 16:00 ET on a session day is visible at that day's close. Accepted at or after 16:00, or on a non-session day, it becomes visible at the next session's close.
 - **As-of**: `decide(as_of)` may only see prices with date ≤ `as_of` and documents whose legal close ≤ `as_of`.
 - **ATR**: 14-session Average True Range (Wilder smoothing) on adjusted OHLC.
-- **R**: the per-unit risk, `entry − stop`. A +2R exit gains twice what the stop would lose.
+- **R**: the per-unit risk planned at the signal, `signal close − stop`. A trade's R is its P&L after costs divided by units × R. A +2R exit gains twice what the planned stop would lose.
 - **Equity peak**: the highest end-of-day equity seen so far.
 
 ## Spread survey (required before the first real backtest)
@@ -88,3 +88,4 @@ On 2026-09-22 the median CDR traded value was tiny (ZNVD about C$15k/day, ZMSF a
 
 - 2026-09-22: created.
 - 2026-09-22: CDR findings. The universe is BMO `Z`-prefixed CDRs (~40 US names), and yfinance serves them as `<SYMBOL>.NE`. CDR volume is too thin for a traded-value filter, so a spread survey was added as a spec 02 prerequisite, and CDR liquidity became "priced in the last 5 sessions".
+- 2026-09-24: R is the risk planned at the signal (`signal close − stop`), not `entry fill − stop` (owner decision, spec 02 changelog).

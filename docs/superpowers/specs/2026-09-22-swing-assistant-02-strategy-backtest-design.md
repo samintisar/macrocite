@@ -33,7 +33,7 @@ All values are computed on adjusted OHLC of the **US** stock (`adjusted_bars()` 
 **Execution** (identical in backtest and live):
 - A signal on the close of day D is an entry order for the open of D+1 (the next session). Call this *next open*.
 - **Skip entry** if next open > signal close × 1.01 (`gap_up`) or next open ≤ stop (`gap_below_stop`).
-- `R = entry fill − stop`. The 2R target is set from the actual entry fill.
+- **R is the risk planned at the signal:** per-unit `R = signal close − stop`. A trade's R = its P&L after costs ÷ (units × R), i.e. (exit fill − entry fill) ÷ (signal close − stop). The 2R target = entry fill + 2 × (signal close − stop): it is anchored on the actual fill but sized by the planned risk, so an open just above the stop cannot inflate R.
 - Exits are evaluated on each close, in this order: stop (close ≤ stop), earnings (event on D+1 or D+2), target (close ≥ target), time (sessions held ≥ limit). The first match fills at the next open. Day of entry counts as session 1 held.
 - **Cost:** `cost_per_side` = max(0.2%, median surveyed spread ÷ 2 + 0.1%). For example, a 0.4% median spread gives 0.3%. Buys fill at open × (1 + cost_per_side), sells at open × (1 − cost_per_side).
 
@@ -146,3 +146,4 @@ A **combined** run of all passing setups is reported for information only. It do
   - Halves and the recent sample are split by entry date. `cost_per_side` is rounded to 6 decimals. `config_sha256` hashes the file with CRLF normalised to LF.
   - `backtest run` refuses a config that is not committed and unchanged in git. `git_sha` carries `-dirty` when tracked code or data files have uncommitted changes.
   - The trade log also records `stop_update` and `exit_deferred` events.
+- 2026-09-24: owner decision: R is measured on the risk planned at the signal (signal close − stop), not on the fill (entry fill − stop). Trade R = P&L after costs ÷ (units × planned per-unit risk); the target is entry fill + target_r × planned per-unit risk. Gap rules, stops, and costs are unchanged. Reason: an open just above the stop made fill − stop tiny and inflated R (a normal 2R target read as +4.27R).
