@@ -180,7 +180,8 @@ def run_backtest(
         end_date=result.end,
         data_fingerprint=data_fingerprint(
             [(item.symbol, item.bars) for item in inputs.symbols]
-            + [(config.regime_symbol, inputs.benchmark)]
+            + [(config.regime_symbol, inputs.benchmark)],
+            [(item.symbol, day) for item in inputs.symbols for day in item.earnings],
         ),
         metrics=metrics_payload(metrics, [qqq, survivor], config.backtest),
         pass_bar=pass_bar_payload(bar),

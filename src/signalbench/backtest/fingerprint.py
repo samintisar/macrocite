@@ -1,6 +1,7 @@
 import hashlib
 import math
 from collections.abc import Iterable, Sequence
+from datetime import date
 
 from signalbench.market.bars import AdjustedBar
 
@@ -18,6 +19,17 @@ def series_summary(symbol: str, bars: Sequence[AdjustedBar]) -> str:
     return f"{symbol}|{bars[0].date.isoformat()}|{bars[-1].date.isoformat()}|{len(bars)}|{total:.4f}"
 
 
-def data_fingerprint(series: Iterable[tuple[str, Sequence[AdjustedBar]]]) -> str:
-    """SHA-256 over the sorted per-series summaries of every input price series (spec 02)."""
-    return signal_set_fingerprint([series_summary(symbol, bars) for symbol, bars in series])
+def earnings_summary(earnings: Iterable[tuple[str, date]]) -> str:
+    """earnings|count|SHA-256 of the sorted, distinct symbol|YYYY-MM-DD pairs."""
+    pairs = sorted({f"{symbol}|{day.isoformat()}" for symbol, day in earnings})
+    return f"earnings|{len(pairs)}|{signal_set_fingerprint(pairs)}"
+
+
+def data_fingerprint(
+    series: Iterable[tuple[str, Sequence[AdjustedBar]]],
+    earnings: Iterable[tuple[str, date]],
+) -> str:
+    """SHA-256 over the sorted per-series summaries of every input price series, plus a
+    summary of every (symbol, earnings date) the run used (spec 02)."""
+    summaries = [series_summary(symbol, bars) for symbol, bars in series]
+    return signal_set_fingerprint([*summaries, earnings_summary(earnings)])

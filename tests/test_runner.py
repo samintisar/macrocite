@@ -103,14 +103,24 @@ def test_run_is_stored_with_provenance_and_report(seeded: Session, tmp_path: Pat
     assert path.read_text(encoding="utf-8").startswith("# Backtest: pullback (Jev off)")
 
 
-def test_data_fingerprint_covers_every_input_series(seeded: Session, tmp_path: Path) -> None:
+def test_data_fingerprint_covers_every_input_series_and_earnings_date(
+    seeded: Session, tmp_path: Path
+) -> None:
     run, _ = _run(seeded, tmp_path)
     stored = {
         "AAA": series(DAYS, pullback_closes(len(DAYS), dip=DIP)),
         "BBB": trend_bars(DAYS, 50.0, 0.1),
         "QQQ": trend_bars(DAYS, 300.0, 0.5),
     }
-    assert run.data_fingerprint == data_fingerprint(stored.items())
+    assert run.data_fingerprint == data_fingerprint(stored.items(), [])
+    bbb = seeded.exec(select(Ticker).where(Ticker.symbol == "BBB")).one()
+    seeded.add(EarningsEvent(ticker_id=bbb.id, event_date=date(2011, 3, 1), source="sec_2.02"))
+    seeded.commit()
+    again, _ = _run(seeded, tmp_path)
+    assert again.data_fingerprint == data_fingerprint(
+        stored.items(), [("BBB", date(2011, 3, 1))]
+    )
+    assert again.data_fingerprint != run.data_fingerprint
 
 
 def test_second_report_on_the_same_day_gets_a_suffix(seeded: Session, tmp_path: Path) -> None:
@@ -182,7 +192,7 @@ def test_todays_partial_bar_is_dropped_before_16_15_new_york(
         "BBB": trend_bars(DAYS, 50.0, 0.1)[:-1],
         "QQQ": trend_bars(DAYS, 300.0, 0.5)[:-1],
     }
-    assert run.data_fingerprint == data_fingerprint(stored.items())
+    assert run.data_fingerprint == data_fingerprint(stored.items(), [])
     # The same instant in UTC is still before 16:15 in New York.
     utc = before.astimezone(ZoneInfo("UTC"))
     assert _run(seeded, tmp_path, now=utc)[0].end_date == DAYS[-2]

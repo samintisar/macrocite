@@ -114,7 +114,7 @@ A **combined** run of all passing setups is reported for information only. It do
 ## Persistence and output
 
 - **New table `backtest_runs`** (migration `0009`): id, strategy_version, config_sha256, git_sha, setup (`pullback|breakout|sentiment|combined`), jev_mode (`off|filter`), start_date, end_date, data_fingerprint, metrics JSON, pass_bar JSON (`{criterion: {value, threshold, passed}}`), passed, trade_log JSON, run_at.
-- `data_fingerprint` = SHA-256 of sorted `(symbol, first_date, last_date, row_count, round(sum(adj_close), 4))` over all input price series. It reuses `backtest/fingerprint.py` hashing helpers.
+- `data_fingerprint` = SHA-256 of sorted `(symbol, first_date, last_date, row_count, round(sum(adj_close), 4))` over all input price series, plus one entry `earnings|<count>|<SHA-256 of the sorted, distinct (symbol, date) earnings dates the run used>`. It reuses `backtest/fingerprint.py` hashing helpers.
 - **CLI:** `signalbench backtest run --setup {pullback,breakout,sentiment,combined} [--jev {off,filter}]` stores a run and writes `reports/backtests/<YYYY-MM-DD>-<setup>-<jev>.md`, which is committed to git as the record. `signalbench backtest show <run_id>` reprints a report.
 
 ## Testing
@@ -151,3 +151,4 @@ A **combined** run of all passing setups is reported for information only. It do
 - 2026-09-24: `backtest run` also requires `data/cdr_spread_survey.yaml` to be committed and unchanged from HEAD, and refuses unless the config's `cost_per_side` equals the survey's (after its 6-decimal rounding).
 - 2026-09-24: before simulating, the runner drops today's bars when the latest QQQ bar is dated today (America/New_York) and it is before 16:15 there (a partial bar), then refuses to run unless every universe series ends on the run's last session, listing each stale or empty series and pointing to `signalbench ingest prices`.
 - 2026-09-24: the backtest's earnings dates (blackout and earnings exit) are every realized SEC Item 2.02 date (`sec_2.02` events only), unclustered. This is more conservative than `earnings_dates()`, which mixes in Finnhub calendar dates and collapses dates within 3 days to the first.
+- 2026-09-24: `data_fingerprint` also covers the earnings dates the run used (see Persistence). `git_sha` also gets `-dirty` for untracked, non-ignored files under `src/`, `data/`, or `alembic/`. The committed-config check treats a path outside the repo as not committed.

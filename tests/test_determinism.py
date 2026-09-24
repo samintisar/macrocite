@@ -50,12 +50,26 @@ def test_data_fingerprint_is_order_free_and_sensitive_to_every_field() -> None:
     aaa = [make_bar(days[0], 10.0), make_bar(days[1], 11.0)]
     qqq = [make_bar(days[0], 300.0), make_bar(days[1], 301.0)]
     assert series_summary("AAA", aaa) == "AAA|2024-01-02|2024-01-03|2|21.0000"
-    base = data_fingerprint([("AAA", aaa), ("QQQ", qqq)])
-    assert base == data_fingerprint([("QQQ", qqq), ("AAA", aaa)])
+    base = data_fingerprint([("AAA", aaa), ("QQQ", qqq)], [])
+    assert base == data_fingerprint([("QQQ", qqq), ("AAA", aaa)], [])
     assert len(base) == 64
-    assert base != data_fingerprint([("AAA", aaa[:1]), ("QQQ", qqq)])  # row count, last date
-    assert base != data_fingerprint([("AAA", [aaa[0], make_bar(days[1], 11.0001)]), ("QQQ", qqq)])
-    assert base != data_fingerprint([("AAB", aaa), ("QQQ", qqq)])
+    assert base != data_fingerprint([("AAA", aaa[:1]), ("QQQ", qqq)], [])  # row count, last date
+    assert base != data_fingerprint(
+        [("AAA", [aaa[0], make_bar(days[1], 11.0001)]), ("QQQ", qqq)], []
+    )
+    assert base != data_fingerprint([("AAB", aaa), ("QQQ", qqq)], [])
+
+
+def test_data_fingerprint_covers_the_earnings_dates() -> None:
+    bars = [("AAA", [make_bar(date(2024, 1, 2), 10.0)])]
+    one = [("AAA", date(2024, 1, 25)), ("BBB", date(2024, 2, 1))]
+    base = data_fingerprint(bars, one)
+    assert base == data_fingerprint(bars, list(reversed(one)))  # order free
+    assert base == data_fingerprint(bars, [*one, one[0]])  # a repeated date is the same set
+    assert base != data_fingerprint(bars, [])
+    assert base != data_fingerprint(bars, one[:1])  # a date removed
+    assert base != data_fingerprint(bars, [("AAA", date(2024, 1, 26)), one[1]])  # a date moved
+    assert base != data_fingerprint(bars, [("BBB", date(2024, 1, 25)), one[1]])  # another symbol
 
 
 def test_two_simulations_give_identical_metrics_and_fingerprints() -> None:
@@ -67,7 +81,7 @@ def test_two_simulations_give_identical_metrics_and_fingerprints() -> None:
     def run() -> tuple[RunMetrics, str]:
         market = make_market(bars, qqq, days, config)
         result = simulate(market, NullReadingsView(), config, days[220], days[290])
-        fingerprint = data_fingerprint([*bars.items(), ("QQQ", qqq)])
+        fingerprint = data_fingerprint([*bars.items(), ("QQQ", qqq)], [])
         return run_metrics(result, config.backtest), fingerprint
 
     first, second = run(), run()

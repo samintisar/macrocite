@@ -46,3 +46,30 @@ def test_committed_unchanged(repo: Path) -> None:
 def test_git_sha_outside_a_repo_raises(tmp_path: Path) -> None:
     with pytest.raises(RuntimeError, match="rev-parse"):
         git_sha(tmp_path)
+
+
+@pytest.mark.parametrize("folder", ["src", "data", "alembic"])
+def test_untracked_files_under_code_folders_mark_dirty(repo: Path, folder: str) -> None:
+    head = _git(repo, "rev-parse", "HEAD")
+    (repo / folder / "new").mkdir(parents=True, exist_ok=True)
+    (repo / folder / "new" / "module.py").write_text("x = 1\n", encoding="utf-8")
+    assert git_sha(repo) == f"{head}-dirty"
+
+
+def test_ignored_files_under_code_folders_do_not_mark_dirty(repo: Path) -> None:
+    (repo / ".gitignore").write_text("__pycache__/\n", encoding="utf-8")
+    _git(repo, "add", ".gitignore")
+    _git(repo, "commit", "-q", "-m", "ignore")
+    head = _git(repo, "rev-parse", "HEAD")
+    (repo / "src" / "__pycache__").mkdir(parents=True)
+    (repo / "src" / "__pycache__" / "cli.pyc").write_bytes(b"\x00")
+    assert git_sha(repo) == head
+
+
+def test_committed_unchanged_is_false_outside_the_repo(
+    repo: Path, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    outside = tmp_path_factory.mktemp("elsewhere") / "strategy_v1.yaml"
+    outside.write_text("version: v1\n", encoding="utf-8")
+    assert committed_unchanged(repo, outside) is False
+
