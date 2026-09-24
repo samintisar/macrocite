@@ -49,9 +49,38 @@ from signalbench.ingest.news import ingest_company_news, last_news_date, news_wi
 from signalbench.ingest.prices import fetch_yfinance_daily, ingest_daily_prices
 from signalbench.ingest.seed import BENCHMARKS, seed_universe
 from signalbench.ingest.stats import collect_stats
-from signalbench.jev.filter_record import FilterFileError, load_filter_setting
-from signalbench.market.calendar import NyseSessions
+from signalbench.jev.backfill import (
+    NEWS_DAILY_CAP,
+    BackfillSource,
+    pending_work,
+    run_backfill,
+)
+from signalbench.jev.calibration import (
+    BENCHMARK_SYMBOL,
+    calibration_sections,
+    render_calibration_report,
+)
+from signalbench.jev.client import JevError, OpenRouterJevClient
+from signalbench.jev.filter import decide_filter, score_trades
+from signalbench.jev.filter_record import (
+    FilterFileError,
+    FilterInputError,
+    FilterRecord,
+    load_filter_setting,
+    load_v1_trades,
+    render_filter_report,
+    write_filter_file,
+)
+from signalbench.jev.fixture import fixture_state
+from signalbench.jev.store import (
+    calibration_samples,
+    load_document_readings,
+    reading_builds,
+)
+from signalbench.market.calendar import HISTORY_START, NyseSessions
+from signalbench.market.legal_close import LegalCloses
 from signalbench.strategy.config import ConfigError, load_strategy_config
+from signalbench.strategy.readings import JevReadingsView
 from signalbench.strategy.spread import SpreadSurveyError, load_spread_survey
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -60,6 +89,8 @@ STRATEGY_V1_PATH = REPO_ROOT / "data" / "strategy_v1.yaml"
 SPREAD_SURVEY_PATH = REPO_ROOT / "data" / "cdr_spread_survey.yaml"
 JEV_FILTER_PATH = REPO_ROOT / "data" / "jev_filter_v1.yaml"
 REPORTS_DIR = REPO_ROOT / "reports" / "backtests"
+JEV_REPORTS_DIR = REPO_ROOT / "reports" / "jev"
+JEV_CONCURRENCY = 4
 NEW_YORK = ZoneInfo("America/New_York")
 
 app = typer.Typer(help="SignalBench swing assistant.")
@@ -82,6 +113,16 @@ class SetupChoice(str, Enum):
 class JevChoice(str, Enum):
     off = "off"
     filter = "filter"
+
+
+jev_app = typer.Typer(help="Jev reads filings and news (spec 03).")
+app.add_typer(jev_app, name="jev")
+
+
+class SourceChoice(str, Enum):
+    filings = "filings"
+    news = "news"
+    all = "all"
 
 
 @universe_app.command("refresh")
@@ -461,3 +502,196 @@ def backtest_cost(
     typer.echo(f"complete readings: {len(result.readings)} (incomplete: {result.incomplete})")
     typer.echo(f"median spread: {result.median_spread:.3%}")
     typer.echo(f"cost_per_side: {result.cost_per_side}")
+
+
+def _openrouter_key() -> str:
+    if settings.openrouter_api_key is None:
+        typer.echo("OPENROUTER_API_KEY is not set in .env", err=True)
+        raise typer.Exit(1)
+    return settings.openrouter_api_key
+
+
+def _universe_symbols() -> list[str]:
+    return [entry.us_symbol for entry in load_universe(UNIVERSE_PATH)]
+
+
+@jev_app.command("test")
+def jev_test() -> None:
+    """One real call on a small made-up 8-K: prints the answers, latency, cost, and build."""
+    key = _openrouter_key()
+    with httpx.Client() as http:
+        try:
+            result = OpenRouterJevClient(key, http).read(fixture_state())
+        except JevError as error:
+            typer.echo(f"Jev call failed: {error}", err=True)
+            raise typer.Exit(1) from None
+    typer.echo(f"model: {result.model_resolved}")
+    typer.echo(
+        f"impact: negative {result.p_negative:.3f} | neutral {result.p_neutral:.3f} "
+        f"| positive {result.p_positive:.3f}"
+    )
+    typer.echo(f"event_type: {result.event_type} | routine {result.p_routine:.3f}")
+    typer.echo(
+        f"latency {result.latency_ms} ms | input tokens {result.input_tokens} "
+        f"| cost ${result.cost_usd:.6f}"
+    )
+
+
+@jev_app.command("backfill")
+def jev_backfill(
+    source: Annotated[
+        SourceChoice, typer.Option("--source", help="Which documents to read.")
+    ] = SourceChoice.all,
+    since: Annotated[
+        datetime | None,
+        typer.Option("--since", formats=["%Y-%m-%d"], help="Only documents published from this day."),
+    ] = None,
+    max_cost_usd: Annotated[
+        float, typer.Option("--max-cost-usd", min=0.0, help="Stop once this much is spent.")
+    ] = 10.0,
+) -> None:
+    """Read every unread 8-K and news item once per universe ticker. Safe to rerun."""
+    key = _openrouter_key()
+    backfill_source: BackfillSource = source.value
+    with get_session() as session, httpx.Client() as http:
+        work = pending_work(
+            session, _universe_symbols(), backfill_source, None if since is None else since.date()
+        )
+        typer.echo(
+            f"to read: {len(work.jobs)} (already read {work.already_read}, "
+            f"no text {work.no_text}, too long {work.too_long})"
+        )
+        if work.capped:
+            typer.echo(
+                f"news cap: {work.capped} items over {NEWS_DAILY_CAP} per symbol per New York "
+                f"day not read ({work.capped_days} symbol-days)"
+            )
+        summary = run_backfill(
+            session,
+            work.jobs,
+            OpenRouterJevClient(key, http),
+            max_cost_usd=max_cost_usd,
+            concurrency=JEV_CONCURRENCY,
+            echo=typer.echo,
+        )
+    typer.echo(
+        f"read {summary.read} | cost ${summary.cost_usd:.4f} | input tokens {summary.input_tokens}"
+    )
+    for build, count in sorted(summary.builds.items()):
+        typer.echo(f"model {build}: {count}")
+    if summary.skipped:
+        typer.echo(f"skipped {len(summary.skipped)} documents (listed above)")
+    if summary.budget_reached:
+        typer.echo(f"{summary.stopped}; {summary.not_started} not started. Run again to continue.")
+    elif summary.stopped is not None:
+        typer.echo(f"stopped: {summary.stopped}; {summary.not_started} not started.", err=True)
+        raise typer.Exit(1)
+
+
+def _r(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:.3f}"
+
+
+@jev_app.command("fit-filter")
+def jev_fit_filter(
+    write: Annotated[
+        bool, typer.Option("--write", help="Write data/jev_filter_v1.yaml and the report.")
+    ] = False,
+) -> None:
+    """The pre-registered filter decision (spec 03, steps 1-3). Writes nothing without --write."""
+    calendar = NyseSessions()
+    with get_session() as session:
+        try:
+            trades, runs = load_v1_trades(session)
+        except FilterInputError as error:
+            typer.echo(str(error), err=True)
+            raise typer.Exit(1) from None
+        last = max(run.end_date for run in runs)
+        symbols = sorted(set(_universe_symbols()) | {trade.symbol for trade in trades})
+        documents = load_document_readings(
+            session, symbols, LegalCloses(calendar.session_closes(HISTORY_START, last))
+        )
+        builds = reading_builds(session)
+    readings = sum(len(rows) for rows in documents.values())
+    if readings == 0:
+        typer.echo("No Jev readings. Run `signalbench jev backfill` first (spec 03).", err=True)
+        raise typer.Exit(1)
+    view = JevReadingsView(documents, calendar.sessions_between(HISTORY_START, last), None)
+    decision = decide_filter(score_trades(trades, view.max_p_negative))
+    typer.echo(f"decision: {decision.mode}, theta {decision.theta}")
+    typer.echo(f"why: {decision.reason}")
+    for row in decision.fit:
+        typer.echo(
+            f"fit theta {row.theta}: blocked {row.blocked}, kept {row.kept}, "
+            f"kept - blocked {_r(row.difference)}"
+        )
+    check = decision.confirm
+    if check is not None:
+        typer.echo(
+            f"confirm theta {check.theta}: blocked {check.blocked}, kept {check.kept}, "
+            f"mean R blocked {_r(check.mean_r_blocked)}, kept {_r(check.mean_r_kept)}"
+        )
+    if not write:
+        typer.echo("Nothing written. Run with --write to record the decision.")
+        return
+    today = datetime.now(NEW_YORK).date()
+    report = JEV_REPORTS_DIR / f"{today.isoformat()}-filter-decision.md"
+    record = FilterRecord(
+        decision=decision,
+        source_runs={run.setup: run.run_id for run in runs},
+        strategy_config_sha256=runs[0].config_sha256,
+        confirm_end=last,
+        readings=readings,
+        builds=builds,
+        decided_on=today,
+        report_path=report.relative_to(REPO_ROOT).as_posix(),
+    )
+    try:
+        write_filter_file(JEV_FILTER_PATH, record)
+    except FilterFileError as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(1) from None
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text(render_filter_report(record), encoding="utf-8")
+    typer.echo(f"wrote {JEV_FILTER_PATH}")
+    typer.echo(f"report: {report}")
+
+
+@jev_app.command("calibration")
+def jev_calibration() -> None:
+    """Write reports/jev/<date>-calibration.md (information only; nothing is adjusted)."""
+    calendar = NyseSessions()
+    today = datetime.now(NEW_YORK).date()
+    with get_session() as session:
+        samples, unlabeled = calibration_samples(
+            session,
+            _universe_symbols(),
+            BENCHMARK_SYMBOL,
+            LegalCloses(calendar.session_closes(HISTORY_START, today)),
+            calendar.sessions_between(HISTORY_START, today),
+        )
+        builds = reading_builds(session)
+    if not samples and not unlabeled:
+        typer.echo("No Jev readings. Run `signalbench jev backfill` first (spec 03).", err=True)
+        raise typer.Exit(1)
+    sections = calibration_sections(samples)
+    path = JEV_REPORTS_DIR / f"{today.isoformat()}-calibration.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        render_calibration_report(
+            sections,
+            readings=len(samples) + unlabeled,
+            unlabeled=unlabeled,
+            builds=builds,
+            written_on=today,
+        ),
+        encoding="utf-8",
+    )
+    typer.echo(f"labeled {len(samples)} | not labeled {unlabeled}")
+    for section in sections:
+        typer.echo(
+            f"{section.name}: {section.samples} documents | ECE positive "
+            f"{_r(section.positive_ece)} | ECE negative {_r(section.negative_ece)} | "
+            f"accuracy {_r(section.accuracy)} vs baseline {_r(section.majority_rate)}"
+        )
+    typer.echo(f"report: {path}")
