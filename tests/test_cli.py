@@ -260,3 +260,24 @@ def test_backtest_show_unknown_or_bad_id(session: Session, monkeypatch: pytest.M
     bad = runner.invoke(app, ["backtest", "show", "not-a-uuid"])
     assert bad.exit_code == 1
     assert "Not a run id" in bad.stderr
+
+
+def test_backtest_cost_prints_the_cost_per_side(tmp_path: Path) -> None:
+    survey = tmp_path / "survey.yaml"
+    rows = "".join(
+        f"  - {{cdr_symbol: Z{i}, bid: 99.8, ask: 100.2}}\n" for i in range(5)
+    )
+    survey.write_text("readings:\n" + rows + "  - {cdr_symbol: ZMET, bid: , ask: }\n", encoding="utf-8")
+    result = runner.invoke(app, ["backtest", "cost", "--survey", str(survey)])
+    assert result.exit_code == 0, result.stderr
+    assert "complete readings: 5 (incomplete: 1)" in result.stdout
+    assert "median spread: 0.400%" in result.stdout
+    assert "cost_per_side: 0.003" in result.stdout
+
+
+def test_backtest_cost_refuses_an_unfilled_survey(tmp_path: Path) -> None:
+    survey = tmp_path / "survey.yaml"
+    survey.write_text("readings:\n  - {cdr_symbol: ZNVD, bid: , ask: }\n", encoding="utf-8")
+    result = runner.invoke(app, ["backtest", "cost", "--survey", str(survey)])
+    assert result.exit_code == 1
+    assert "has 0 readings with both bid and ask" in result.stderr

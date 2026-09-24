@@ -139,3 +139,10 @@ A **combined** run of all passing setups is reported for information only. It do
 
 - 2026-09-22: created.
 - 2026-09-22: cost per side now comes from the spread survey, not a fixed 0.2%.
+- 2026-09-24: implementation choices (plan `2026-09-24-swing-02-strategy-backtest.md`):
+  - `backtest_runs` is migration `0010`, because spec 01 used `0009` for `raw_documents.form`. Specs 03–05 shift to `0011`–`0013`.
+  - Extra skip reasons: `held`, `no_cash`, and `no_bar`. Symbols that fail the liquidity filter are ignored without a skip record. Gate order: held, regime, paused, earnings_blackout, blocked.
+  - `EntryOrder.risk_amount` is the risk after the caps. If the open plus cost would spend more than the cash left, the entry is trimmed to the cash and logged as `trimmed`.
+  - Halves and the recent sample are split by entry date. `cost_per_side` is rounded to 6 decimals. `config_sha256` hashes the file with CRLF normalised to LF.
+  - `backtest run` refuses a config that is not committed and unchanged in git. `git_sha` carries `-dirty` when tracked code or data files have uncommitted changes.
+  - The trade log also records `stop_update` and `exit_deferred` events.

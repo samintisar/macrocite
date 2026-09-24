@@ -45,10 +45,12 @@ from signalbench.ingest.seed import BENCHMARKS, seed_universe
 from signalbench.ingest.stats import collect_stats
 from signalbench.market.calendar import NyseSessions
 from signalbench.strategy.config import load_strategy_config
+from signalbench.strategy.spread import SpreadSurveyError, load_spread_survey
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 UNIVERSE_PATH = REPO_ROOT / "data" / "cdr_universe.yaml"
 STRATEGY_V1_PATH = REPO_ROOT / "data" / "strategy_v1.yaml"
+SPREAD_SURVEY_PATH = REPO_ROOT / "data" / "cdr_spread_survey.yaml"
 REPORTS_DIR = REPO_ROOT / "reports" / "backtests"
 NEW_YORK = ZoneInfo("America/New_York")
 
@@ -360,3 +362,24 @@ def backtest_show(
             typer.echo(f"No backtest run {run_id}", err=True)
             raise typer.Exit(1)
         typer.echo(render_report(run), nl=False)
+
+
+@backtest_app.command("cost")
+def backtest_cost(
+    survey: Annotated[
+        Path, typer.Option("--survey", help="The CDR bid/ask survey.")
+    ] = SPREAD_SURVEY_PATH,
+) -> None:
+    try:
+        result = load_spread_survey(survey)
+    except (SpreadSurveyError, FileNotFoundError) as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(1) from None
+    for reading in result.readings:
+        typer.echo(
+            f"{reading.cdr_symbol}: bid {reading.bid} ask {reading.ask} "
+            f"spread {reading.spread_pct:.3%}"
+        )
+    typer.echo(f"complete readings: {len(result.readings)} (incomplete: {result.incomplete})")
+    typer.echo(f"median spread: {result.median_spread:.3%}")
+    typer.echo(f"cost_per_side: {result.cost_per_side}")
