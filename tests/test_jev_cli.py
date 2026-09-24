@@ -225,9 +225,11 @@ def test_fit_filter_write_records_the_file_and_report_once(
     [report] = list((root / "reports" / "jev").glob("*-filter-decision.md"))
     assert f"report: reports/jev/{report.name}" in text
     assert report.read_text(encoding="utf-8").startswith("# Jev filter decision (spec 03)")
+    report.write_text("kept", encoding="utf-8")
     again = runner.invoke(app, ["jev", "fit-filter", "--write"])
     assert again.exit_code == 1
     assert "already exists" in again.stderr
+    assert report.read_text(encoding="utf-8") == "kept"  # refused before the report is rewritten
 
 
 def test_fit_filter_needs_the_stored_runs(

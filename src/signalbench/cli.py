@@ -634,6 +634,13 @@ def jev_fit_filter(
     if not write:
         typer.echo("Nothing written. Run with --write to record the decision.")
         return
+    if JEV_FILTER_PATH.exists():  # refuse before the report is written, so nothing is replaced
+        typer.echo(
+            f"{JEV_FILTER_PATH.name} already exists. The filter decision is made once; a new "
+            "decision needs a new question set (spec 03).",
+            err=True,
+        )
+        raise typer.Exit(1)
     today = datetime.now(NEW_YORK).date()
     report = JEV_REPORTS_DIR / f"{today.isoformat()}-filter-decision.md"
     record = FilterRecord(
