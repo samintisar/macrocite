@@ -8,6 +8,7 @@ from sqlalchemy.types import TypeDecorator
 from sqlmodel import Session, select
 
 from signalbench.db.models import (
+    BacktestRun,
     DocType,
     DocumentTicker,
     EarningsEvent,
@@ -181,3 +182,27 @@ def test_earnings_event_unique_per_ticker_date_source(session: Session) -> None:
     session.add(EarningsEvent(ticker_id=ticker.id, event_date=date(2026, 7, 30), source="sec_2.02"))
     with pytest.raises(IntegrityError):
         session.commit()
+
+
+def test_backtest_run_round_trips_json(session: Session) -> None:
+    run = BacktestRun(
+        strategy_version="v1",
+        config_sha256="a" * 64,
+        git_sha="b" * 40,
+        setup="pullback",
+        jev_mode="off",
+        start_date=date(2012, 1, 3),
+        end_date=date(2026, 9, 23),
+        data_fingerprint="c" * 64,
+        metrics={"trades": 31, "skips_by_reason": {"regime": 4}},
+        pass_bar={"trades": {"value": 31.0, "threshold": 30.0, "passed": True}},
+        passed=True,
+        trade_log={"trades": [], "events": [{"date": "2012-01-04", "event": "pause"}]},
+    )
+    session.add(run)
+    session.commit()
+    stored = session.exec(select(BacktestRun)).one()
+    assert stored.metrics["skips_by_reason"] == {"regime": 4}
+    assert stored.pass_bar["trades"]["passed"] is True
+    assert stored.trade_log["events"][0]["event"] == "pause"
+    assert stored.run_at.tzinfo is not None

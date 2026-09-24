@@ -14,7 +14,7 @@ def _script() -> ScriptDirectory:
 
 
 def test_migrations_have_single_head() -> None:
-    assert _script().get_heads() == ["0009_document_form"]
+    assert _script().get_heads() == ["0010_backtest_runs"]
 
 
 def test_0007_drops_sentiment_tables_and_enum() -> None:
@@ -30,3 +30,11 @@ def test_0008_creates_ticker_kind_enum_idempotently() -> None:
     assert 'name="tickerkind"' in text
     assert "checkfirst=True" in text
     assert 'op.create_table(\n        "earnings_events"' in text
+
+
+def test_0010_creates_backtest_runs_with_json_payloads() -> None:
+    text = (VERSIONS / "0010_backtest_runs.py").read_text(encoding="utf-8")
+    assert 'down_revision: str | None = "0009_document_form"' in text
+    assert 'op.create_table(\n        "backtest_runs"' in text
+    for column in ("metrics", "pass_bar", "trade_log"):
+        assert f'sa.Column("{column}", sa.JSON(), nullable=False)' in text
