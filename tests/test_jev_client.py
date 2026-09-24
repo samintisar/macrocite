@@ -98,6 +98,13 @@ def test_timeouts_and_connection_errors_are_retried() -> None:
     assert len(requests) == 3 and sleeps == [1.0, 2.0]
 
 
+def test_undecodable_bodies_are_retried_then_unavailable() -> None:
+    client, requests, sleeps = _client([httpx.DecodingError("bad gzip")] * 4)
+    with pytest.raises(JevUnavailableError, match="after 4 attempts"):
+        client.read(STATE)
+    assert len(requests) == 4 and sleeps == [1.0, 2.0, 4.0]
+
+
 def test_three_retries_then_unavailable() -> None:
     client, requests, sleeps = _client([503, 503, 503, 503])
     with pytest.raises(JevUnavailableError, match="after 4 attempts: HTTP 503"):

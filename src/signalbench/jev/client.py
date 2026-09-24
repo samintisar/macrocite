@@ -198,7 +198,7 @@ class OpenRouterJevClient:
                 response = self._http.post(
                     ENDPOINT, json=body, headers=self._headers, timeout=TIMEOUT_SECONDS
                 )
-            except httpx.TransportError as error:  # timeouts and connection failures
+            except httpx.RequestError as error:  # timeouts, connection failures, undecodable bodies
                 failure = f"{type(error).__name__}: {error}"
                 continue
             latency_ms = round((self._clock() - started) * 1000)

@@ -84,7 +84,12 @@ class JevReadingsView:
         self._block_theta = block_theta
 
     def window(self, symbol: str, as_of: date, sessions: int) -> list[DocumentReading]:
-        """Readings whose legal close falls in the `sessions` sessions ending at `as_of`."""
+        """Readings whose legal close falls in the `sessions` sessions ending at `as_of`.
+
+        Precondition: `sessions` (the constructor argument) must extend up to `as_of` — the
+        window's first session is counted back from the last session on or before `as_of`, but
+        its upper bound is `as_of` itself, not the next session on or after it.
+        """
         last = bisect_right(self._sessions, as_of) - 1
         if last < 0 or symbol not in self._readings:
             return []

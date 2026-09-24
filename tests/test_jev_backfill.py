@@ -148,6 +148,17 @@ def test_the_budget_guard_stops_cleanly_and_the_next_run_resumes(seeded: Session
     assert len(pending_work(seeded, UNIVERSE, "news", None).jobs) == 21 - 3
 
 
+def test_the_budget_guard_stops_cleanly_under_a_thread_pool(seeded: Session) -> None:
+    jobs = pending_work(seeded, UNIVERSE, "news", None).jobs[:10]
+    client = FakeJevClient(lambda _state: fake_result(cost_usd=0.4))
+    summary = run_backfill(seeded, jobs, client, max_cost_usd=1.0, concurrency=4, echo=_quiet)
+    assert summary.budget_reached
+    assert summary.stopped is not None and summary.stopped.startswith("budget reached")
+    assert len(client.calls) == summary.read  # every call made was stored, none lost
+    assert len(seeded.exec(select(JevReading)).all()) == summary.read
+    assert summary.read < len(jobs)  # the budget stopped the run before every pair was read
+
+
 def test_a_fatal_error_stops_the_run(seeded: Session) -> None:
     jobs = pending_work(seeded, UNIVERSE, "news", None).jobs[:4]
     answers: list[Any] = [fake_result(), JevFatalError("HTTP 402: insufficient credits")]
