@@ -80,9 +80,27 @@ Formal reports live in `reports/`; decisions in the owner's words live in the ov
 - **Takeaway:** Jev's reading of public filings and news carries no information about the next week's move in these widely followed stocks.
 - **Owner's decision:** "Jev filter information only; Sentiment FAIL, scrapped; specs 04–05 stay on hold."
 
+## 2026-09-28 — Breakout with idle cash in QQQ (rough estimate)
+
+- **Kind:** rough, post-hoc (2012–2026 data already seen; nothing stored; script in the session scratchpad).
+- **Test:** rerun Breakout v1 in memory (it reproduced the stored run exactly: 419 trades, 610.6%, Sharpe 0.949), then let the day's idle cash (33% on average) earn QQQ's daily return, with a switching cost on each change in the cash share. Position sizes don't grow with the QQQ gains.
+- **Result:**
+
+  | Series | Total return | CAGR | Sharpe | Max drawdown |
+  | --- | --- | --- | --- | --- |
+  | Breakout v1, idle cash | 610.6% | 14.2% | 0.949 | 24.8% |
+  | + idle cash in QQQ, no switching cost | 2,807.7% | 25.7% | 1.140 | 33.2% |
+  | + idle cash in QQQ, 0.05% per side | 2,473.6% | 24.7% | 1.103 | 33.3% |
+  | + idle cash in QQQ, 0.2% per side | 1,684.4% | 21.6% | 0.991 | 33.5% |
+  | QQQ buy-and-hold | 1,376.1% | 20.1% | 0.996 | 35.1% |
+
+- **Holding times (Breakout v1):** 214 stopped out after 13 sessions on average (−0.80 R), 139 hit the 30-session limit (+1.86 R), 66 exited for earnings after 14 sessions (+0.65 R). The best trades were the ones the clock closed.
+- **Takeaway:** cash drag explains Breakout's Sharpe gap. With cheap switching the blend beats QQQ on Sharpe (1.10 vs 1.00); at 0.2% per side it only ties. Worth a proper pre-registered test only with realistic switching costs and fresh data (forward paper trading), since this reuses seen data.
+
 ## Open questions (not yet tested)
 
-- **Idle cash:** does holding QQQ with idle cash close Breakout's Sharpe gap? All three setups sat partly in cash while QQQ compounded.
+- **Idle cash (rough estimate done, see above):** a proper pre-registered test with realistic QQQ switching costs.
+- **Holding time:** Breakout's time-limit exits were its best trades (+1.86 R); a pre-registered test of longer or no time limits.
 - **Slower momentum:** monthly rotation into the strongest names, holding weeks to months.
 - **Fewer constraints on Breakout:** more slots, no regime pause.
 - **Jev on other horizons or stocks:** longer holding periods, or less-followed stocks.
