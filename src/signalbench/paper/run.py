@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 
 from sqlmodel import Session, col, select
 
+from signalbench.backtest.preregistration import RunRefusedError
 from signalbench.backtest.provenance import code_version
 from signalbench.backtest.runner import (
     MarketInputs,
@@ -74,15 +75,16 @@ def run_paper(
     calendar: Sessions,
     clock: Callable[[], datetime],
     ingest: Callable[[Session], list[str]],
-    ingest_earnings: Callable[[Session], list[str]],
+    ingest_earnings: Callable[[Session, date], list[str]],
     splits: SplitFetcher,
     reports_dir: Path,
     echo: Callable[[str], None],
 ) -> RunOutcome:
     """The nightly job. `lock` yields False when another run holds it: nothing is done.
     `ingest` refreshes prices (and the liquidity flags) and returns what failed.
-    `ingest_earnings` refreshes the Finnhub earnings calendar and returns what failed; it is not
-    critical: a failure is printed and the stored dates are used. `splits` lists
+    `ingest_earnings` refreshes the Finnhub earnings calendar from a date (the oldest last
+    session of a portfolio that is behind, so a catch-up keeps the dates it passes) and returns
+    what failed; it is not critical: a failure is printed and the stored dates are used. `splits` lists
     a symbol's splits after a date, for the symbols a portfolio holds (paper/splits.py); a
     failed lookup, or stored prices on another scale than the saved state, refuses that
     portfolio for the night (the next run catches up). `clock` must
@@ -128,7 +130,7 @@ def _step_all(
     universe: list[CdrEntry],
     calendar: Sessions,
     clock: Callable[[], datetime],
-    ingests: tuple[Callable[[Session], list[str]], Callable[[Session], list[str]]],
+    ingests: tuple[Callable[[Session], list[str]], Callable[[Session, date], list[str]]],
     splits: SplitFetcher,
     echo: Callable[[str], None],
     stepped: dict[str, int],
@@ -155,7 +157,8 @@ def _step_all(
     failed = ingest(session)
     if failed:
         echo(f"ingest: {len(failed)} failed ({', '.join(failed)}); stepping on the stored prices")
-    _refresh_earnings(session, ingest_earnings, echo)
+    since = min(p.started_on if p.last_session is None else p.last_session for p in behind)
+    _refresh_earnings(session, ingest_earnings, since, echo)
     refused: list[str] = []
     inputs: dict[str, MarketInputs] = {}
     for portfolio in behind:
@@ -174,13 +177,14 @@ def _step_all(
             inputs[symbol] = load_market_inputs(
                 session, universe, symbol, target, calendar_earnings=True
             )
-            check_series_current(inputs[symbol], symbol, target)
+            _check_current(inputs[symbol], symbol, target, set())  # the benchmark
         market = _market(inputs[symbol], config, calendar, target)
         try:
+            _check_held_current(portfolio, config, inputs[symbol], target)
             _step_portfolio(
                 session, portfolio, config, market, calendar, target, clock, splits, stepped
             )
-        except PaperRefusedError as error:  # a split check: this portfolio only, like a config
+        except PaperRefusedError as error:  # prices or splits: this portfolio only, like a config
             session.rollback()
             refused.append(str(error))
             echo(f"{portfolio.name}: not stepped ({error})")
@@ -190,12 +194,15 @@ def _step_all(
 
 
 def _refresh_earnings(
-    session: Session, ingest_earnings: Callable[[Session], list[str]], echo: Callable[[str], None]
+    session: Session,
+    ingest_earnings: Callable[[Session, date], list[str]],
+    since: date,
+    echo: Callable[[str], None],
 ) -> None:
     """The Finnhub calendar, stored tonight, is read from tonight's sessions on; sessions
     already stepped are never re-decided. Not critical: a failure keeps the stored dates."""
     try:
-        failed = ingest_earnings(session)
+        failed = ingest_earnings(session, since)
     except Exception as error:  # noqa: BLE001  # the stored dates still serve
         session.rollback()
         echo(f"earnings calendar FAILED ({type(error).__name__}: {error}); "
@@ -224,6 +231,29 @@ def _cached(fetch: SplitFetcher, echo: Callable[[str], None]) -> SplitFetcher:
         return found
 
     return splits
+
+
+def _check_current(
+    inputs: MarketInputs, benchmark: str, target: date, symbols: set[str]
+) -> None:
+    """The backtest's `check_series_current` on the benchmark and `symbols` only. A paper run
+    needs a bar on the target for the benchmark and for what a portfolio holds or has pending;
+    any other universe name without one is just not tradable that night."""
+    wanted = [item for item in inputs.symbols if item.symbol in symbols]
+    check_series_current(MarketInputs(wanted, inputs.benchmark), benchmark, target)
+
+
+def _check_held_current(
+    portfolio: PaperPortfolio, config: StrategyConfig, inputs: MarketInputs, target: date
+) -> None:
+    """Refuses the portfolio (not the run) when a symbol it holds or has pending has no bar on
+    the target; the next run catches up once the bar is stored."""
+    vehicle = None if config.cash_vehicle is None else config.cash_vehicle.symbol
+    held = {ref.symbol for ref in references(state_from_json(portfolio.state), vehicle)}
+    try:
+        _check_current(inputs, config.regime_symbol, target, held)
+    except RunRefusedError as error:
+        raise PaperRefusedError(f"{portfolio.name}: {error}") from error
 
 
 def _market(

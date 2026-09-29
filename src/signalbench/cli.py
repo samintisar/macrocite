@@ -1,6 +1,6 @@
 import uuid
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from enum import Enum
 from pathlib import Path
 from typing import Annotated
@@ -314,7 +314,9 @@ def _ingest_filings(session: Session, client: httpx.Client, backfill_text: bool)
     return _for_each_ticker(session, "filings", tickers, work)
 
 
-def _ingest_earnings(session: Session, finnhub: FinnhubClient | None) -> list[str]:
+def _ingest_earnings(
+    session: Session, finnhub: FinnhubClient | None, since: date | None = None
+) -> list[str]:
     typer.echo(f"earnings from SEC 2.02: +{sync_sec_earnings_events(session)}")
     if finnhub is None:
         typer.echo("FINNHUB_API_KEY is not set; skipping the upcoming earnings calendar", err=True)
@@ -322,17 +324,18 @@ def _ingest_earnings(session: Session, finnhub: FinnhubClient | None) -> list[st
     today = datetime.now(UTC).date()
 
     def work(ticker: Ticker) -> str:
-        return f"+{ingest_finnhub_calendar_for_ticker(session, finnhub, ticker, today)}"
+        return f"+{ingest_finnhub_calendar_for_ticker(session, finnhub, ticker, today, since)}"
 
     tickers = _universe_tickers(session, {TickerKind.us_stock})
     return _for_each_ticker(session, "earnings", tickers, work)
 
 
-def _ingest_paper_earnings(session: Session) -> list[str]:
-    """`ingest earnings` for `paper run`: the upcoming Finnhub calendar, skipped with a warning
-    when FINNHUB_API_KEY is not set."""
+def _ingest_paper_earnings(session: Session, since: date) -> list[str]:
+    """`ingest earnings` for `paper run`: the Finnhub calendar from `since` (the oldest last
+    session of a portfolio that is behind) on, skipped with a warning when FINNHUB_API_KEY is
+    not set."""
     with httpx.Client(timeout=30.0) as client:
-        return _ingest_earnings(session, _finnhub(client))
+        return _ingest_earnings(session, _finnhub(client), since)
 
 
 def _finnhub(client: httpx.Client) -> FinnhubClient | None:

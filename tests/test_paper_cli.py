@@ -109,5 +109,5 @@ def test_the_paper_earnings_ingest_skips_the_calendar_without_a_finnhub_key(
     session: Session, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.setattr(cli.settings, "finnhub_api_key", None)
-    assert cli._ingest_paper_earnings(session) == []
+    assert cli._ingest_paper_earnings(session, date(2026, 10, 12)) == []
     assert "FINNHUB_API_KEY is not set; skipping the upcoming earnings calendar" in capsys.readouterr().err

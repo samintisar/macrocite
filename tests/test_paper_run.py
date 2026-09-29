@@ -12,6 +12,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 from sqlmodel import Session, col, func, select
 
@@ -29,8 +30,14 @@ from signalbench.db.models import (
     TickerKind,
 )
 from signalbench.ingest.cdr import CdrEntry
-from signalbench.ingest.earnings import FINNHUB_EARNINGS_SOURCE, SEC_EARNINGS_SOURCE
+from signalbench.ingest.earnings import (
+    FINNHUB_EARNINGS_SOURCE,
+    SEC_EARNINGS_SOURCE,
+    ingest_finnhub_calendar_for_ticker,
+)
+from signalbench.ingest.finnhub import FinnhubClient
 from signalbench.ingest.prices import Split
+from signalbench.ingest.ratelimit import RateLimiter
 from signalbench.market.bars import AdjustedBar
 from signalbench.market.calendar import HISTORY_START
 from signalbench.paper.run import RunOutcome, run_paper
@@ -121,7 +128,7 @@ def _no_splits(_symbol: str, _since: date) -> list[Split]:
 def _run(
     session: Session, repo: Path, clock: Clock, ingest: Callable[[Session], list[str]] | None = None,
     held: bool = True, *, splits: SplitFetcher = _no_splits,
-    earnings: Callable[[Session], list[str]] = lambda _session: [],
+    earnings: Callable[[Session, date], list[str]] = lambda _session, _since: [],
     echo: Callable[[str], None] = lambda _line: None,
 ) -> RunOutcome:
     return run_paper(
@@ -625,7 +632,7 @@ class Calendar:
         self.clock, self.known_from, self.report_day = clock, known_from, report_day
         self.calls = 0
 
-    def __call__(self, session: Session) -> list[str]:
+    def __call__(self, session: Session, _since: date) -> list[str]:
         self.calls += 1
         stored = session.exec(select(EarningsEvent)).all()
         if self.clock().date() >= self.known_from and not stored:
@@ -662,7 +669,7 @@ def test_a_calendar_date_counts_from_the_night_it_is_stored(session: Session, re
 def test_an_earnings_calendar_failure_warns_and_the_run_goes_on(
     session: Session, repo: Path
 ) -> None:
-    def down(_session: Session) -> list[str]:
+    def down(_session: Session, _since: date) -> list[str]:
         raise RuntimeError("finnhub down")
 
     lines: list[str] = []
@@ -671,7 +678,70 @@ def test_an_earnings_calendar_failure_warns_and_the_run_goes_on(
     assert ("earnings calendar FAILED (RuntimeError: finnhub down); "
             "stepping on the stored earnings dates") in lines
     lines.clear()
-    later = _run(session, repo, Clock(evening(DAYS[FIRST + 1])), earnings=lambda _s: ["AAA"],
+    later = _run(session, repo, Clock(evening(DAYS[FIRST + 1])), earnings=lambda _s, _d: ["AAA"],
                  echo=lines.append)
     assert later.status == "ok"
     assert "earnings calendar: 1 failed (AAA); stepping on the stored earnings dates" in lines
+
+
+def _finnhub(report_day: date) -> FinnhubClient:
+    """Finnhub's calendar: AAA reports on `report_day`, listed for any window that holds it."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        start = date.fromisoformat(request.url.params["from"])
+        end = date.fromisoformat(request.url.params["to"])
+        rows = [{"symbol": "AAA", "date": report_day.isoformat()}] if start <= report_day <= end else []
+        return httpx.Response(200, json={"earningsCalendar": rows})
+
+    return FinnhubClient("k", httpx.Client(transport=httpx.MockTransport(handler)),
+                         limiter=RateLimiter(calls=1_000_000, period=1.0))
+
+
+def test_a_catch_up_across_a_held_stocks_calendar_date_fires_the_earnings_exit(
+    session: Session, repo: Path
+) -> None:
+    """AAA is held from DAYS[252] and reports on DAYS[256]; the nights of DAYS[253] to DAYS[256]
+    are missed. The catch-up's calendar query starts at the oldest behind portfolio's last
+    session, so the now-past date is still there: the exit is ordered at the DAYS[254] close."""
+    finnhub = _finnhub(DAYS[256])
+    aaa = session.exec(select(Ticker).where(Ticker.symbol == "AAA")).one()
+    since_seen: list[date] = []
+
+    def calendar(clock: Clock) -> Callable[[Session, date], list[str]]:
+        def ingest(session: Session, since: date) -> list[str]:
+            since_seen.append(since)
+            ingest_finnhub_calendar_for_ticker(session, finnhub, aaa, clock().date(), since=since)
+            return []
+        return ingest
+
+    for i in [*range(FIRST, 253), 257]:
+        clock = Clock(evening(DAYS[i]))
+        assert _run(session, repo, clock, earnings=calendar(clock)).status == "ok"
+    assert since_seen[-1] == DAYS[252]
+    fill = next(e for e in _events(session, "p-plain") if e.kind == "fill_exit")
+    assert (fill.session, fill.payload["reason"], fill.catch_up) == (DAYS[255], "earnings", True)
+
+
+def test_a_universe_name_that_stops_updating_does_not_stop_any_portfolio(
+    session: Session, repo: Path
+) -> None:
+    """BBB is neither held nor pending: without a bar on the target it is just not tradable."""
+    stale = {**BARS, "BBB": BARS["BBB"][:FIRST]}
+    for i in range(FIRST, LAST + 1):
+        clock = Clock(evening(DAYS[i]))
+        outcome = _run(session, repo, clock, Feed(clock, stale))
+        assert (outcome.status, outcome.stepped) == ("ok", {"p-plain": 1, "p-twin": 1, "p-qqq": 1})
+    whole = _simulated(session, repo, "data/strategy_test.yaml")
+    assert [r.equity for r in _equity(session, "p-plain")] == [p.equity for p in whole.equity_curve]
+
+
+def test_a_held_name_that_stops_updating_refuses_that_portfolio(
+    session: Session, repo: Path
+) -> None:
+    _nightly_to(session, repo, 253)  # AAA is held from DAYS[252]
+    stale = {**BARS, "AAA": BARS["AAA"][:254]}
+    clock = Clock(evening(DAYS[254]))
+    outcome = _run(session, repo, clock, Feed(clock, stale))
+    assert (outcome.status, outcome.stepped) == ("failed", {})
+    assert outcome.error is not None
+    assert outcome.error.startswith("PaperRefusedError: p-plain: These price series do not end ")
+    assert "AAA (last bar " in outcome.error
