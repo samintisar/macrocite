@@ -14,7 +14,7 @@ def _script() -> ScriptDirectory:
 
 
 def test_migrations_have_single_head() -> None:
-    assert _script().get_heads() == ["0011_jev_readings"]
+    assert _script().get_heads() == ["0012_paper_trading"]
 
 
 def test_0007_drops_sentiment_tables_and_enum() -> None:
@@ -47,3 +47,11 @@ def test_0011_creates_jev_readings_unique_per_document_ticker_model_and_question
     assert 'sa.Column("answers", sa.JSON(), nullable=False)' in text
     assert '["document_id"], ["raw_documents.id"], ondelete="CASCADE"' in text
     assert '"uq_jev_readings_document_ticker_model_questions"' in text
+
+
+def test_0012_creates_the_four_paper_tables() -> None:
+    text = (VERSIONS / "0012_paper_trading.py").read_text(encoding="utf-8")
+    assert 'down_revision: str | None = "0011_jev_readings"' in text
+    for table in ("paper_portfolios", "paper_events", "paper_equity", "paper_runs"):
+        assert f'op.create_table(\n        "{table}"' in text
+    assert 'sa.PrimaryKeyConstraint("portfolio_id", "session")' in text

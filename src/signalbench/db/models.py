@@ -208,3 +208,68 @@ class JevReading(SQLModel, table=True):
         default_factory=utcnow,
         sa_column=Column(UTCDateTime(), nullable=False),
     )
+
+
+class PaperPortfolio(SQLModel, table=True):
+    """One pre-registered forward paper portfolio (spec 07). Created by `paper start`."""
+
+    __tablename__ = "paper_portfolios"
+
+    id: int | None = Field(default=None, primary_key=True)
+    name: str = Field(unique=True)
+    config_path: str  # repo-relative, e.g. data/strategy_v1.yaml
+    config_sha256: str  # of the config at start; a config that no longer matches is refused
+    setup: str  # pullback | breakout | combined
+    started_on: date  # the first session stepped
+    state: dict[str, Any] = Field(sa_column=Column(JSON, nullable=False))  # a SimState
+    last_session: date | None = None  # updated with `state`, once per stepped session
+    created_at: datetime = Field(
+        default_factory=utcnow,
+        sa_column=Column(UTCDateTime(), nullable=False),
+    )
+
+
+class PaperEvent(SQLModel, table=True):
+    """What happened to a paper portfolio in one session (spec 07). Append-only."""
+
+    __tablename__ = "paper_events"
+
+    id: int | None = Field(default=None, primary_key=True)
+    portfolio_id: int = Field(foreign_key="paper_portfolios.id", ondelete="RESTRICT", index=True)
+    session: date
+    kind: str  # order_exit | order_entry | fill_exit | fill_entry | skip | exit_deferred | ...
+    payload: dict[str, Any] = Field(sa_column=Column(JSON, nullable=False))
+    recorded_at: datetime = Field(sa_column=Column(UTCDateTime(), nullable=False))
+    catch_up: bool  # recorded after the next session's open, so recorded_at proves nothing
+
+
+class PaperEquity(SQLModel, table=True):
+    """A paper portfolio at one session's close (spec 07): one row per portfolio and session."""
+
+    __tablename__ = "paper_equity"
+
+    portfolio_id: int = Field(
+        foreign_key="paper_portfolios.id", ondelete="RESTRICT", primary_key=True
+    )
+    session: date = Field(primary_key=True)
+    equity: float
+    cash: float
+    vehicle_value: float
+    open_positions: int
+    catch_up: bool
+
+
+class PaperRun(SQLModel, table=True):
+    """One `signalbench paper run` (spec 07)."""
+
+    __tablename__ = "paper_runs"
+
+    id: int | None = Field(default=None, primary_key=True)
+    started_at: datetime = Field(sa_column=Column(UTCDateTime(), nullable=False))
+    finished_at: datetime | None = Field(
+        default=None, sa_column=Column(UTCDateTime(), nullable=True)
+    )
+    status: str  # running | ok | failed
+    error: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    sessions_stepped: int = 0
+    target_session: date | None = None
