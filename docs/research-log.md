@@ -121,7 +121,7 @@ Formal reports live in `reports/`; decisions in the owner's words live in the ov
 
 ## Open questions (not yet tested)
 
-- **Idle cash and holding time:** tested post-hoc in spec 06 (entry above); five of six variants passed. Next: forward paper trading of all six plus v1 Breakout.
+- **Idle cash and holding time:** tested post-hoc in spec 06 (entry above); five of six variants passed. Forward paper trading (spec 07) was built but not started: on 2026-09-29 the owner chose v2-none-cash to use directly, with no out-of-sample test. Its real results are the first out-of-sample evidence and should be logged here.
 - **Slower momentum:** monthly rotation into the strongest names, holding weeks to months.
 - **Fewer constraints on Breakout:** more slots, no regime pause.
 - **Jev on other horizons or stocks:** longer holding periods, or less-followed stocks.
