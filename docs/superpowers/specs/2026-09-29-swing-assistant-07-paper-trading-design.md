@@ -3,6 +3,10 @@
 **Parent:** [Overview](2026-09-22-swing-assistant-00-overview.md) · **Depends on:** spec 06 (branch `feat/swing-06-breakout-v2`: the cash vehicle and the six v2 configs), which sits on spec 03 (not merged yet).
 **Goal:** Run seven Breakout portfolios forward, one session at a time, on prices that did not exist when their orders were decided. This is the only out-of-sample test of spec 06: every backtest so far reused 2012–2026, which had already been seen. No money is involved.
 
+## Scope: minimal build (owner decision, 2026-09-29)
+
+Keep it cheap: step the seven portfolios every night, save everything, write a weekly report, and warn on failure. **Built now:** the step refactor, the four tables, `paper start`, `paper run`, `paper status`, the weekly report, and the nightly script with its failure toast. **Deferred** until there is a reason (see "Later"): `paper judge`, the CDR reality check, and the twin-portfolio match line in the report. The judging rule is still fixed below, so nothing about it can drift while the data accumulates.
+
 ## Why
 
 Five of the six spec 06 variants passed the pass bar, but the ideas were found by looking at the same data, six variants were tried, and one passed by 0.001 (`docs/research-log.md`). Paper trading decides which, if any, is worth real money. Owner decisions (2026-09-28/29): all seven portfolios are paper-traded whatever their backtest result; fills use US prices exactly like the backtest; results arrive as a weekly report file plus a Windows notification on failure; the runner steps forward with saved state (approach A).
@@ -21,7 +25,7 @@ Five of the six spec 06 variants passed the pass bar, but the ideas were found b
 | `v2-none-cash` | `data/strategy_v2-none-cash.yaml` | breakout |
 | `v2-none-qqq` | `data/strategy_v2-none-qqq.yaml` | breakout |
 
-- `v1-breakout` and `v2-t30-cash` have the same rules, so their trades must be identical every night. Any difference is a bug in the runner and is reported.
+- `v1-breakout` and `v2-t30-cash` have the same rules, so their trades must be identical every night; any difference is a bug in the runner.
 - **Start:** every portfolio starts with the config's `start_equity` (100) on the same first session: the first NYSE session after `paper start` runs. QQQ buy-and-hold from that session's close is the benchmark.
 - **Frozen rules:** each portfolio stores its config's `config_sha256` at start. A config whose bytes no longer match is refused for that portfolio (the run fails and notifies); configs are never edited, and a new idea is a new portfolio in a new `data/paper_<n>.yaml`.
 - **Judging** (fixed here): a portfolio is judged once it has 12 months since its start **and** at least 30 closed trades, whichever is later. It uses the spec 02 pass bar over the paper period: at least 30 trades, mean R above 0.10, mean R above 0 in both halves of the paper period (split at the calendar midpoint), and Sharpe of total equity at least QQQ buy-and-hold's over the same sessions. Before that, reports are information only. A pass makes the portfolio a candidate for real money, which is an owner decision recorded in the overview changelog.
@@ -43,7 +47,7 @@ Five of the six spec 06 variants passed the pass bar, but the ideas were found b
 | `paper_runs` | id, started_at, finished_at, status (`ok`/`failed`), error, sessions_stepped, target_session | One row per `paper run` |
 
 - **Order timestamps:** an order decided at session D's close is written with `recorded_at` on the night of D, before the next session's open. Its fill, the next night, carries the order event's id in its payload. A catch-up run (a missed night) steps each missed session in order using only data up to that session, and marks its rows `catch_up = true`: their decisions are still made on the right data, but their `recorded_at` no longer proves it, and the weekly report counts them.
-- **CDR reality check:** each fill payload also records the CDR's actual open that session (from the stored `.NE` prices), or null when it has no bar. Fills themselves always use the US open and the 0.2% cost, exactly like the backtest.
+- **Fills** always use the US open and the 0.2% cost, exactly like the backtest.
 - **Data revisions:** saved state, events, and equity rows are never recomputed. If a price source later revises history, only later decisions see it, as live trading would.
 
 ## Commands
@@ -59,7 +63,6 @@ Five of the six spec 06 variants passed the pass bar, but the ideas were found b
   7. Close the `paper_runs` row. Any error marks it `failed`, prints the error, and exits 1.
   - Running twice on the same night steps nothing and exits 0.
 - `signalbench paper status`: one line per portfolio: last session, equity, return since start, open positions, closed trades, days until judgeable.
-- `signalbench paper judge`: refuses a portfolio that has not reached 12 months and 30 closed trades; otherwise prints and writes the pass-bar result to `reports/paper/<date>-judge-<name>.md`.
 
 ## Scheduling and notifications
 
@@ -73,8 +76,7 @@ Five of the six spec 06 variants passed the pass bar, but the ideas were found b
 - equity, total return, Sharpe, max drawdown
 - closed trades, mean R, win rate, open positions, average hold
 - average share of equity in QQQ (QQQ variants)
-- CDR reality check: the number of fills with a CDR open, and the mean and worst gap between the CDR open and the US fill (in %)
-- catch-up sessions, failed runs this week, and whether `v1-breakout` and `v2-t30-cash` still match
+- catch-up sessions and failed runs this week
 - a line saying the report is information only until the judging rule is met
 
 Reports accumulate as files; they are committed when reviewed.
@@ -87,7 +89,6 @@ All on synthetic fixtures and in-memory SQLite:
 - `simulate()` unchanged: the v1 regression pin and all existing simulator tests pass unchanged.
 - `paper run`: steps only new sessions; a second run the same night does nothing; catch-up marks rows; a changed config fails that portfolio; order events precede their fills; the lock refuses a concurrent run.
 - `paper start` refuses to run twice and refuses an uncommitted `data/paper_v1.yaml`.
-- `paper judge` refuses early and scores a synthetic finished portfolio.
 - Weekly report rendering on a synthetic portfolio.
 - The toast script is checked by hand once (a forced failure).
 
@@ -100,10 +101,17 @@ All on synthetic fixtures and in-memory SQLite:
 5. ⛔ Show the owner the Task Scheduler command; register it on their go-ahead; force one failure to check the toast.
 6. Log the start in `docs/research-log.md` and this spec's changelog.
 
+## Later (deferred, not built now)
+
+- `signalbench paper judge`: scores a portfolio on the pass bar once it has 12 months and 30 closed trades (the rule above). Until it exists, judging is done by hand from the stored equity and events.
+- CDR reality check: record each CDR's actual open next to the US-based fill.
+- A weekly-report line confirming `v1-breakout` and `v2-t30-cash` still match (they can be compared by hand from `paper_events` meanwhile).
+
 ## Out of scope
 
 Telegram (spec 05), real orders, other setups, changing any config, and CDR-price fills.
 
 ## Changelog
 
-- 2026-09-29: created (owner decisions: all seven portfolios; US-price fills with the CDR open recorded; weekly report file plus Windows toast on failure; saved-state stepping).
+- 2026-09-29: created (owner decisions: all seven portfolios; US-price fills; weekly report file plus Windows toast on failure; saved-state stepping).
+- 2026-09-29: trimmed to a minimal build (owner: "keep it running cheaply"): `paper judge`, the CDR reality check, and the twin-match report line moved to Later.
