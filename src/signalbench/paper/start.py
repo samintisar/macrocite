@@ -7,7 +7,11 @@ from zoneinfo import ZoneInfo
 from sqlmodel import Session, col, select
 
 from signalbench.backtest.preregistration import check_config_path
-from signalbench.backtest.provenance import committed_unchanged
+from signalbench.backtest.provenance import (
+    CodeVersion,
+    code_version,
+    committed_unchanged,
+)
 from signalbench.backtest.sim_state import state_to_json
 from signalbench.backtest.simulator import initial_state
 from signalbench.db.models import PaperPortfolio
@@ -22,12 +26,21 @@ class PaperRefusedError(ValueError):
     """A paper command was refused. The message says why."""
 
 
+def uncommitted_code(version: CodeVersion) -> str:
+    """Why a paper command refuses a working tree with uncommitted code or data changes."""
+    return (
+        f"uncommitted changes to tracked code or data ({', '.join(version.changed)}); "
+        "commit them or check out a clean tag, then rerun"
+    )
+
+
 def start_portfolios(
     session: Session, *, paper_file: Path, repo: Path, calendar: Sessions, now: datetime
 ) -> list[PaperPortfolio]:
     """Create every portfolio in `paper_file`, all starting on the first session after today
     (New York). All or nothing: refuses when the file or any config is not committed and
-    unchanged, or when any of the portfolios already exists."""
+    unchanged, when tracked code has uncommitted changes, or when any of the portfolios already
+    exists. Each portfolio records the commit that started it."""
     if now.tzinfo is None or now.utcoffset() is None:
         raise ValueError(f"now must be timezone-aware, got naive {now.isoformat()}")
     if not paper_file.exists():
@@ -65,6 +78,11 @@ def start_portfolios(
                 state=state_to_json(initial_state(config)),
             )
         )
+    version = code_version(repo)
+    if version.dirty:
+        raise PaperRefusedError(uncommitted_code(version))
+    for portfolio in portfolios:
+        portfolio.start_git_sha = version.sha
     session.add_all(portfolios)
     session.commit()
     for portfolio in portfolios:

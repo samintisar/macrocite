@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 
 from sqlmodel import Session, col, select
 
+from signalbench.backtest.provenance import code_version
 from signalbench.backtest.runner import (
     MarketInputs,
     check_series_current,
@@ -32,7 +33,7 @@ from signalbench.market.calendar import HISTORY_START, Sessions
 from signalbench.paper.portfolios import paper_setup
 from signalbench.paper.report import report_due, write_weekly_report
 from signalbench.paper.splits import SplitFetcher, adjust_for_splits, references
-from signalbench.paper.start import PaperRefusedError
+from signalbench.paper.start import PaperRefusedError, uncommitted_code
 from signalbench.strategy.config import (
     StrategyConfig,
     config_sha256,
@@ -78,7 +79,9 @@ def run_paper(
     a symbol's splits after a date, for the symbols a portfolio holds (paper/splits.py); a
     failed lookup is printed and the stored prices alone are checked. `clock` must
     return timezone-aware times. The first run of an ISO week writes the weekly report into
-    `reports_dir`, after stepping (a portfolio refused for its config does not stop it)."""
+    `reports_dir`, after stepping (a portfolio refused for its config does not stop it).
+    Every run records the commit of `repo` it ran; uncommitted changes to tracked code or data
+    there refuse the run before anything is ingested or stepped."""
     with lock as held:
         if not held:
             echo("Another paper run holds the lock; nothing to do.")
@@ -126,10 +129,14 @@ def _step_all(
     portfolios = session.exec(select(PaperPortfolio).order_by(col(PaperPortfolio.id))).all()
     if not portfolios:
         raise PaperRefusedError("No paper portfolios. Run `signalbench paper start` first.")
+    version = code_version(repo)  # recorded on every run; a new commit is allowed (bug fixes)
+    run.git_sha, run.git_dirty = version.sha, version.dirty
     target = last_complete_session(calendar, clock())
     run.target_session = target
     session.add(run)
     session.commit()
+    if version.dirty:
+        raise PaperRefusedError(uncommitted_code(version))
     behind = [p for p in portfolios if p.last_session is None or p.last_session < target]
     if not behind:
         echo(f"Every portfolio has stepped {target.isoformat()}; nothing to do.")

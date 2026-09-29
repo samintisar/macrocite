@@ -28,6 +28,7 @@ def upgrade() -> None:
         sa.Column("state", sa.JSON(), nullable=False),
         sa.Column("last_session", sa.Date(), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("start_git_sha", sa.String(), nullable=True),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("name"),
     )
@@ -65,6 +66,8 @@ def upgrade() -> None:
         sa.Column("error", sa.Text(), nullable=True),
         sa.Column("sessions_stepped", sa.Integer(), nullable=False),
         sa.Column("target_session", sa.Date(), nullable=True),
+        sa.Column("git_sha", sa.String(), nullable=True),
+        sa.Column("git_dirty", sa.Boolean(), nullable=True),
         sa.PrimaryKeyConstraint("id"),
     )
 

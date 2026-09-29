@@ -125,6 +125,41 @@ def failed_runs(session: Session, week: tuple[date, date]) -> int:
     return sum(1 for run in runs if week[0] <= run.started_at.astimezone(NEW_YORK).date() <= week[1])
 
 
+@dataclass(frozen=True)
+class CodeUse:
+    """The commits the week's runs used, in order of first use, and the last one used before."""
+
+    week: list[str]
+    before: str | None
+
+
+def code_use(session: Session, week: tuple[date, date]) -> CodeUse:
+    runs = session.exec(
+        select(PaperRun).where(col(PaperRun.git_sha).is_not(None)).order_by(col(PaperRun.started_at))
+    ).all()
+    used: list[str] = []
+    before: str | None = None
+    for run in runs:
+        day = run.started_at.astimezone(NEW_YORK).date()
+        if day < week[0]:
+            before = run.git_sha
+        elif day <= week[1] and run.git_sha is not None and run.git_sha not in used:
+            used.append(run.git_sha)
+    return CodeUse(week=used, before=before)
+
+
+def _code_line(week: tuple[date, date], code: CodeUse) -> str:
+    span = f"Code used from {week[0].isoformat()} to {week[1].isoformat()}"
+    if not code.week:
+        return f"{span}: no run recorded a commit."
+    line = f"{span}: {', '.join(f'`{sha[:12]}`' for sha in code.week)}."
+    if code.before is not None and code.before != code.week[0]:
+        return f"{line} CHANGED: the last run before used `{code.before[:12]}`."
+    if len(code.week) > 1:
+        return f"{line} CHANGED during the week."
+    return line
+
+
 def _pct(value: float | None, signed: bool = False) -> str:
     if value is None:
         return "n/a"
@@ -136,7 +171,11 @@ def _number(value: float | None, spec: str) -> str:
 
 
 def render_weekly_report(
-    written_on: date, week: tuple[date, date], failed: int, summaries: list[PortfolioSummary]
+    written_on: date,
+    week: tuple[date, date],
+    failed: int,
+    summaries: list[PortfolioSummary],
+    code: CodeUse,
 ) -> str:
     lines = [
         f"# Paper trading: weekly report, {written_on.isoformat()}",
@@ -144,6 +183,8 @@ def render_weekly_report(
         JUDGING,
         "",
         f"Failed runs from {week[0].isoformat()} to {week[1].isoformat()}: {failed}.",
+        "",
+        _code_line(week, code),
         "",
         "## Equity since the start",
         "",
@@ -187,7 +228,8 @@ def write_weekly_report(session: Session, reports_dir: Path, today: date) -> Pat
     week = previous_week(today)
     portfolios = session.exec(select(PaperPortfolio).order_by(col(PaperPortfolio.id))).all()
     text = render_weekly_report(
-        today, week, failed_runs(session, week), [summarize(session, p, week) for p in portfolios]
+        today, week, failed_runs(session, week), [summarize(session, p, week) for p in portfolios],
+        code_use(session, week),
     )
     path = reports_dir / f"{today.isoformat()}-weekly.md"
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 from sqlmodel import Session, col, func, select
 
-from paper_helpers import PAPER_FILE, evening, make_repo
+from paper_helpers import PAPER_FILE, evening, git, make_repo
 from signalbench.backtest.runner import load_market_inputs
 from signalbench.backtest.simulator import SimulationResult, simulate
 from signalbench.db.models import (
@@ -260,11 +260,17 @@ def test_order_events_are_recorded_the_night_before_their_fills(
         assert order.recorded_at < evening(fill.session, hour=9)  # before the fill's open
 
 
+def _edit_config(repo: Path) -> None:
+    """A committed edit to the QQQ config: the working tree is clean, the sha has changed."""
+    with (repo / "data" / "strategy_test-qqq.yaml").open("a", encoding="utf-8") as handle:
+        handle.write("# edited\n")
+    git(repo, "commit", "-q", "-am", "edit a config")
+
+
 def test_a_changed_config_fails_that_portfolio_and_the_others_still_step(
     session: Session, repo: Path
 ) -> None:
-    with (repo / "data" / "strategy_test-qqq.yaml").open("a", encoding="utf-8") as handle:
-        handle.write("# edited\n")
+    _edit_config(repo)
     outcome = _run(session, repo, Clock(evening(DAYS[FIRST])))
     assert outcome.status == "failed"
     assert outcome.stepped == {"p-plain": 1, "p-twin": 1}
@@ -275,6 +281,47 @@ def test_a_changed_config_fails_that_portfolio_and_the_others_still_step(
     assert _portfolio(session, "p-qqq").last_session is None
     [run] = session.exec(select(PaperRun)).all()
     assert (run.status, run.error, run.sessions_stepped) == ("failed", outcome.error, 2)
+
+
+def _commit_src(repo: Path, text: str) -> str:
+    (repo / "src").mkdir(exist_ok=True)
+    (repo / "src" / "rules.py").write_text(text, encoding="utf-8")
+    git(repo, "add", "src")
+    git(repo, "commit", "-q", "-m", "code")
+    return git(repo, "rev-parse", "HEAD")
+
+
+def test_each_run_records_the_commit_it_ran_and_a_new_commit_does_not_stop_it(
+    session: Session, repo: Path
+) -> None:
+    first = git(repo, "rev-parse", "HEAD")
+    assert _run(session, repo, Clock(evening(DAYS[FIRST]))).status == "ok"
+    second = _commit_src(repo, "FIXED = True\n")  # a bug fix between two nights
+    assert _run(session, repo, Clock(evening(DAYS[FIRST + 1]))).status == "ok"
+    runs = session.exec(select(PaperRun).order_by(col(PaperRun.id))).all()
+    assert [(r.status, r.git_sha, r.git_dirty) for r in runs] == [
+        ("ok", first, False), ("ok", second, False),
+    ]
+
+
+def test_uncommitted_code_changes_refuse_the_run(session: Session, repo: Path) -> None:
+    head = _commit_src(repo, "LIMIT = 1\n")
+    (repo / "src" / "rules.py").write_text("LIMIT = 2\n", encoding="utf-8")
+    (repo / "reports").mkdir()
+    (repo / "reports" / "notes.md").write_text("not code\n", encoding="utf-8")
+    clock = Clock(evening(DAYS[FIRST]))
+    feed = Feed(clock)
+    outcome = _run(session, repo, clock, feed)
+    assert (outcome.status, outcome.stepped, feed.calls) == ("failed", {}, 0)
+    assert outcome.error == (
+        "PaperRefusedError: uncommitted changes to tracked code or data (src/rules.py); "
+        "commit them or check out a clean tag, then rerun"
+    )
+    [run] = session.exec(select(PaperRun)).all()
+    assert (run.status, run.error, run.git_sha, run.git_dirty) == (
+        "failed", outcome.error, head, True,
+    )
+    assert _equity(session, "p-plain") == []
 
 
 def test_the_lock_refuses_a_concurrent_run(session: Session, repo: Path) -> None:
@@ -331,8 +378,7 @@ def test_the_first_run_of_each_iso_week_writes_the_weekly_report(
 
 
 def test_a_refused_portfolio_does_not_stop_the_weekly_report(session: Session, repo: Path) -> None:
-    with (repo / "data" / "strategy_test-qqq.yaml").open("a", encoding="utf-8") as handle:
-        handle.write("# edited\n")
+    _edit_config(repo)
     outcome = _run(session, repo, Clock(evening(DAYS[FIRST])))
     assert outcome.status == "failed"
     assert outcome.report is not None

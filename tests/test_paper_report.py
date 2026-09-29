@@ -29,6 +29,9 @@ closed trades, whichever is later (spec 07, Judging); until then these numbers d
 
 Failed runs from 2026-10-12 to 2026-10-18: 1.
 
+Code used from 2026-10-12 to 2026-10-18: `aaaaaaaaaaaa`, `bbbbbbbbbbbb`. CHANGED: the last run \
+before used `cccccccccccc`.
+
 ## Equity since the start
 
 | Portfolio | Start | Last session | Sessions | Equity | Total return | Sharpe | Max drawdown \
@@ -78,9 +81,10 @@ def _fixture(session: Session) -> None:
     assert demo_row is not None
     demo_row.last_session = WEEK[-1]
     session.add(demo_row)
-    session.add(PaperRun(started_at=datetime(2026, 10, 14, 22, tzinfo=UTC), status="failed"))
-    session.add(PaperRun(started_at=datetime(2026, 10, 20, 22, tzinfo=UTC), status="failed"))
-    session.add(PaperRun(started_at=datetime(2026, 10, 15, 22, tzinfo=UTC), status="ok"))
+    for day, status, sha in ((5, "ok", "c"), (14, "failed", "a"), (20, "failed", "d"),
+                             (15, "ok", "b"), (16, "ok", "a")):
+        session.add(PaperRun(started_at=datetime(2026, 10, day, 22, tzinfo=UTC), status=status,
+                             git_sha=sha * 40, git_dirty=False))
     qqq = Ticker(symbol="QQQ", company_name="QQQ", kind=TickerKind.benchmark)
     session.add(qqq)
     session.commit()
@@ -115,3 +119,13 @@ def test_a_report_is_due_once_per_iso_week(tmp_path: Path) -> None:
     assert not report_due(reports, date(2026, 10, 21))
     assert not report_due(reports, date(2026, 10, 25))  # Sunday, same ISO week
     assert report_due(reports, date(2026, 10, 26))
+
+
+def test_the_code_line_says_when_one_commit_ran_all_week(session: Session, tmp_path: Path) -> None:
+    for day in (9, 13, 14):
+        session.add(PaperRun(started_at=datetime(2026, 10, day, 22, tzinfo=UTC), status="ok",
+                             git_sha="e" * 40, git_dirty=False))
+    session.commit()
+    text = write_weekly_report(session, tmp_path, MONDAY_AFTER).read_text(encoding="utf-8")
+    assert "Code used from 2026-10-12 to 2026-10-18: `eeeeeeeeeeee`.\n" in text
+    assert "CHANGED" not in text

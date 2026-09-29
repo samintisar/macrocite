@@ -227,6 +227,7 @@ class PaperPortfolio(SQLModel, table=True):
         default_factory=utcnow,
         sa_column=Column(UTCDateTime(), nullable=False),
     )
+    start_git_sha: str | None = None  # HEAD of the code that ran `paper start`
 
 
 class PaperEvent(SQLModel, table=True):
@@ -273,3 +274,5 @@ class PaperRun(SQLModel, table=True):
     error: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
     sessions_stepped: int = 0
     target_session: date | None = None
+    git_sha: str | None = None  # HEAD of the code that ran (None when git itself failed)
+    git_dirty: bool | None = None  # tracked code had uncommitted changes: the run was refused

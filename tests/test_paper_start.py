@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from sqlmodel import Session, select
 
-from paper_helpers import PAPER_FILE, PORTFOLIOS, evening, make_repo
+from paper_helpers import PAPER_FILE, PORTFOLIOS, evening, git, make_repo
 from signalbench.backtest.sim_state import state_from_json
 from signalbench.backtest.simulator import initial_state
 from signalbench.db.models import PaperPortfolio
@@ -35,6 +35,7 @@ def test_start_creates_every_portfolio_on_the_next_session(session: Session, tmp
         assert portfolio.started_on == DAYS[240]
         assert portfolio.last_session is None
         assert state_from_json(portfolio.state) == initial_state(config)
+        assert portfolio.start_git_sha == git(repo, "rev-parse", "HEAD")
 
 
 def test_start_refuses_to_run_twice(session: Session, tmp_path: Path) -> None:
@@ -61,5 +62,17 @@ def test_start_refuses_an_uncommitted_config_and_creates_nothing(
     with (repo / "data" / "strategy_test-qqq.yaml").open("a", encoding="utf-8") as handle:
         handle.write("# edited\n")
     with pytest.raises(PaperRefusedError, match="p-qqq: data/strategy_test-qqq.yaml must exist"):
+        _start(session, repo)
+    assert session.exec(select(PaperPortfolio)).all() == []
+
+
+def test_start_refuses_uncommitted_code_changes(session: Session, tmp_path: Path) -> None:
+    repo = make_repo(tmp_path)
+    (repo / "src").mkdir()
+    (repo / "src" / "rules.py").write_text("LIMIT = 1\n", encoding="utf-8")
+    git(repo, "add", "src")
+    git(repo, "commit", "-q", "-m", "code")
+    (repo / "src" / "rules.py").write_text("LIMIT = 2\n", encoding="utf-8")
+    with pytest.raises(PaperRefusedError, match=r"uncommitted changes to tracked code or data \(src/rules\.py\)"):
         _start(session, repo)
     assert session.exec(select(PaperPortfolio)).all() == []

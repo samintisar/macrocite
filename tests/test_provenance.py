@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from signalbench.backtest.provenance import committed_unchanged, git_sha
+from signalbench.backtest.provenance import code_version, committed_unchanged, git_sha
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -73,3 +73,13 @@ def test_committed_unchanged_is_false_outside_the_repo(
     outside.write_text("version: v1\n", encoding="utf-8")
     assert committed_unchanged(repo, outside) is False
 
+
+def test_code_version_lists_changed_tracked_code_and_ignores_untracked_files(repo: Path) -> None:
+    head = _git(repo, "rev-parse", "HEAD")
+    (repo / "data" / "draft.yaml").write_text("not committed yet\n", encoding="utf-8")
+    (repo / "README.md").write_text("docs are not code\n", encoding="utf-8")
+    clean = code_version(repo)
+    assert (clean.sha, clean.changed, clean.dirty) == (head, (), False)
+    (repo / "data" / "strategy_v1.yaml").write_text("version: v2\n", encoding="utf-8")
+    dirty = code_version(repo)
+    assert (dirty.sha, dirty.changed, dirty.dirty) == (head, ("data/strategy_v1.yaml",), True)
