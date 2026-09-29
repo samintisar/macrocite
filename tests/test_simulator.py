@@ -182,3 +182,23 @@ def test_a_trimmed_entry_worth_at_least_one_percent_still_fills() -> None:
     assert [(e["symbol"], e["trimmed"]) for e in entries] == [
         ("AAA", False), ("BBB", False), ("CCC", True),
     ]
+
+
+def _breakout_run(time_limit: int | None) -> SimulationResult:
+    # A steady uptrend (close 50 + 0.1 i, ATR 2) with one 2x volume day on SIGNAL: the only
+    # breakout. The trailing stop (highest close - 3 ATR) is never touched.
+    config = load_test_config().with_setups(("breakout",))
+    config = replace(config, breakout=replace(config.breakout, time_limit=time_limit))
+    days = weekdays(date(2023, 1, 2), 320)
+    bars = with_bar(trend_bars(days, 50.0, 0.1), SIGNAL, volume=2_000_000)
+    market = make_market({"AAA": bars}, trend_bars(days, 300.0, 0.5), days, config)
+    return simulate(market, NullReadingsView(), config, days[240], days[300])
+
+
+def test_a_breakout_with_no_time_limit_is_held_to_the_end() -> None:
+    [timed] = _breakout_run(30).trades
+    assert (timed.reason, timed.entry_date, timed.sessions_held) == ("time", DAYS[ENTRY], 30)
+    open_ended = _breakout_run(None)
+    assert open_ended.trades == []
+    [held] = open_ended.open_positions
+    assert (held.setup, held.time_limit, held.sessions_held) == ("breakout", None, 300 - ENTRY + 1)

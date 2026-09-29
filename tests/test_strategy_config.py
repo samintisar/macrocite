@@ -5,6 +5,7 @@ import pytest
 import yaml
 
 from signalbench.strategy.config import (
+    CashVehicle,
     ConfigError,
     config_sha256,
     load_strategy_config,
@@ -102,3 +103,70 @@ def test_halves_must_be_contiguous(h2_start: date) -> None:
         parse_strategy_config(raw)
     backtest["h1_end"] = h2_start - timedelta(days=1)
     assert parse_strategy_config(raw).backtest.h2_start == h2_start
+
+
+def _setup(raw: dict[str, object], name: str) -> dict[str, object]:
+    setups = raw["setups"]
+    assert isinstance(setups, dict)
+    section = setups[name]
+    assert isinstance(section, dict)
+    return section
+
+
+def test_breakout_time_limit_may_be_null() -> None:
+    raw = _raw()
+    _setup(raw, "breakout")["time_limit"] = None
+    config = parse_strategy_config(raw)
+    assert config.breakout.time_limit is None
+    assert config.pullback.time_limit == 10 and config.sentiment.time_limit == 10
+
+
+@pytest.mark.parametrize("name", ["pullback", "sentiment"])
+def test_only_breakout_may_have_no_time_limit(name: str) -> None:
+    raw = _raw()
+    _setup(raw, name)["time_limit"] = None
+    with pytest.raises(ConfigError, match=f"config.setups.{name}.time_limit: expected an integer"):
+        parse_strategy_config(raw)
+
+
+def test_breakout_time_limit_must_still_be_written() -> None:
+    raw = _raw()
+    del _setup(raw, "breakout")["time_limit"]
+    with pytest.raises(ConfigError, match="config.setups.breakout: missing key 'time_limit'"):
+        parse_strategy_config(raw)
+    _setup(raw, "breakout")["time_limit"] = 0
+    with pytest.raises(ConfigError, match="config.setups.breakout.time_limit: expected an integer"):
+        parse_strategy_config(raw)
+
+
+def test_no_cash_vehicle_key_means_idle_cash_stays_cash() -> None:
+    config, _ = load_strategy_config(FIXTURE)
+    assert config.cash_vehicle is None
+
+
+def test_cash_vehicle_parses_and_survives_with_setups() -> None:
+    raw = _raw()
+    raw["cash_vehicle"] = {"symbol": "QQQ", "cost_per_side": 0.002}
+    config = parse_strategy_config(raw)
+    assert config.cash_vehicle == CashVehicle(symbol="QQQ", cost_per_side=0.002)
+    assert config.with_setups(("breakout",)).cash_vehicle == config.cash_vehicle
+    raw["cash_vehicle"] = {"symbol": "QQQ", "cost_per_side": 0}
+    assert parse_strategy_config(raw).cash_vehicle == CashVehicle("QQQ", 0.0)  # free is allowed
+
+
+@pytest.mark.parametrize(
+    ("vehicle", "message"),
+    [
+        ({"symbol": "SPY", "cost_per_side": 0.002}, "cash_vehicle.symbol: must be the regime symbol 'QQQ'"),
+        ({"symbol": "QQQ", "cost_per_side": -0.001}, "cash_vehicle.cost_per_side: expected a number >= 0"),
+        ({"symbol": "QQQ", "cost_per_side": 0.05}, r"cash_vehicle.cost_per_side: expected a number in \[0, 0.05\)"),
+        ({"symbol": "QQQ"}, "cash_vehicle: missing key 'cost_per_side'"),
+        ({"symbol": "QQQ", "cost_per_side": 0.002, "sma": 200}, r"cash_vehicle: unknown keys \['sma'\]"),
+        (None, "config.cash_vehicle: expected a mapping"),
+    ],
+)
+def test_cash_vehicle_is_validated(vehicle: object, message: str) -> None:
+    raw = _raw()
+    raw["cash_vehicle"] = vehicle
+    with pytest.raises(ConfigError, match=message):
+        parse_strategy_config(raw)

@@ -29,7 +29,7 @@ class EntryOrder:
     signal_close: float
     stop: float
     target_r: float | None  # None: no target (Breakout)
-    time_limit: int
+    time_limit: int | None  # None: no time limit (spec 06, Breakout only)
     units: float
     risk_amount: float  # units * (signal_close - stop), after the caps
     catalyst: bool
