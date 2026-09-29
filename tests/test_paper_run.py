@@ -19,6 +19,7 @@ from paper_helpers import PAPER_FILE, evening, make_repo
 from signalbench.backtest.runner import load_market_inputs
 from signalbench.backtest.simulator import SimulationResult, simulate
 from signalbench.db.models import (
+    EarningsEvent,
     PaperEquity,
     PaperEvent,
     PaperPortfolio,
@@ -28,6 +29,7 @@ from signalbench.db.models import (
     TickerKind,
 )
 from signalbench.ingest.cdr import CdrEntry
+from signalbench.ingest.earnings import FINNHUB_EARNINGS_SOURCE, SEC_EARNINGS_SOURCE
 from signalbench.ingest.prices import Split
 from signalbench.market.bars import AdjustedBar
 from signalbench.market.calendar import HISTORY_START
@@ -119,11 +121,12 @@ def _no_splits(_symbol: str, _since: date) -> list[Split]:
 def _run(
     session: Session, repo: Path, clock: Clock, ingest: Callable[[Session], list[str]] | None = None,
     held: bool = True, *, splits: SplitFetcher = _no_splits,
+    earnings: Callable[[Session], list[str]] = lambda _session: [],
     echo: Callable[[str], None] = lambda _line: None,
 ) -> RunOutcome:
     return run_paper(
         session, lock=nullcontext(held), repo=repo, universe=UNIVERSE, calendar=WeekdaySessions(),
-        clock=clock, ingest=ingest or Feed(clock), splits=splits,
+        clock=clock, ingest=ingest or Feed(clock), ingest_earnings=earnings, splits=splits,
         reports_dir=repo / "reports" / "paper", echo=echo,
     )
 
@@ -445,3 +448,84 @@ def test_a_failed_split_lookup_warns_and_the_prices_decide(session: Session, rep
     clock = Clock(evening(DAYS[256]))
     assert _run(session, repo, clock, splits=down, echo=lines.append).status == "ok"
     assert "splits AAA: RuntimeError: yfinance down; checking the stored prices only" in lines
+
+
+def _event(session: Session, symbol: str, day: date, source: str) -> None:
+    ticker = session.exec(select(Ticker).where(Ticker.symbol == symbol)).one()
+    session.add(EarningsEvent(ticker_id=ticker.id, event_date=day, source=source))
+    session.commit()
+
+
+def test_the_backtest_loader_ignores_the_calendar_and_paper_reads_it(
+    session: Session, repo: Path
+) -> None:
+    _event(session, "AAA", DAYS[100], SEC_EARNINGS_SOURCE)
+    _event(session, "AAA", DAYS[253], FINNHUB_EARNINGS_SOURCE)  # upcoming, from the calendar
+    backtest = load_market_inputs(session, UNIVERSE, "QQQ", DAYS[FIRST - 1])
+    paper = load_market_inputs(session, UNIVERSE, "QQQ", DAYS[FIRST - 1], calendar_earnings=True)
+    assert [(i.symbol, list(i.earnings)) for i in backtest.symbols] == [
+        ("AAA", [DAYS[100]]), ("BBB", []),
+    ]
+    assert [(i.symbol, list(i.earnings)) for i in paper.symbols] == [
+        ("AAA", [DAYS[100], DAYS[253]]), ("BBB", []),
+    ]
+
+
+class Calendar:
+    """Stands in for the nightly Finnhub calendar ingest: from the night of `known_from`, AAA
+    reports on `report_day`."""
+
+    def __init__(self, clock: Clock, known_from: date, report_day: date) -> None:
+        self.clock, self.known_from, self.report_day = clock, known_from, report_day
+        self.calls = 0
+
+    def __call__(self, session: Session) -> list[str]:
+        self.calls += 1
+        stored = session.exec(select(EarningsEvent)).all()
+        if self.clock().date() >= self.known_from and not stored:
+            _event(session, "AAA", self.report_day, FINNHUB_EARNINGS_SOURCE)
+        return []
+
+
+def test_an_upcoming_calendar_date_blocks_an_entry_in_paper(session: Session, repo: Path) -> None:
+    for i in range(FIRST, 253):  # AAA signals at the DAYS[251] close; it reports on DAYS[253]
+        clock = Clock(evening(DAYS[i]))
+        calendar = Calendar(clock, known_from=DAYS[FIRST], report_day=DAYS[253])
+        assert _run(session, repo, clock, earnings=calendar).status == "ok"
+        assert calendar.calls == 1
+    events = [(e.session, e.kind, e.payload.get("reason")) for e in _events(session, "p-plain")]
+    assert (DAYS[251], "skip", "earnings_blackout") in events
+    assert not [e for e in events if e[1] in ("order_entry", "fill_entry")]
+
+
+def test_a_calendar_date_counts_from_the_night_it_is_stored(session: Session, repo: Path) -> None:
+    """Stored the night after the entry was decided: the entry stands (past sessions are never
+    re-decided), and the earnings exit fires at that night's close."""
+    for i in range(FIRST, LAST + 1):
+        clock = Clock(evening(DAYS[i]))
+        calendar = Calendar(clock, known_from=DAYS[252], report_day=DAYS[254])
+        assert _run(session, repo, clock, earnings=calendar).status == "ok"
+    events = _events(session, "p-plain")
+    assert [(e.session, e.kind) for e in events if e.kind in ("order_entry", "fill_entry")][:2] == [
+        (DAYS[251], "order_entry"), (DAYS[252], "fill_entry"),
+    ]
+    fill = next(e for e in events if e.kind == "fill_exit")
+    assert (fill.session, fill.payload["reason"]) == (DAYS[253], "earnings")
+
+
+def test_an_earnings_calendar_failure_warns_and_the_run_goes_on(
+    session: Session, repo: Path
+) -> None:
+    def down(_session: Session) -> list[str]:
+        raise RuntimeError("finnhub down")
+
+    lines: list[str] = []
+    outcome = _run(session, repo, Clock(evening(DAYS[FIRST])), earnings=down, echo=lines.append)
+    assert (outcome.status, outcome.stepped["p-plain"]) == ("ok", 1)
+    assert ("earnings calendar FAILED (RuntimeError: finnhub down); "
+            "stepping on the stored earnings dates") in lines
+    lines.clear()
+    later = _run(session, repo, Clock(evening(DAYS[FIRST + 1])), earnings=lambda _s: ["AAA"],
+                 echo=lines.append)
+    assert later.status == "ok"
+    assert "earnings calendar: 1 failed (AAA); stepping on the stored earnings dates" in lines

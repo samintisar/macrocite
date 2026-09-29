@@ -66,12 +66,15 @@ def run_paper(
     calendar: Sessions,
     clock: Callable[[], datetime],
     ingest: Callable[[Session], list[str]],
+    ingest_earnings: Callable[[Session], list[str]],
     splits: SplitFetcher,
     reports_dir: Path,
     echo: Callable[[str], None],
 ) -> RunOutcome:
     """The nightly job. `lock` yields False when another run holds it: nothing is done.
-    `ingest` refreshes prices (and the liquidity flags) and returns what failed. `splits` lists
+    `ingest` refreshes prices (and the liquidity flags) and returns what failed.
+    `ingest_earnings` refreshes the Finnhub earnings calendar and returns what failed; it is not
+    critical: a failure is printed and the stored dates are used. `splits` lists
     a symbol's splits after a date, for the symbols a portfolio holds (paper/splits.py); a
     failed lookup is printed and the stored prices alone are checked. `clock` must
     return timezone-aware times. The first run of an ISO week writes the weekly report into
@@ -88,8 +91,8 @@ def run_paper(
         report: Path | None = None
         try:
             refused = _step_all(
-                session, run, repo, universe, calendar, clock, ingest, _cached(splits, echo), echo,
-                stepped,
+                session, run, repo, universe, calendar, clock, (ingest, ingest_earnings),
+                _cached(splits, echo), echo, stepped,
             )
             today = clock().astimezone(NEW_YORK).date()
             if report_due(reports_dir, today):
@@ -113,7 +116,7 @@ def _step_all(
     universe: list[CdrEntry],
     calendar: Sessions,
     clock: Callable[[], datetime],
-    ingest: Callable[[Session], list[str]],
+    ingests: tuple[Callable[[Session], list[str]], Callable[[Session], list[str]]],
     splits: SplitFetcher,
     echo: Callable[[str], None],
     stepped: dict[str, int],
@@ -131,9 +134,11 @@ def _step_all(
     if not behind:
         echo(f"Every portfolio has stepped {target.isoformat()}; nothing to do.")
         return []
+    ingest, ingest_earnings = ingests
     failed = ingest(session)
     if failed:
         echo(f"ingest: {len(failed)} failed ({', '.join(failed)}); stepping on the stored prices")
+    _refresh_earnings(session, ingest_earnings, echo)
     refused: list[str] = []
     inputs: dict[str, MarketInputs] = {}
     for portfolio in behind:
@@ -149,12 +154,31 @@ def _step_all(
         )
         symbol = config.regime_symbol
         if symbol not in inputs:
-            inputs[symbol] = load_market_inputs(session, universe, symbol, target)
+            inputs[symbol] = load_market_inputs(
+                session, universe, symbol, target, calendar_earnings=True
+            )
             check_series_current(inputs[symbol], symbol, target)
         market = _market(inputs[symbol], config, calendar, target)
         _step_portfolio(session, portfolio, config, market, calendar, target, clock, splits, stepped)
         echo(f"{portfolio.name}: {stepped.get(portfolio.name, 0)} sessions to {target.isoformat()}")
     return refused
+
+
+def _refresh_earnings(
+    session: Session, ingest_earnings: Callable[[Session], list[str]], echo: Callable[[str], None]
+) -> None:
+    """The Finnhub calendar, stored tonight, is read from tonight's sessions on; sessions
+    already stepped are never re-decided. Not critical: a failure keeps the stored dates."""
+    try:
+        failed = ingest_earnings(session)
+    except Exception as error:  # noqa: BLE001  # the stored dates still serve
+        session.rollback()
+        echo(f"earnings calendar FAILED ({type(error).__name__}: {error}); "
+             "stepping on the stored earnings dates")
+        return
+    if failed:
+        echo(f"earnings calendar: {len(failed)} failed ({', '.join(failed)}); "
+             "stepping on the stored earnings dates")
 
 
 def _cached(fetch: SplitFetcher, echo: Callable[[str], None]) -> SplitFetcher:

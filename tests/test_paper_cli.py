@@ -103,3 +103,11 @@ def test_paper_status_exits_3_when_runs_are_stale(
     checked = runner.invoke(app, ["paper", "status", "--stale-after-days", "3"])
     assert checked.exit_code == 3
     assert checked.stderr == "STALE: the last ok paper run was never, more than 3 days ago.\n"
+
+
+def test_the_paper_earnings_ingest_skips_the_calendar_without_a_finnhub_key(
+    session: Session, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(cli.settings, "finnhub_api_key", None)
+    assert cli._ingest_paper_earnings(session) == []
+    assert "FINNHUB_API_KEY is not set; skipping the upcoming earnings calendar" in capsys.readouterr().err

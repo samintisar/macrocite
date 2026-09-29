@@ -145,3 +145,16 @@ def sec_earnings_dates(session: Session, ticker_id: uuid.UUID) -> list[date]:
         )
     ).all()
     return sorted(set(dates))
+
+
+def paper_earnings_dates(session: Session, ticker_id: uuid.UUID) -> list[date]:
+    """Every SEC Item 2.02 date plus every stored Finnhub calendar date, upcoming ones included:
+    paper trading's earnings dates (spec 07 changelog). Forward, a date is known from the
+    calendar weeks before its 8-K is filed. Unclustered, like sec_earnings_dates()."""
+    dates = session.exec(
+        select(col(EarningsEvent.event_date)).where(
+            EarningsEvent.ticker_id == ticker_id,
+            col(EarningsEvent.source).in_([SEC_EARNINGS_SOURCE, FINNHUB_EARNINGS_SOURCE]),
+        )
+    ).all()
+    return sorted(set(dates))

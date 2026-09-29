@@ -328,6 +328,13 @@ def _ingest_earnings(session: Session, finnhub: FinnhubClient | None) -> list[st
     return _for_each_ticker(session, "earnings", tickers, work)
 
 
+def _ingest_paper_earnings(session: Session) -> list[str]:
+    """`ingest earnings` for `paper run`: the upcoming Finnhub calendar, skipped with a warning
+    when FINNHUB_API_KEY is not set."""
+    with httpx.Client(timeout=30.0) as client:
+        return _ingest_earnings(session, _finnhub(client))
+
+
 def _finnhub(client: httpx.Client) -> FinnhubClient | None:
     if settings.finnhub_api_key is None:
         return None
@@ -775,6 +782,7 @@ def paper_run() -> None:
                 calendar=NyseSessions(),
                 clock=_now,
                 ingest=_ingest_prices,
+                ingest_earnings=_ingest_paper_earnings,
                 splits=fetch_yfinance_splits,
                 reports_dir=PAPER_REPORTS_DIR,
                 echo=typer.echo,
