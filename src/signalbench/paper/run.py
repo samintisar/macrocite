@@ -9,7 +9,7 @@ open (a missed night, or a late run) are marked `catch_up`.
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 from dataclasses import asdict, dataclass, field
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
@@ -54,6 +54,8 @@ NEW_YORK = ZoneInfo("America/New_York")
 MARKET_OPEN = time(9, 30)  # New York
 FILLS = {"exit": "fill_exit", "entry": "fill_entry"}  # simulator event -> paper event kind
 RunStatus = Literal["locked", "ok", "failed"]
+ABANDONED_AFTER = timedelta(hours=2)  # a `running` row this old was killed or crashed
+ABANDONED = "abandoned (killed or crashed)"
 
 
 @dataclass(frozen=True)
@@ -84,29 +86,32 @@ def run_paper(
     `ingest` refreshes prices (and the liquidity flags) and returns what failed.
     `ingest_earnings` refreshes the Finnhub earnings calendar from a date (the oldest last
     session of a portfolio that is behind, so a catch-up keeps the dates it passes) and returns
-    what failed; it is not critical: a failure is printed and the stored dates are used. `splits` lists
-    a symbol's splits after a date, for the symbols a portfolio holds (paper/splits.py); a
-    failed lookup, or stored prices on another scale than the saved state, refuses that
-    portfolio for the night (the next run catches up). `clock` must
-    return timezone-aware times. The first run of an ISO week writes the weekly report into
-    `reports_dir`, after stepping (a refused portfolio does not stop the others or it); a
-    refused portfolio fails the run at the end.
+    what failed; it is not critical: a failure is printed and the stored dates are used. Both
+    kinds of failure are also kept as the run row's `warnings`. `splits` lists a symbol's
+    splits after a date, for the symbols a portfolio holds (paper/splits.py); a failed lookup,
+    or stored prices on another scale than the saved state, refuses that portfolio for the
+    night (the next run catches up). `clock` must return timezone-aware times. The first run of
+    an ISO week writes the weekly report into `reports_dir`, after stepping (a refused
+    portfolio does not stop the others or it); a refused portfolio fails the run at the end.
     Every run records the commit of `repo` it ran; uncommitted changes to tracked code or data
-    there refuse the run before anything is ingested or stepped."""
+    there refuse the run before anything is ingested or stepped. Runs left `running` for over
+    ABANDONED_AFTER are marked failed first."""
     with lock as held:
         if not held:
             echo("Another paper run holds the lock; nothing to do.")
             return RunOutcome(status="locked")
+        _abandon_stale_runs(session, clock())
         run = PaperRun(started_at=clock(), status="running")
         session.add(run)
         session.commit()
         session.refresh(run)
         stepped: dict[str, int] = {}
+        warnings: list[str] = []
         report: Path | None = None
         try:
             refused = _step_all(
                 session, run, repo, universe, calendar, clock, (ingest, ingest_earnings),
-                _cached(splits, echo), echo, stepped,
+                _cached(splits, echo), echo, stepped, warnings,
             )
             today = clock().astimezone(NEW_YORK).date()
             if report_due(reports_dir, today):
@@ -117,10 +122,22 @@ def run_paper(
         except Exception as error:  # noqa: BLE001  # spec 07: any error fails the run, recorded
             session.rollback()
             message = f"{type(error).__name__}: {error}"
-            _finish(session, run, "failed", clock(), stepped, message)
+            _finish(session, run, "failed", clock(), stepped, warnings, message)
             return RunOutcome("failed", run.id, run.target_session, stepped, message, report)
-        _finish(session, run, "ok", clock(), stepped, None)
+        _finish(session, run, "ok", clock(), stepped, warnings, None)
         return RunOutcome("ok", run.id, run.target_session, stepped, None, report)
+
+
+def _abandon_stale_runs(session: Session, now: datetime) -> None:
+    """A run killed or crashed mid-way leaves its row `running`; the lock is held here, so an
+    old one is not in progress. It counts as a failed run (the weekly report counts it)."""
+    rows = session.exec(select(PaperRun).where(PaperRun.status == "running")).all()
+    for row in rows:
+        if now - row.started_at > ABANDONED_AFTER:
+            row.status = "failed"
+            row.error = ABANDONED
+            session.add(row)
+    session.commit()
 
 
 def _step_all(
@@ -134,10 +151,12 @@ def _step_all(
     splits: SplitFetcher,
     echo: Callable[[str], None],
     stepped: dict[str, int],
+    warnings: list[str],
 ) -> list[str]:
     """Step every portfolio that is behind the target. Returns why portfolios were refused (a
-    changed config, a failed split lookup, or prices on another scale than the saved state);
-    they are not stepped, and the others still are."""
+    changed config, a failed split lookup, a held symbol without a current bar, or prices on
+    another scale than the saved state); they are not stepped, and the others still are.
+    Ingest and calendar failures are appended to `warnings`."""
     portfolios = session.exec(select(PaperPortfolio).order_by(col(PaperPortfolio.id))).all()
     if not portfolios:
         raise PaperRefusedError("No paper portfolios. Run `signalbench paper start` first.")
@@ -157,8 +176,11 @@ def _step_all(
     failed = ingest(session)
     if failed:
         echo(f"ingest: {len(failed)} failed ({', '.join(failed)}); stepping on the stored prices")
+        warnings.append(f"prices: {len(failed)} failed ({', '.join(failed)})")
     since = min(p.started_on if p.last_session is None else p.last_session for p in behind)
-    _refresh_earnings(session, ingest_earnings, since, echo)
+    warning = _refresh_earnings(session, ingest_earnings, since, echo)
+    if warning is not None:
+        warnings.append(warning)
     refused: list[str] = []
     inputs: dict[str, MarketInputs] = {}
     for portfolio in behind:
@@ -198,19 +220,22 @@ def _refresh_earnings(
     ingest_earnings: Callable[[Session, date], list[str]],
     since: date,
     echo: Callable[[str], None],
-) -> None:
+) -> str | None:
     """The Finnhub calendar, stored tonight, is read from tonight's sessions on; sessions
-    already stepped are never re-decided. Not critical: a failure keeps the stored dates."""
+    already stepped are never re-decided. Not critical: a failure keeps the stored dates.
+    Returns the warning for the run row, or None."""
     try:
         failed = ingest_earnings(session, since)
     except Exception as error:  # noqa: BLE001  # the stored dates still serve
         session.rollback()
-        echo(f"earnings calendar FAILED ({type(error).__name__}: {error}); "
-             "stepping on the stored earnings dates")
-        return
-    if failed:
-        echo(f"earnings calendar: {len(failed)} failed ({', '.join(failed)}); "
-             "stepping on the stored earnings dates")
+        warning = f"earnings calendar FAILED ({type(error).__name__}: {error})"
+        echo(f"{warning}; stepping on the stored earnings dates")
+        return warning
+    if not failed:
+        return None
+    warning = f"earnings calendar: {len(failed)} failed ({', '.join(failed)})"
+    echo(f"{warning}; stepping on the stored earnings dates")
+    return warning
 
 
 def _cached(fetch: SplitFetcher, echo: Callable[[str], None]) -> SplitFetcher:
@@ -451,11 +476,13 @@ def _finish(
     status: str,
     finished_at: datetime,
     stepped: dict[str, int],
+    warnings: list[str],
     error: str | None,
 ) -> None:
     run.status = status
     run.finished_at = finished_at
     run.sessions_stepped = sum(stepped.values())
+    run.warnings = "; ".join(warnings) or None
     run.error = error
     session.add(run)
     session.commit()

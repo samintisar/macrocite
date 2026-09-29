@@ -7,7 +7,7 @@ at the DAYS[262] open. The portfolios start on DAYS[240], the Monday after `pape
 from collections.abc import Callable
 from contextlib import nullcontext
 from dataclasses import asdict, replace
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -745,3 +745,42 @@ def test_a_held_name_that_stops_updating_refuses_that_portfolio(
     assert outcome.error is not None
     assert outcome.error.startswith("PaperRefusedError: p-plain: These price series do not end ")
     assert "AAA (last bar " in outcome.error
+
+
+def test_runs_left_running_for_over_two_hours_are_marked_abandoned(
+    session: Session, repo: Path
+) -> None:
+    now = evening(DAYS[FIRST])
+    session.add(PaperRun(started_at=now - timedelta(hours=3), status="running"))
+    session.add(PaperRun(started_at=now - timedelta(hours=1), status="running"))
+    session.commit()
+    assert _run(session, repo, Clock(now)).status == "ok"
+    runs = session.exec(select(PaperRun).order_by(col(PaperRun.id))).all()
+    assert [(r.status, r.error) for r in runs] == [
+        ("failed", "abandoned (killed or crashed)"), ("running", None), ("ok", None),
+    ]
+
+
+def test_ingest_and_calendar_failures_are_recorded_on_the_run_row(
+    session: Session, repo: Path
+) -> None:
+    clock = Clock(evening(DAYS[FIRST]))
+    feed = Feed(clock)
+
+    def partly(session: Session) -> list[str]:
+        feed(session)
+        return ["BBB"]
+
+    def down(_session: Session, _since: date) -> list[str]:
+        raise RuntimeError("finnhub down")
+
+    assert _run(session, repo, clock, partly, earnings=down).status == "ok"
+    clock = Clock(evening(DAYS[FIRST + 1]))
+    assert _run(session, repo, clock, earnings=lambda _s, _d: ["AAA", "BBB"]).status == "ok"
+    assert _run(session, repo, clock).status == "ok"  # nothing to do: no ingest
+    runs = session.exec(select(PaperRun).order_by(col(PaperRun.id))).all()
+    assert [r.warnings for r in runs] == [
+        "prices: 1 failed (BBB); earnings calendar FAILED (RuntimeError: finnhub down)",
+        "earnings calendar: 2 failed (AAA, BBB)",
+        None,
+    ]

@@ -278,3 +278,5 @@ class PaperRun(SQLModel, table=True):
     target_session: date | None = None
     git_sha: str | None = None  # HEAD of the code that ran (None when git itself failed)
     git_dirty: bool | None = None  # tracked code had uncommitted changes: the run was refused
+    # Not critical failures (price ingest, earnings calendar), "; "-separated; None when none
+    warnings: str | None = Field(default=None, sa_column=Column(Text, nullable=True))

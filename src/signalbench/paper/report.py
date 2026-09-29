@@ -2,12 +2,15 @@
 
 Written on the first run of each ISO week. Every number is since the portfolio's start, next
 to QQQ bought at the close of its first session and held over the same sessions, measured as
-the backtest measures a run (from the first close). Information only until the judging rule
-is met.
+the backtest measures a run (from the first close), and next to QQQ's price-only return (raw
+closes), since a paper position earns the price return only after entry. It also lists the
+commits the week's runs used and their warnings. Information only until the judging rule is
+met.
 """
 
 import re
-from dataclasses import dataclass
+import uuid
+from dataclasses import dataclass, replace
 from datetime import date, timedelta
 from pathlib import Path
 from statistics import fmean
@@ -26,13 +29,18 @@ from signalbench.db.models import (
     PaperEvent,
     PaperPortfolio,
     PaperRun,
+    Price,
     Ticker,
 )
-from signalbench.market.bars import adjusted_bars
+from signalbench.market.bars import adjust, adjusted_bars
 
 NEW_YORK = ZoneInfo("America/New_York")
 BENCHMARK = "QQQ"  # spec 07: QQQ buy-and-hold is the benchmark
 REPORT_NAME = re.compile(r"^(\d{4}-\d{2}-\d{2})-weekly\.md$")
+PRICE_ONLY = (
+    "Paper portfolios earn the price return only after entry (no dividends); compare with the "
+    "price-only QQQ line."
+)
 JUDGING = (
     "Information only. A portfolio is judged once it has 12 months since its start and at "
     "least 30 closed trades, whichever is later (spec 07, Judging); until then these numbers "
@@ -57,7 +65,8 @@ class PortfolioSummary:
     open_positions: int
     vehicle_share: float | None  # average share of equity in QQQ; None without a vehicle
     catch_up_sessions: int  # in the week the report covers
-    benchmark: BenchmarkStats | None
+    benchmark: BenchmarkStats | None  # total return: adjusted closes, dividends included
+    price_only: BenchmarkStats | None  # raw closes: the price return a paper position earns
 
 
 def previous_week(today: date) -> tuple[date, date]:
@@ -107,17 +116,43 @@ def summarize(session: Session, portfolio: PaperPortfolio, week: tuple[date, dat
         vehicle_share=fmean(shares) if uses_vehicle and shares else None,
         catch_up_sessions=sum(1 for row in rows if row.catch_up and week[0] <= row.session <= week[1]),
         benchmark=_benchmark(session, sessions),
+        price_only=_benchmark(session, sessions, price_only=True),
     )
 
 
-def _benchmark(session: Session, sessions: list[date]) -> BenchmarkStats | None:
+def _benchmark(
+    session: Session, sessions: list[date], price_only: bool = False
+) -> BenchmarkStats | None:
+    """QQQ buy-and-hold over `sessions`: on adjusted closes (total return), or on raw closes
+    (split-adjusted only: the price return, as a paper position earns after entry)."""
     if not sessions:
         return None
     ticker = session.exec(select(Ticker).where(Ticker.symbol == BENCHMARK)).first()
     if ticker is None:
         return None
-    bars = adjusted_bars(session, ticker.id, end=sessions[-1])
-    return benchmark_stats(f"{BENCHMARK} buy-and-hold", buy_and_hold(bars, sessions), sessions)
+    if price_only:
+        bars = [replace(adjust(row), close=float(row.close))
+                for row in _prices(session, ticker.id, sessions[-1])]
+    else:
+        bars = adjusted_bars(session, ticker.id, end=sessions[-1])
+    name = f"{BENCHMARK} buy-and-hold{' (price only)' if price_only else ''}"
+    return benchmark_stats(name, buy_and_hold(bars, sessions), sessions)
+
+
+def _prices(session: Session, ticker_id: uuid.UUID, end: date) -> list[Price]:
+    return list(session.exec(
+        select(Price).where(Price.ticker_id == ticker_id, col(Price.date) <= end)
+        .order_by(col(Price.date))
+    ).all())
+
+
+def run_warnings(session: Session, week: tuple[date, date]) -> list[tuple[date, str]]:
+    """The not-critical failures (price ingest, earnings calendar) of the week's runs."""
+    runs = session.exec(
+        select(PaperRun).where(col(PaperRun.warnings).is_not(None)).order_by(col(PaperRun.started_at))
+    ).all()
+    found = [(run.started_at.astimezone(NEW_YORK).date(), run.warnings) for run in runs]
+    return [(day, text) for day, text in found if text and week[0] <= day <= week[1]]
 
 
 def failed_runs(session: Session, week: tuple[date, date]) -> int:
@@ -176,6 +211,7 @@ def render_weekly_report(
     failed: int,
     summaries: list[PortfolioSummary],
     code: CodeUse,
+    warnings: list[tuple[date, str]],
 ) -> str:
     lines = [
         f"# Paper trading: weekly report, {written_on.isoformat()}",
@@ -186,13 +222,22 @@ def render_weekly_report(
         "",
         _code_line(week, code),
         "",
+        f"Run warnings from {week[0].isoformat()} to {week[1].isoformat()}: {len(warnings)}.",
+        "",
+    ]
+    if warnings:
+        lines += [f"- {day.isoformat()}: {text}" for day, text in warnings] + [""]
+    lines += [
         "## Equity since the start",
+        "",
+        PRICE_ONLY,
         "",
         (
             "| Portfolio | Start | Last session | Sessions | Equity | Total return | Sharpe "
-            "| Max drawdown | QQQ return | QQQ Sharpe | QQQ max drawdown |"
+            "| Max drawdown | QQQ total return | QQQ price-only return | QQQ Sharpe "
+            "| QQQ max drawdown |"
         ),
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for s in summaries:
         last = "not stepped yet" if s.last_session is None else s.last_session.isoformat()
@@ -202,6 +247,7 @@ def render_weekly_report(
             f"| {_number(s.equity, '.2f')} | {_pct(s.total_return, signed=True)} "
             f"| {_number(s.sharpe, '.2f')} | {_pct(s.max_drawdown)} "
             f"| {_pct(None if qqq is None else qqq.total_return, signed=True)} "
+            f"| {_pct(None if s.price_only is None else s.price_only.total_return, signed=True)} "
             f"| {_number(None if qqq is None else qqq.sharpe, '.2f')} "
             f"| {_pct(None if qqq is None else qqq.max_drawdown)} |"
         )
@@ -229,7 +275,7 @@ def write_weekly_report(session: Session, reports_dir: Path, today: date) -> Pat
     portfolios = session.exec(select(PaperPortfolio).order_by(col(PaperPortfolio.id))).all()
     text = render_weekly_report(
         today, week, failed_runs(session, week), [summarize(session, p, week) for p in portfolios],
-        code_use(session, week),
+        code_use(session, week), run_warnings(session, week),
     )
     path = reports_dir / f"{today.isoformat()}-weekly.md"
     path.parent.mkdir(parents=True, exist_ok=True)

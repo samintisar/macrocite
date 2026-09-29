@@ -21,6 +21,9 @@ WEEK = [date(2026, 10, 12 + i) for i in range(5)]  # Monday to Friday
 MONDAY_AFTER = date(2026, 10, 19)
 EQUITY = [100.0, 101.0, 99.0, 102.0, 103.0]
 QQQ_CLOSES = [500.0, 505.0, 495.0, 510.0, 515.0]  # the same moves as EQUITY: the same Sharpe
+QQQ_RAW_CLOSES = [510.0, 515.0, 505.0, 520.0, 525.0]  # before the dividend adjustment
+WARNINGS = {14: "earnings calendar: 1 failed (AAA)", 16: "earnings calendar FAILED (RuntimeError: "
+            "finnhub down)", 20: "prices: 1 failed (BBB)"}
 EXPECTED = """\
 # Paper trading: weekly report, 2026-10-19
 
@@ -32,13 +35,22 @@ Failed runs from 2026-10-12 to 2026-10-18: 1.
 Code used from 2026-10-12 to 2026-10-18: `aaaaaaaaaaaa`, `bbbbbbbbbbbb`. CHANGED: the last run \
 before used `cccccccccccc`.
 
+Run warnings from 2026-10-12 to 2026-10-18: 2.
+
+- 2026-10-14: earnings calendar: 1 failed (AAA)
+- 2026-10-16: earnings calendar FAILED (RuntimeError: finnhub down)
+
 ## Equity since the start
 
+Paper portfolios earn the price return only after entry (no dividends); compare with the \
+price-only QQQ line.
+
 | Portfolio | Start | Last session | Sessions | Equity | Total return | Sharpe | Max drawdown \
-| QQQ return | QQQ Sharpe | QQQ max drawdown |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| demo-qqq | 2026-10-12 | 2026-10-16 | 5 | 103.00 | +3.00% | 5.83 | 2.0% | +3.00% | 5.83 | 2.0% |
-| demo-cash | 2026-10-12 | not stepped yet | 0 | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| QQQ total return | QQQ price-only return | QQQ Sharpe | QQQ max drawdown |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| demo-qqq | 2026-10-12 | 2026-10-16 | 5 | 103.00 | +3.00% | 5.83 | 2.0% | +3.00% | +2.94% | 5.83 \
+| 2.0% |
+| demo-cash | 2026-10-12 | not stepped yet | 0 | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
 
 ## Trades since the start
 
@@ -84,15 +96,15 @@ def _fixture(session: Session) -> None:
     for day, status, sha in ((5, "ok", "c"), (14, "failed", "a"), (20, "failed", "d"),
                              (15, "ok", "b"), (16, "ok", "a")):
         session.add(PaperRun(started_at=datetime(2026, 10, day, 22, tzinfo=UTC), status=status,
-                             git_sha=sha * 40, git_dirty=False))
+                             git_sha=sha * 40, git_dirty=False, warnings=WARNINGS.get(day)))
     qqq = Ticker(symbol="QQQ", company_name="QQQ", kind=TickerKind.benchmark)
     session.add(qqq)
     session.commit()
     session.refresh(qqq)
-    for day, close in zip(WEEK, QQQ_CLOSES, strict=True):
-        value = Decimal(str(close))
+    for day, close, raw in zip(WEEK, QQQ_CLOSES, QQQ_RAW_CLOSES, strict=True):
+        value = Decimal(str(raw))
         session.add(Price(ticker_id=qqq.id, date=day, open=value, high=value, low=value,
-                          close=value, adj_close=value, volume=1_000_000))
+                          close=value, adj_close=Decimal(str(close)), volume=1_000_000))
     session.commit()
 
 

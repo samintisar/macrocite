@@ -69,6 +69,7 @@ def upgrade() -> None:
         sa.Column("target_session", sa.Date(), nullable=True),
         sa.Column("git_sha", sa.String(), nullable=True),
         sa.Column("git_dirty", sa.Boolean(), nullable=True),
+        sa.Column("warnings", sa.Text(), nullable=True),
         sa.PrimaryKeyConstraint("id"),
     )
 
