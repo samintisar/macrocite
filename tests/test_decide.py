@@ -5,7 +5,9 @@ from datetime import date
 import pytest
 from pytest import approx
 
+from signalbench.backtest.simulator import simulate
 from signalbench.market.bars import AdjustedBar
+from signalbench.strategy.config import CashVehicle
 from signalbench.strategy.decide import decide
 from signalbench.strategy.decision import Decision, ExitOrder, Skip, StopUpdate
 from signalbench.strategy.market_view import LookAheadError, MarketView
@@ -183,6 +185,39 @@ def test_decide_on_truncated_data_equals_decide_on_full_data() -> None:
         assert decide(as_of, truncated, NULL, portfolio, CONFIG) == expected
         non_empty += expected != Decision(stop_updates=expected.stop_updates)
     assert non_empty > 0  # the sample exercised at least one entry, exit, or skip
+
+
+def test_a_qqq_variant_run_on_truncated_data_equals_the_full_run_so_far() -> None:
+    """Spec 06: the cash vehicle trades QQQ only at the open or close of the simulated session,
+    like every stock, so a run cut at as_of is exactly the full run up to as_of."""
+    rng = random.Random(20260928)
+    days = weekdays(date(2021, 1, 4), 420)
+    symbols = {name: _random_walk(rng, days) for name in ("AAA", "BBB", "CCC", "DDD")}
+    sectors = {"AAA": "Energy", "BBB": "Energy", "CCC": "Utilities", "DDD": "Financials"}
+    qqq = []
+    for i, day in enumerate(days):
+        close = (300.0 + 0.3 * i) * (1 + rng.gauss(0.0, 0.01))
+        qqq.append(make_bar(day, close, open_=close * (1 + rng.gauss(0.0, 0.005))))
+    base = CONFIG.with_setups(("breakout",))
+    config = replace(
+        base,
+        breakout=replace(base.breakout, time_limit=None),
+        cash_vehicle=CashVehicle(symbol="QQQ", cost_per_side=0.002),
+    )
+    full = make_market(symbols, qqq, days, config, sectors=sectors)
+    whole = simulate(full, NULL, config, days[250], days[410])
+    kinds = {event["event"] for event in whole.events}
+    assert {"entry", "exit", "vehicle_buy", "vehicle_sell"} <= kinds  # the sample trades QQQ
+    for index in sorted(rng.sample(range(255, 410), 8)):
+        as_of = days[index]
+        truncated = make_market(
+            {name: _truncate(bars, as_of) for name, bars in symbols.items()},
+            _truncate(qqq, as_of), days, config, sectors=sectors,
+        )
+        cut = simulate(truncated, NULL, config, days[250], as_of)
+        assert cut.equity_curve == whole.equity_curve[: index - 250 + 1]
+        assert cut.events == [e for e in whole.events if str(e["date"]) <= as_of.isoformat()]
+        assert cut.trades == [t for t in whole.trades if t.exit_date <= as_of]
 
 
 def test_decide_is_deterministic() -> None:
