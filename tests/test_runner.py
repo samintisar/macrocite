@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import UTC, date, datetime, time
 from decimal import Decimal
 from pathlib import Path
@@ -29,6 +30,7 @@ from signalbench.db.models import (
 )
 from signalbench.ingest.cdr import CdrEntry
 from signalbench.market.bars import AdjustedBar
+from signalbench.strategy.config import CashVehicle
 from strategy_helpers import (
     WeekdaySessions,
     load_test_config,
@@ -36,6 +38,7 @@ from strategy_helpers import (
     series,
     trend_bars,
     weekdays,
+    with_bar,
 )
 
 DAYS = weekdays(date(2011, 1, 3), 300)  # DAYS[260] is 2012-01-02
@@ -111,7 +114,7 @@ def test_run_is_stored_with_provenance_and_report(seeded: Session, tmp_path: Pat
     ]
     assert set(run.pass_bar) == {"trades", "mean_r", "mean_r_halves", "sharpe"}
     assert run.passed is False  # one trade is far below 30
-    assert path == tmp_path / "2026-09-24-pullback-off.md"
+    assert path == tmp_path / "2026-09-24-test-pullback-off.md"
     assert path.read_text(encoding="utf-8").startswith("# Backtest: pullback (Jev off)")
 
 
@@ -139,7 +142,7 @@ def test_second_report_on_the_same_day_gets_a_suffix(seeded: Session, tmp_path: 
     _, first = _run(seeded, tmp_path)
     second_run, second = _run(seeded, tmp_path)
     assert first != second
-    assert second.name == f"2026-09-24-pullback-off-{str(second_run.id)[:8]}.md"
+    assert second.name == f"2026-09-24-test-pullback-off-{str(second_run.id)[:8]}.md"
 
 
 def test_setups_for_each_run() -> None:
@@ -338,7 +341,7 @@ def test_a_sentiment_run_trades_positive_readings_from_2016(
         "QQQ": trend_bars(SENTIMENT_DAYS, 300.0, 0.5),
     }
     assert run.data_fingerprint != data_fingerprint(stored.items(), [])  # readings are covered
-    assert path.name == "2026-09-24-sentiment-off.md"
+    assert path.name == "2026-09-24-test-sentiment-off.md"
     assert "**Sentiment status:** information only" in path.read_text(encoding="utf-8")
 
 
@@ -380,7 +383,7 @@ def test_a_filtered_run_blocks_a_negative_reading(seeded: Session, tmp_path: Pat
     assert blocked[0]["date"] == DAYS[DIP].isoformat()
     assert run.metrics["jev"]["theta_block"] == 0.7
     assert run.metrics["jev"]["information_only"] is True
-    assert path.name == "2026-09-24-pullback-filter.md"
+    assert path.name == "2026-09-24-test-pullback-filter.md"
     assert "cannot change the v1 result" in path.read_text(encoding="utf-8")
 
 
@@ -410,3 +413,48 @@ def test_a_reading_after_the_run_is_not_used(seeded: Session, tmp_path: Path) ->
     _reading(seeded, "AAA", after, p_negative=0.9, p_positive=0.02)
     with pytest.raises(RunRefusedError, match="No Jev readings"):
         _jev_run(seeded, tmp_path, "pullback", "filter", 0.7)
+
+
+def test_a_qqq_variant_stores_the_sleeve_and_the_sensitivity_of_an_unstored_second_run(
+    session: Session, tmp_path: Path
+) -> None:
+    # AAA breaks out on a 2x volume day (DAYS[262]) and exits for time 30 sessions later;
+    # QQQ holds the rest of the equity.
+    aaa = with_bar(trend_bars(DAYS, 50.0, 0.1), 262, volume=2_000_000)
+    _store(session, "AAA", TickerKind.us_stock, aaa)
+    _store(session, "BBB", TickerKind.us_stock, trend_bars(DAYS, 60.0, 0.05))
+    _store(session, "QQQ", TickerKind.benchmark, trend_bars(DAYS, 300.0, 0.5))
+    config = replace(
+        load_test_config(), version="v2-t30-qqq", cash_vehicle=CashVehicle("QQQ", 0.002)
+    )
+    run, path = run_backtest(
+        session, setup="breakout", jev_mode="off", config=config, config_sha256="f" * 64,
+        universe=UNIVERSE, calendar=WeekdaySessions(), git_sha="abc123",
+        run_date=date(2026, 9, 24), reports_dir=tmp_path, now=LATER,
+    )
+    assert len(session.exec(select(BacktestRun)).all()) == 1  # the 0.05% run is not stored
+    assert [(t["signal_date"], t["reason"]) for t in run.trade_log["trades"]] == [
+        (DAYS[262].isoformat(), "time")
+    ]
+    kinds = [e["event"] for e in run.trade_log["events"]]
+    assert kinds.count("vehicle_buy") == 2 and kinds.count("vehicle_sell") == 1
+    vehicle = run.metrics["cash_vehicle"]
+    assert (vehicle["symbol"], vehicle["cost_per_side"]) == ("QQQ", 0.002)
+    assert (vehicle["switches"], vehicle["buys"], vehicle["sells"]) == (3, 2, 1)
+    assert vehicle["share_vehicle"] + vehicle["share_stocks"] + vehicle["share_cash"] == (
+        pytest.approx(1.0)
+    )
+    assert vehicle["share_vehicle"] > 0.5
+    sensitivity = vehicle["sensitivity"]
+    assert sensitivity["cost_per_side"] == 0.0005
+    assert sensitivity["total_return"] > run.metrics["total_return"]  # cheaper switching
+    assert run.pass_bar["sharpe"]["value"] == run.metrics["sharpe"]  # total equity, QQQ in
+    stored = {
+        "AAA": aaa, "BBB": trend_bars(DAYS, 60.0, 0.05), "QQQ": trend_bars(DAYS, 300.0, 0.5)
+    }
+    assert run.data_fingerprint == data_fingerprint(stored.items(), [])  # QQQ was already in
+    assert path.name == "2026-09-24-v2-t30-qqq-breakout-off.md"
+    text = path.read_text(encoding="utf-8")
+    assert "**POST-HOC** (v2-t30-qqq)" in text
+    assert "## Idle cash in QQQ" in text
+    assert "**Sensitivity (information only): QQQ switching at 0.05%**" in text

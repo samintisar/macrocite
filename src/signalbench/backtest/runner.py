@@ -1,4 +1,4 @@
-"""Load real data, run one backtest, store it, and write its report (specs 02 and 03)."""
+"""Load real data, run one backtest, store it, and write its report (specs 02, 03, and 06)."""
 
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
@@ -11,13 +11,14 @@ from sqlmodel import Session, col, select
 
 from signalbench.backtest.benchmarks import benchmark_stats, buy_and_hold, equal_weight
 from signalbench.backtest.fingerprint import data_fingerprint
-from signalbench.backtest.metrics import run_metrics, trade_stats
+from signalbench.backtest.metrics import run_metrics, trade_stats, vehicle_stats
 from signalbench.backtest.passbar import evaluate_pass_bar, passes
 from signalbench.backtest.preregistration import (
     RunRefusedError,
     check_version_unchanged,
 )
 from signalbench.backtest.report import (
+    cash_vehicle_payload,
     jev_payload,
     metrics_payload,
     pass_bar_payload,
@@ -55,6 +56,7 @@ DAILY_BAR_FINAL = time(16, 15)  # a bar dated today (New York) is partial before
 QQQ_BENCHMARK = "QQQ buy-and-hold"
 SURVIVOR_BENCHMARK = "Survivor benchmark (equal weight, not rebalanced)"
 SENTIMENT_START = date(2016, 1, 1)  # spec 03: filings are backfilled from 2016
+SENSITIVITY_COST = 0.0005  # spec 06: cash-vehicle switching cost of the information-only rerun
 
 
 class UnsupportedRunError(ValueError):
@@ -205,6 +207,9 @@ def run_backtest(
 ) -> tuple[BacktestRun, Path]:
     """Run one setup (or the combined set), store it, and write the report.
 
+    A config with a cash vehicle (spec 06) is simulated a second time at SENSITIVITY_COST per
+    switch; only its total return, CAGR, Sharpe, and drawdown are kept, in the stored metrics.
+
     Refuses (RunRefusedError) when stored runs of this strategy version used another config,
     when a universe series does not end on the run's last session, when a Sentiment or
     --jev filter run finds no Jev readings, or when --jev filter has no theta (the filter is
@@ -268,6 +273,19 @@ def run_backtest(
     )
     bar = evaluate_pass_bar(metrics, qqq.sharpe, config.backtest)
     payload = metrics_payload(metrics, [qqq, survivor], config.backtest)
+    vehicle = config.cash_vehicle
+    if vehicle is not None:
+        # Spec 06: the same config again with cheaper switching, reported and never stored.
+        cheap = replace(config, cash_vehicle=replace(vehicle, cost_per_side=SENSITIVITY_COST))
+        rerun = simulate(market, readings, cheap, start, last)
+        sensitivity = benchmark_stats(
+            f"{vehicle.symbol} switching at {SENSITIVITY_COST:.2%}",
+            [point.equity for point in rerun.equity_curve],
+            run_sessions,
+        )
+        payload["cash_vehicle"] = cash_vehicle_payload(
+            vehicle_stats(result, vehicle), sensitivity, SENSITIVITY_COST
+        )
     if documents is not None and jev is not None:
         payload["jev"] = jev_payload(
             model_requested=jev.model_requested,
@@ -302,7 +320,7 @@ def run_backtest(
     session.add(run)
     session.commit()
     session.refresh(run)
-    path = report_path(reports_dir, run_date, setup, jev_mode)
+    path = report_path(reports_dir, run_date, setup, jev_mode, config.version)
     if path.exists():
         path = path.with_name(f"{path.stem}-{str(run.id)[:8]}.md")
     path.parent.mkdir(parents=True, exist_ok=True)
