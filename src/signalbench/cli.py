@@ -28,7 +28,7 @@ from signalbench.backtest.runner import (
 )
 from signalbench.config import settings
 from signalbench.db.models import BacktestRun, Ticker, TickerKind
-from signalbench.db.session import get_session
+from signalbench.db.session import engine, get_session
 from signalbench.ingest.cdr import (
     build_entries,
     diff_universe,
@@ -81,6 +81,10 @@ from signalbench.jev.store import (
 )
 from signalbench.market.calendar import HISTORY_START, NyseSessions
 from signalbench.market.legal_close import LegalCloses
+from signalbench.paper.lock import advisory_lock
+from signalbench.paper.run import run_paper
+from signalbench.paper.start import start_portfolios
+from signalbench.paper.status import stale_message, status_lines
 from signalbench.strategy.config import ConfigError, load_strategy_config
 from signalbench.strategy.readings import JevReadingsView
 from signalbench.strategy.spread import SpreadSurveyError, load_spread_survey
@@ -92,6 +96,9 @@ SPREAD_SURVEY_PATH = REPO_ROOT / "data" / "cdr_spread_survey.yaml"
 JEV_FILTER_PATH = REPO_ROOT / "data" / "jev_filter_v1.yaml"
 REPORTS_DIR = REPO_ROOT / "reports" / "backtests"
 JEV_REPORTS_DIR = REPO_ROOT / "reports" / "jev"
+PAPER_V1_PATH = REPO_ROOT / "data" / "paper_v1.yaml"
+PAPER_REPORTS_DIR = REPO_ROOT / "reports" / "paper"
+STALE_EXIT = 3  # `paper status --stale-after-days`: no ok paper run for too long
 JEV_CONCURRENCY = 4
 NEW_YORK = ZoneInfo("America/New_York")
 
@@ -119,6 +126,9 @@ class JevChoice(str, Enum):
 
 jev_app = typer.Typer(help="Jev reads filings and news (spec 03).")
 app.add_typer(jev_app, name="jev")
+
+paper_app = typer.Typer(help="Forward paper trading of the pre-registered portfolios (spec 07).")
+app.add_typer(paper_app, name="paper")
 
 
 class SourceChoice(str, Enum):
@@ -720,3 +730,83 @@ def jev_calibration() -> None:
             f"accuracy {_r(section.accuracy)} vs baseline {_r(section.majority_rate)}"
         )
     typer.echo(f"report: {path}")
+
+
+def _first_line(error: BaseException) -> str:
+    lines = str(error).strip().splitlines()
+    return lines[0] if lines else ""
+
+
+@paper_app.command("start")
+def paper_start() -> None:
+    """Create the portfolios in data/paper_v1.yaml; they start on the next NYSE session."""
+    try:
+        with get_session() as session:
+            created = start_portfolios(
+                session, paper_file=PAPER_V1_PATH, repo=REPO_ROOT, calendar=NyseSessions(), now=_now()
+            )
+            lines = [
+                f"{p.name}: starts {p.started_on.isoformat()} | {p.config_path} "
+                f"| config_sha256 {p.config_sha256[:12]}"
+                for p in created
+            ]
+    except (ValueError, yaml.YAMLError) as error:  # PaperRefusedError, PaperFileError, ConfigError
+        typer.echo(" ".join(str(error).split()), err=True)
+        raise typer.Exit(1) from None
+    for line in lines:
+        typer.echo(line)
+
+
+@paper_app.command("run")
+def paper_run() -> None:
+    """The nightly job: ingest prices, step every portfolio to the last complete session, and
+    write the weekly report on the first run of an ISO week. Safe to rerun."""
+    try:
+        with get_session() as session:
+            outcome = run_paper(
+                session,
+                lock=advisory_lock(engine),
+                repo=REPO_ROOT,
+                universe=load_universe(UNIVERSE_PATH),
+                calendar=NyseSessions(),
+                clock=_now,
+                ingest=_ingest_prices,
+                reports_dir=PAPER_REPORTS_DIR,
+                echo=typer.echo,
+            )
+    except Exception as error:  # noqa: BLE001  # e.g. the database is down: no run row to mark
+        typer.echo(f"ERROR: {type(error).__name__}: {_first_line(error)}", err=True)
+        raise typer.Exit(1) from None
+    if outcome.status == "failed":
+        typer.echo(f"ERROR: {outcome.error}", err=True)
+        raise typer.Exit(1)
+    if outcome.status == "ok" and outcome.target is not None:
+        stepped = sum(outcome.stepped.values())
+        typer.echo(f"paper run {outcome.run_id}: ok, {stepped} sessions stepped to {outcome.target}")
+
+
+@paper_app.command("status")
+def paper_status(
+    stale_after_days: Annotated[
+        int | None,
+        typer.Option(
+            "--stale-after-days",
+            min=1,
+            help="Exit 3 when no paper run has succeeded for more than this many days.",
+        ),
+    ] = None,
+) -> None:
+    """One line per portfolio: last session, equity, return, positions, and judging."""
+    now = _now()
+    try:
+        with get_session() as session:
+            lines = status_lines(session, now.date())
+            stale = None if stale_after_days is None else stale_message(session, now, stale_after_days)
+    except Exception as error:  # noqa: BLE001  # one line for the nightly log, not a traceback
+        typer.echo(f"ERROR: {type(error).__name__}: {_first_line(error)}", err=True)
+        raise typer.Exit(1) from None
+    for line in lines:
+        typer.echo(line)
+    if stale is not None:
+        typer.echo(stale, err=True)
+        raise typer.Exit(STALE_EXIT)
