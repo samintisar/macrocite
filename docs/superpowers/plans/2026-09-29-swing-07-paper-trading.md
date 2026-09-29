@@ -29,11 +29,12 @@
 | Rule | Behaviour |
 | --- | --- |
 | One run at a time | A Postgres session advisory lock (`pg_try_advisory_lock`) on its own connection, held for the whole run. Held elsewhere: print a line, exit 0, write no `paper_runs` row |
-| Run row | Inserted as `running` before any work; closed as `ok` or `failed` with `finished_at`, `sessions_stepped`, `target_session`, and the error. A crash leaves `running` |
+| Run row | Inserted as `running` before any work; closed as `ok` or `failed` with `finished_at`, `sessions_stepped`, `target_session`, `warnings` (price-ingest and calendar failures), and the error. A crash leaves `running`; the next run marks a `running` row older than two hours `failed` ("abandoned (killed or crashed)") |
+| Code version | Every run records `git_sha` (HEAD) and `git_dirty`; uncommitted changes to tracked files under `src/`, `data/`, `alembic/`, `pyproject.toml` or `uv.lock` refuse the run (a failed row). A new commit is allowed and recorded; the weekly report lists each week's commits (review fixes, after Task 11) |
 | Target | `last_complete_session(calendar, now)`: today after 16:15 New York, else the previous session |
 | Nothing to do | Every portfolio has already stepped the target: no ingest, nothing stepped, exit 0 (a rerun the same night) |
 | Ingest | `_ingest_prices` (prices plus the liquidity flags). Single-ticker failures are printed; the data check decides |
-| Data check | Per regime symbol: `load_market_inputs(…, end=target)` and `check_series_current` (every universe series and QQQ must have a bar on the target). Otherwise the run fails and nothing is stepped; the next run catches up |
+| Data check | Per regime symbol: `load_market_inputs(…, end=target)`, and the benchmark must have a bar on the target, or the run fails. Per portfolio, every symbol it holds or has pending must have one too, or that portfolio is refused. Any other universe name without one is not tradable that night (review fixes, after Task 11; the backtest's `check_series_current` is unchanged) |
 | Frozen config | The config file's `config_sha256` must equal the one stored at start. A mismatch refuses that portfolio only; the others still step, the weekly report is still written, then the run fails (exit 1, toast) |
 | Stepping | Every session after `last_session` (from `started_on`) up to the target, in order, each on a `MarketView` of bars up to the target (`AsOfView` refuses anything later). One transaction per session: the new `SimState`, the session's events, and its equity row |
 | Events | The simulator's events in its order (`exit` → `fill_exit`, `entry` → `fill_entry`; `skip`, `exit_deferred`, `vehicle_buy`, `vehicle_sell`, `pause`, `resume`, `stop_update` as they are), then `order_exit` and `order_entry` for the orders decided at that close. A fill's payload carries the id of the order event written the night before |
@@ -3712,6 +3713,8 @@ and this line to the layout block, after the `backtest/` line:
 
 **Gated:** the owner said go.
 
+Run Tasks 12 and 13 from the main checkout (`C:\Users\samin\Documents\GitHub\macrocite`, which has `.env`), on this branch's head with the review fixes: migration `0012` there is the one the paper worktree will run (Task 14).
+
 - [ ] **Step 1: Database up, migration pending**
 
 Run: `docker compose up -d && uv run alembic current`
@@ -3747,20 +3750,36 @@ Expected: exactly `data/paper_v1.yaml`, nothing else.
 
 ---
 
-### Task 14: ⛔ `paper start`
+### Task 14: ⛔ Tag, worktree, and `paper start`
 
 **Gated:** Task 13 committed.
 
-- [ ] **Step 1: The data folder is committed and clean**
+From here on, every `paper` command runs in a dedicated git worktree checked out at a tag, never in the main checkout, so the code that steps the portfolios changes only by a deliberate checkout (Task 16). `.env` is not tracked, so the worktree has none: manual commands pass the main checkout's with `uv run --env-file`, and the nightly script loads it (`-EnvFile`). Never edit files in the worktree: uncommitted changes to tracked code or data there refuse every run (`paper start` too).
 
-Run: `git status --short -- data src alembic`
+- [ ] **Step 1: The code and data are committed and clean**
+
+Run: `git status --short -- data src alembic pyproject.toml uv.lock`
 Expected: no output.
 
-- [ ] **Step 2: Start the portfolios**
+- [ ] **Step 2: Tag the commit and create the worktree**
+
+In the main checkout, on the Task 13 commit:
+
+```powershell
+git tag paper-v1
+git worktree add C:\Users\samin\Documents\GitHub\macrocite-paper paper-v1
+cd C:\Users\samin\Documents\GitHub\macrocite-paper
+uv sync --frozen
+git status --short
+```
+
+Expected: the worktree is created on a detached HEAD at `paper-v1`, `uv sync` creates its own `.venv`, and `git status --short` prints nothing. The steps below run in this folder (`cd` as above).
+
+- [ ] **Step 3: Start the portfolios**
 
 Run it in the evening, after the day's session (the start session is the first NYSE session after today's New York date).
 
-Run: `uv run signalbench paper start`
+Run: `uv run --frozen --env-file C:\Users\samin\Documents\GitHub\macrocite\.env signalbench paper start`
 Expected: seven lines, in the file's order, all with the same start session (the hashes are the committed files', CRLF read as LF; `v1-breakout`'s is the `config_sha256` in the header of `reports/backtests/2026-09-24-breakout-off.md`):
 
 ```text
@@ -3773,11 +3792,11 @@ v2-none-cash: starts <next session> | data/strategy_v2-none-cash.yaml | config_s
 v2-none-qqq: starts <next session> | data/strategy_v2-none-qqq.yaml | config_sha256 ee1797ad9cdf
 ```
 
-Any other hash means a config changed since spec 06: **stop and report**. Running `paper start` a second time must refuse with `Paper portfolios already exist: …` and exit 1.
+Any other hash means a config changed since spec 06: **stop and report**. Running `paper start` a second time must refuse with `Paper portfolios already exist: …` and exit 1. Each portfolio records the worktree's commit as `start_git_sha` (the `paper-v1` commit: `git rev-parse paper-v1`).
 
-- [ ] **Step 3: Status**
+- [ ] **Step 4: Status**
 
-Run: `uv run signalbench paper status`
+Run: `uv run --frozen --env-file C:\Users\samin\Documents\GitHub\macrocite\.env signalbench paper status`
 Expected: `last ok run: none`, then seven lines `<name>: starts <next session>, not stepped yet | judgeable after 365 days and 30 more closed trades` (the day count may differ by one or two).
 
 ---
@@ -3786,21 +3805,23 @@ Expected: `last ok run: none`, then seven lines `<name>: starts <next session>, 
 
 **Gated:** Task 14 done, and the start session has closed (after 16:15 New York on it: 13:15 local until 1 November 2026, 14:15 after).
 
+Every command below runs in the worktree, `C:\Users\samin\Documents\GitHub\macrocite-paper`, with `--env-file C:\Users\samin\Documents\GitHub\macrocite\.env` as in Task 14 (shortened to `<env>` below; in Git Bash, quote the path: `--env-file 'C:/Users/samin/Documents/GitHub/macrocite/.env'`).
+
 - [ ] **Step 1: Run it**
 
-Run: `uv run signalbench paper run`
-Expected: the ingest lines (`prices 1/… +… ~… x…`, then `liquidity: … active, … inactive`), then seven lines `<name>: 1 sessions to <start session>`, `weekly report: …\reports\paper\<today>-weekly.md`, and last `paper run <id>: ok, 7 sessions stepped to <start session>`. Exit 0.
+Run: `uv run --frozen --env-file <env> signalbench paper run`
+Expected: the ingest lines (`prices 1/… +… ~… x…`, then `liquidity: … active, … inactive`, then the earnings-calendar lines), then seven lines `<name>: 1 sessions to <start session>`, `weekly report: …\macrocite-paper\reports\paper\<today>-weekly.md`, and last `paper run <id>: ok, 7 sessions stepped to <start session>`. Exit 0. The run row records the `paper-v1` commit as `git_sha` and `git_dirty` false; the report's code line names it.
 
 An `ERROR: RunRefusedError: These price series do not end on the run's last session …` means the day's bars are not all in yet: wait an hour and rerun. **Any other error: stop and report.**
 
 - [ ] **Step 2: Run it again: nothing to do**
 
-Run: `uv run signalbench paper run`
+Run: `uv run --frozen --env-file <env> signalbench paper run`
 Expected: `Every portfolio has stepped <start session>; nothing to do.` and `paper run <id>: ok, 0 sessions stepped to <start session>`, with no ingest lines.
 
 - [ ] **Step 3: Status**
 
-Run: `uv run signalbench paper status`
+Run: `uv run --frozen --env-file <env> signalbench paper status`
 Expected: `last ok run: <that run's start, in UTC>`, then seven lines `<name>: last <start session> | equity … | return +0.00% | open 0 | closed 0 | judgeable after …`. The `-cash` portfolios and `v1-breakout` show `equity 100.00`; the three `-qqq` portfolios show 100 less QQQ's 0.2% purchase cost, plus QQQ's move from that open to that close.
 
 - [ ] **Step 4: The two identical portfolios match**
@@ -3808,7 +3829,7 @@ Expected: `last ok run: <that run's start, in UTC>`, then seven lines `<name>: l
 Run:
 
 ```bash
-uv run python - <<'EOF'
+uv run --frozen --env-file <env> python - <<'EOF'
 from sqlmodel import col, select
 
 from signalbench.db.models import PaperEquity, PaperEvent, PaperPortfolio
@@ -3840,7 +3861,7 @@ Expected: `twins match <n> events 1 sessions`. `TWINS DIFFER` is a bug in the ru
 
 - [ ] **Step 5: Show the owner the first weekly report**
 
-Show `reports/paper/<today>-weekly.md`. Do not commit it: reports are committed when reviewed (spec 07).
+Show `C:\Users\samin\Documents\GitHub\macrocite-paper\reports\paper\<today>-weekly.md`. Do not commit it: reports are committed when reviewed (spec 07), by copying them into the main checkout's `reports/paper/` (never commit in the worktree).
 
 ---
 
@@ -3848,14 +3869,22 @@ Show `reports/paper/<today>-weekly.md`. Do not commit it: reports are committed 
 
 **Gated:** Task 15 matched. Registering the task is a lasting change on the owner's PC: show the command, and run it only on the owner's go-ahead in chat.
 
+The task runs the worktree's own script against the worktree: the pinned code, its `logs\` and its `reports\paper\`. The worktree and tag come from Task 14 Step 2:
+
+```powershell
+git tag paper-v1
+git worktree add C:\Users\samin\Documents\GitHub\macrocite-paper paper-v1
+```
+
 - [ ] **Step 1: Show the owner the command**
 
 Run in a PowerShell window (as the owner, not elevated; if Windows answers "Access is denied", use an elevated window for the same user). `-At '15:00'` is local time; for 18:00 New York all year on this PC, use `'16:00'` instead (see Decisions, the run time):
 
 ```powershell
-$repo = 'C:\Users\samin\Documents\GitHub\macrocite'
-$action = New-ScheduledTaskAction -Execute 'powershell.exe' -WorkingDirectory $repo `
-    -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$repo\scripts\paper_nightly.ps1`""
+$worktree = 'C:\Users\samin\Documents\GitHub\macrocite-paper'
+$envFile = 'C:\Users\samin\Documents\GitHub\macrocite\.env'
+$action = New-ScheduledTaskAction -Execute 'powershell.exe' -WorkingDirectory $worktree `
+    -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$worktree\scripts\paper_nightly.ps1`" -RepoRoot `"$worktree`" -EnvFile `"$envFile`""
 $triggers = @(
     New-ScheduledTaskTrigger -Daily -At '15:00'
     New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
@@ -3863,10 +3892,10 @@ $triggers = @(
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew `
     -ExecutionTimeLimit (New-TimeSpan -Hours 1)
 Register-ScheduledTask -TaskName 'SignalBench paper run' -Action $action -Trigger $triggers `
-    -Settings $settings -Description 'Nightly forward paper run (spec 07): scripts\paper_nightly.ps1'
+    -Settings $settings -Description 'Nightly forward paper run (spec 07): the paper-v1 worktree, scripts\paper_nightly.ps1'
 ```
 
-The task runs as the owner, only while logged on (toasts need the desktop); `-StartWhenAvailable` runs a missed 15:00 when the PC wakes. To remove it later: `Unregister-ScheduledTask -TaskName 'SignalBench paper run' -Confirm:$false`.
+The task runs as the owner, only while logged on (toasts need the desktop); `-StartWhenAvailable` runs a missed 15:00 when the PC wakes. The script loads `-EnvFile` into its own process (a variable already set in the environment wins; values are never logged) and runs `uv run --frozen`, which never rewrites the worktree's `uv.lock`. Its log is `C:\Users\samin\Documents\GitHub\macrocite-paper\logs\paper-<yyyy-MM>.log`; a failure before that folder exists (a wrong `-RepoRoot`) is logged to `%TEMP%\signalbench-paper-nightly.log`. To remove the task later: `Unregister-ScheduledTask -TaskName 'SignalBench paper run' -Confirm:$false`.
 
 - [ ] **Step 2: Check it**
 
@@ -3875,17 +3904,41 @@ Expected: `NextRunTime` at the next 15:00 (or 16:00) local; `LastTaskResult` 267
 
 - [ ] **Step 3: Force one failure and see the toast**
 
-In the same PowerShell window (the variable lasts only for this window; the owner's `.env` is not touched):
+In the same PowerShell window (the variable lasts only for this window, and wins over the `.env` value; the owner's `.env` is not touched):
 
 ```powershell
+$worktree = 'C:\Users\samin\Documents\GitHub\macrocite-paper'
 $env:DATABASE_URL = 'postgresql+psycopg://nobody:nothing@nohost.invalid:5432/none'
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\paper_nightly.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$worktree\scripts\paper_nightly.ps1" -RepoRoot $worktree -EnvFile 'C:\Users\samin\Documents\GitHub\macrocite\.env'
 "exit $LASTEXITCODE"
 Remove-Item Env:DATABASE_URL
-Get-Content "logs\paper-$(Get-Date -Format yyyy-MM).log" -Tail 4
+Get-Content "$worktree\logs\paper-$(Get-Date -Format yyyy-MM).log" -Tail 6
 ```
 
-Expected: a Windows toast from "Windows PowerShell" titled **SignalBench paper run failed**, reading `OperationalError: (psycopg.OperationalError) failed to resolve host 'nohost.invalid': [Errno 11001] getaddrinfo failed`; `exit 1`; and the log's last four lines are the first four of Task 10 Step 3 (there is no `toast (not shown)` line: the toast was shown). No `paper_runs` row is written, because the run never reached the database. If no toast appears, check Settings > System > Notifications (Windows PowerShell on, Do not disturb off) and try again.
+Expected: a Windows toast from "Windows PowerShell" titled **SignalBench paper run failed**, reading `OperationalError: (psycopg.OperationalError) failed to resolve host 'nohost.invalid': [Errno 11001] getaddrinfo failed`; `exit 1`; and the log's last six lines, each stamped with the local time:
+
+```text
+repo: C:\Users\samin\Documents\GitHub\macrocite-paper
+env: <n> variables loaded from C:\Users\samin\Documents\GitHub\macrocite\.env, 1 already set in the environment kept
+> signalbench paper status --stale-after-days 3  (exit 1)
+ERROR: OperationalError: (psycopg.OperationalError) failed to resolve host 'nohost.invalid': [Errno 11001] getaddrinfo failed
+> signalbench paper run  (exit 1)
+ERROR: OperationalError: (psycopg.OperationalError) failed to resolve host 'nohost.invalid': [Errno 11001] getaddrinfo failed
+```
+
+There is no `toast (not shown)` line: the toast was shown (a toast that fails is logged as `toast FAILED …`). No `paper_runs` row is written, because the run never reached the database. If no toast appears, check Settings > System > Notifications (Windows PowerShell on, Do not disturb off) and try again.
+
+- [ ] **Updating the runner later (a bug fix): a deliberate checkout of a new tag**
+
+The worktree never follows the branch. A fix is committed and tested in the main checkout (if it adds a migration, apply it there first, Task 12's way), tagged, and checked out in the worktree between two nightly runs:
+
+```powershell
+git tag paper-v2
+git -C C:\Users\samin\Documents\GitHub\macrocite-paper checkout paper-v2
+uv sync --frozen --directory C:\Users\samin\Documents\GitHub\macrocite-paper
+```
+
+A different commit does not refuse a run (fixes must stay possible): the next run records the new `git_sha`, and that week's report lists both commits and flags the change. Configs and `data/paper_v1.yaml` must not change in the new tag: a changed config is refused by its `config_sha256`.
 
 ---
 
