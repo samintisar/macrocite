@@ -97,10 +97,31 @@ Formal reports live in `reports/`; decisions in the owner's words live in the ov
 - **Holding times (Breakout v1):** 214 stopped out after 13 sessions on average (−0.80 R), 139 hit the 30-session limit (+1.86 R), 66 exited for earnings after 14 sessions (+0.65 R). The best trades were the ones the clock closed.
 - **Takeaway:** cash drag explains Breakout's Sharpe gap. With cheap switching the blend beats QQQ on Sharpe (1.10 vs 1.00); at 0.2% per side it only ties. Worth a proper pre-registered test only with realistic switching costs and fresh data (forward paper trading), since this reuses seen data.
 
+## 2026-09-28 — Breakout v2: idle cash in QQQ and holding time (spec 06)
+
+- **Kind:** post-hoc. Pre-registered in six configs committed and pushed before any run (commit `989d62b`); 2012–2026 was already seen. Six tries.
+- **Test:** Breakout v1 with a 30-session, 60-session, or no time limit (trailing stop and earnings exits only), each with idle cash kept as cash or held in QQQ. Costs 0.2% per side on stocks and on QQQ switches. Sessions 2012-01-03 to 2026-09-24.
+- **Result:**
+
+  | Run | Trades | Mean R (worse half) | Total return | CAGR | Sharpe | Max drawdown | Avg share in QQQ | Result |
+  | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+  | v1 Breakout | 419 | 0.311 (0.265) | 610.6% | 14.2% | 0.949 | 24.8% | | FAIL (Sharpe) |
+  | v2-t30-cash | 419 | 0.311 (0.265) | 610.6% | 14.2% | 0.949 | 24.8% | | FAIL (Sharpe) |
+  | v2-t30-qqq | 421 | 0.331 (0.304) | 1,771.4% | 22.0% | 1.005 | 34.3% | 32.9% | PASS |
+  | v2-t60-cash | 342 | 0.400 (0.344) | 699.5% | 15.2% | 0.997 | 25.7% | | PASS |
+  | v2-t60-qqq | 339 | 0.414 (0.375) | 1,809.9% | 22.2% | 1.020 | 34.3% | 31.0% | PASS |
+  | v2-none-cash | 324 | 0.505 (0.461) | 1,029.3% | 17.9% | 1.120 | 26.1% | | PASS |
+  | v2-none-qqq | 322 | 0.486 (0.445) | 2,031.1% | 23.1% | 1.039 | 36.2% | 30.6% | PASS |
+  | QQQ buy-and-hold | | | 1,376.1% | 20.1% | 0.996 | 35.1% | | |
+
+  Sensitivity at 0.05% QQQ switching (information only): Sharpe 1.12 (t30-qqq), 1.11 (t60-qqq), 1.14 (none-qqq).
+- **Reproduction:** `v2-t30-cash` reproduced v1 Breakout exactly (419 trades, 610.6%, Sharpe 0.949; same `data_fingerprint` `567662d6…`).
+- **Reports:** `reports/backtests/2026-09-28-v2-{t30,t60,none}-{cash,qqq}-breakout-off.md`.
+- **Takeaway:** both ideas helped on the past. Dropping the time limit lifted mean R from 0.31 to 0.50 and Sharpe from 0.95 to 1.12 with no QQQ at all, and a smaller worst drop than QQQ (26% vs 35%), though with less total return (1,029% vs 1,376%). Idle cash in QQQ raised returns above QQQ's but also raised drawdowns to QQQ's level, so its Sharpe gain was smaller. v2-t60-cash passed by 0.001, which is noise. Five of six passing on data that suggested both ideas decides nothing: all six plus v1 Breakout go to forward paper trading.
+
 ## Open questions (not yet tested)
 
-- **Idle cash (rough estimate done, see above):** a proper pre-registered test with realistic QQQ switching costs.
-- **Holding time:** Breakout's time-limit exits were its best trades (+1.86 R); a pre-registered test of longer or no time limits.
+- **Idle cash and holding time:** tested post-hoc in spec 06 (entry above); five of six variants passed. Next: forward paper trading of all six plus v1 Breakout.
 - **Slower momentum:** monthly rotation into the strongest names, holding weeks to months.
 - **Fewer constraints on Breakout:** more slots, no regime pause.
 - **Jev on other horizons or stocks:** longer holding periods, or less-followed stocks.
