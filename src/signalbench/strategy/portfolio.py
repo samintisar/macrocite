@@ -34,10 +34,10 @@ class PendingEntry:
 
 @dataclass(frozen=True)
 class PortfolioState:
-    cash: float
+    cash: float  # with a cash vehicle (spec 06): cash + the vehicle at the close, net of its cost
     positions: tuple[Position, ...]
     pending: tuple[PendingEntry, ...]
-    equity: float  # cash + sum(units * close) at the as-of close
+    equity: float  # cash + sum(units * close) at the as-of close, + the cash vehicle (spec 06)
     peak: float
     paused: bool
     paused_since: date | None

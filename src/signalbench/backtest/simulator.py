@@ -2,12 +2,17 @@
 
 For each session t: at the open, fill the exits and then the entries decided at t-1;
 at the close, mark to market, update the peak and pause state, and call decide(t).
+
+With a cash vehicle (spec 06), idle cash waits in the regime symbol (QQQ): on a session with
+fills, QQQ is sold at the open just enough to pay for the entries, or the cash left after the
+fills buys QQQ at the open. The start equity is parked at the first open. Configs without a
+cash vehicle never touch QQQ and behave exactly as before.
 """
 
 from dataclasses import dataclass, field, replace
 from datetime import date
 
-from signalbench.strategy.config import SetupName, StrategyConfig
+from signalbench.strategy.config import CashVehicle, SetupName, StrategyConfig
 from signalbench.strategy.decide import decide
 from signalbench.strategy.decision import EntryOrder, ExitOrder, ExitReason, SkipReason
 from signalbench.strategy.entries import MIN_POSITION_FRACTION
@@ -16,6 +21,7 @@ from signalbench.strategy.portfolio import PortfolioState, Position
 from signalbench.strategy.readings import ReadingsView
 
 Event = dict[str, object]
+DUST = 1e-9  # cash this close to zero after the day's fills is float residue, not a switch
 
 
 @dataclass(frozen=True)
@@ -45,6 +51,7 @@ class EquityPoint:
     equity: float
     cash: float
     open_positions: int
+    vehicle_value: float = 0.0  # the cash vehicle at the close (spec 06); 0 without one
 
 
 @dataclass(frozen=True)
@@ -125,7 +132,11 @@ class _Orders:
 
 
 def entry_skip(entry: EntryOrder, open_price: float, cash: float, config: StrategyConfig) -> SkipReason | None:
-    """Open-time skip rules: gap_up, gap_below_stop, and no cash left."""
+    """Open-time skip rules: gap_up, gap_below_stop, and no cash left.
+
+    `cash` is what the entry can spend: cash, plus the cash vehicle at the open net of its
+    selling cost (spec 06).
+    """
     if open_price > entry.signal_close * (1.0 + config.gap_up_limit):
         return "gap_up"
     if open_price <= entry.stop:
@@ -146,6 +157,8 @@ def simulate(
     if not sessions:
         raise ValueError(f"no sessions between {start} and {end}")
     cash = config.start_equity
+    vehicle = config.cash_vehicle
+    vehicle_units = 0.0
     positions: dict[str, Position] = {}
     opened: dict[str, _Opened] = {}
     risk = RiskState(peak=config.start_equity, paused=False, paused_since=None, paused_at=None)
@@ -157,6 +170,11 @@ def simulate(
 
     for index, day in enumerate(sessions):
         view = market.at(day)
+        vehicle_open, vehicle_mark = _vehicle_prices(view, day, vehicle)
+        sleeve = 0.0  # what the vehicle would pay today, net of its selling cost
+        if vehicle is not None and vehicle_open is not None:
+            sleeve = vehicle_units * vehicle_open * (1.0 - vehicle.cost_per_side)
+        filled = index == 0  # the first open parks the start equity
 
         # Open: exits first, then entries, both decided at the previous close.
         deferred: list[ExitOrder] = []  # exits with no bar today, retried at the next open
@@ -170,6 +188,7 @@ def simulate(
                     continue
                 fill = snap.open * (1.0 - config.cost_per_side)
                 cash += position.units * fill
+                filled = True
                 meta = opened.pop(position.id)
                 del positions[position.id]
                 trade = TradeRecord(
@@ -196,14 +215,16 @@ def simulate(
                     _event(day, "exit", position_id=position.id, symbol=position.symbol,
                            reason=order.reason, price=fill, r=trade.r)
                 )
-            open_equity = cash + _held_value_at_open(view, day, positions)
+            open_equity = (
+                cash + _held_value_at_open(view, day, positions) + vehicle_units * vehicle_mark
+            )
             for entry in orders.entries:
                 snap = view.snapshot(entry.symbol)
                 skip = "no_bar" if snap is None or snap.date != day else None
                 if snap is not None and skip is None:
-                    skip = entry_skip(entry, snap.open, cash, config)
+                    skip = entry_skip(entry, snap.open, cash + sleeve, config)
                 fill = 0.0 if snap is None else snap.open * (1.0 + config.cost_per_side)
-                units = 0.0 if skip is not None else min(entry.units, cash / fill)  # cash cap
+                units = 0.0 if skip is not None else min(entry.units, (cash + sleeve) / fill)
                 if skip is None and units * fill < MIN_POSITION_FRACTION * open_equity:
                     skip = "no_cash"  # trimmed to dust by earlier fills in this batch
                 if snap is None or skip is not None:
@@ -211,7 +232,8 @@ def simulate(
                         _event(day, "skip", symbol=entry.symbol, setup=entry.setup, reason=skip)
                     )
                     continue
-                cash -= units * fill
+                cash -= units * fill  # below zero only until the vehicle is sold, below
+                filled = True
                 position_id = f"P{next_id:05d}"
                 next_id += 1
                 meta = _Opened(orders.decided_on, entry.signal_close, entry.stop)
@@ -238,6 +260,10 @@ def simulate(
                            setup=entry.setup, units=units, price=fill, trimmed=units < entry.units)
                 )
 
+        # Open, after the fills: sell the vehicle to cover the entries, or park the cash left.
+        if vehicle is not None and vehicle_open is not None and filled:
+            cash, vehicle_units = _switch(day, cash, vehicle_units, vehicle_open, vehicle, events)
+
         # Close: mark to market, count the session, update the peak and pause state.
         value = 0.0
         for position_id, position in list(positions.items()):
@@ -249,14 +275,20 @@ def simulate(
                 sessions_held=position.sessions_held + 1,
                 highest_close=max(position.highest_close, close),
             )
-        equity = cash + value
+        vehicle_value = 0.0
+        spendable = cash  # what decide() may size against: cash, plus the vehicle net of cost
+        if vehicle is not None:
+            benchmark = view.benchmark()
+            vehicle_value = 0.0 if benchmark is None else vehicle_units * benchmark.close
+            spendable = cash + vehicle_value * (1.0 - vehicle.cost_per_side)
+        equity = cash + value + vehicle_value
         risk, change = step_risk(risk, equity, index, day, config)
         if change is not None:
             events.append(_event(day, change, equity=equity, peak=risk.peak))
-        curve.append(EquityPoint(day, equity, cash, len(positions)))
+        curve.append(EquityPoint(day, equity, cash, len(positions), vehicle_value))
 
         state = PortfolioState(
-            cash=cash,
+            cash=spendable,
             positions=tuple(positions.values()),
             pending=(),
             equity=equity,
@@ -318,6 +350,61 @@ def _open_at_end(
             )
         )
     return records
+
+
+def _vehicle_prices(
+    view: AsOfView, day: date, vehicle: CashVehicle | None
+) -> tuple[float | None, float]:
+    """The vehicle's open today (None when it has no bar today, so it does not trade) and its
+    mark at the open (today's open, else the last close; 0 before its first bar)."""
+    if vehicle is None:
+        return None, 0.0
+    snap = view.benchmark()
+    if snap is None:
+        return None, 0.0
+    if snap.date != day:
+        return None, snap.close
+    return snap.open, snap.open
+
+
+def _switch(
+    day: date,
+    cash: float,
+    units: float,
+    price: float,
+    vehicle: CashVehicle,
+    events: list[Event],
+) -> tuple[float, float]:
+    """Settle the day's cash against the vehicle at the open (spec 06).
+
+    Negative cash (entries paid beyond the cash on hand) sells just enough units to cover it;
+    positive cash buys units. Fills mirror a stock's: price x (1 - cost) when selling and
+    price x (1 + cost) when buying, so the cost is charged only on the amount that moves.
+    Returns the new (cash, units).
+    """
+    cost = vehicle.cost_per_side
+    if cash < -DUST:
+        sold = min(-cash / (price * (1.0 - cost)), units)
+        amount = sold * price
+        events.append(
+            _event(day, "vehicle_sell", symbol=vehicle.symbol, units=sold, price=price,
+                   amount=amount, cost=amount * cost)
+        )
+        return _settled(cash + amount * (1.0 - cost)), units - sold
+    if cash > DUST:
+        bought = cash / (price * (1.0 + cost))
+        amount = bought * price
+        events.append(
+            _event(day, "vehicle_buy", symbol=vehicle.symbol, units=bought, price=price,
+                   amount=amount, cost=amount * cost)
+        )
+        return _settled(cash - amount * (1.0 + cost)), units + bought
+    return cash, units
+
+
+def _settled(cash: float) -> float:
+    """Cash after a switch: float residue within DUST of zero is zero."""
+    return 0.0 if abs(cash) <= DUST else cash
 
 
 def _held_value_at_open(view: AsOfView, day: date, positions: dict[str, Position]) -> float:
