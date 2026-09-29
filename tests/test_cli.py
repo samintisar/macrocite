@@ -14,7 +14,12 @@ from signalbench.ingest.cdr import CdrEntry
 from signalbench.ingest.finnhub import FinnhubClient
 from signalbench.ingest.prices import PriceIngestResult
 from signalbench.ingest.ratelimit import RateLimiter
-from signalbench.strategy.config import config_sha256, load_strategy_config
+from signalbench.strategy.config import (
+    CashVehicle,
+    StrategyConfig,
+    config_sha256,
+    load_strategy_config,
+)
 
 runner = CliRunner()
 
@@ -584,3 +589,35 @@ def test_backtest_run_filter_refuses_a_config_version_other_than_v1(
     assert result.exit_code == 1
     assert "was fitted on a different" in result.stderr
     assert calls == {}
+
+
+def test_backtest_run_passes_a_qqq_variant_config_through(
+    session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Spec 06 needs no new CLI option: --config carries `time_limit: null` and `cash_vehicle`."""
+    calls: dict[str, object] = {}
+
+    def fake_run(_session: Session, **kwargs: object) -> tuple[BacktestRun, Path]:
+        calls.update(kwargs)
+        return _stored_run(session), tmp_path / "2026-09-29-v2-none-qqq-breakout-off.md"
+
+    config = _registered_config(monkeypatch, tmp_path, version="v2-none-qqq")
+    body = config.read_text(encoding="utf-8").replace("    time_limit: 30\n", "    time_limit: null\n")
+    body = body.replace(
+        "cost_per_side: 0.002\n",
+        "cost_per_side: 0.002\ncash_vehicle:\n  symbol: QQQ\n  cost_per_side: 0.002\n",
+        1,
+    )
+    config.write_text(body, encoding="utf-8")
+    monkeypatch.setattr(cli, "get_session", lambda: session)
+    monkeypatch.setattr(cli, "git_sha", lambda _repo: "abc123")
+    monkeypatch.setattr(cli, "NyseSessions", lambda: "calendar")
+    monkeypatch.setattr(cli, "run_backtest", fake_run)
+    result = runner.invoke(app, ["backtest", "run", "--setup", "breakout", "--config", str(config)])
+    assert result.exit_code == 0, result.stderr
+    strategy = calls["config"]
+    assert isinstance(strategy, StrategyConfig)
+    assert strategy.version == "v2-none-qqq"
+    assert strategy.breakout.time_limit is None
+    assert strategy.cash_vehicle == CashVehicle(symbol="QQQ", cost_per_side=0.002)
+    assert calls["config_sha256"] == config_sha256(config.read_bytes())
