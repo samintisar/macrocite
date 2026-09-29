@@ -5,13 +5,16 @@ from pytest import approx
 
 from signalbench.backtest.metrics import (
     TradeStats,
+    VehicleStats,
     cagr,
     max_drawdown,
     run_metrics,
     sharpe,
     trade_stats,
+    vehicle_stats,
 )
 from signalbench.backtest.simulator import EquityPoint, SimulationResult, TradeRecord
+from signalbench.strategy.config import CashVehicle
 from strategy_helpers import load_test_config
 
 PARAMS = load_test_config().backtest
@@ -82,3 +85,36 @@ def test_run_metrics_splits_halves_and_recent_by_entry_date() -> None:
     assert metrics.pauses == 1
     assert metrics.skips_by_reason == {"gap_up": 1, "regime": 2}
     assert metrics.open_positions_at_end == 0
+
+
+def test_vehicle_stats_by_hand() -> None:
+    days = [date(2012, 1, 3), date(2012, 1, 4), date(2012, 1, 5), date(2012, 1, 6)]
+    curve = [
+        EquityPoint(days[0], 100.0, 0.0, 0, 100.0),  # all in QQQ
+        EquityPoint(days[1], 100.0, 0.0, 1, 60.0),  # 40 in a stock
+        EquityPoint(days[2], 100.0, 10.0, 1, 40.0),  # 50 in a stock, 10 in cash
+        EquityPoint(days[3], 100.0, 0.0, 0, 100.0),
+    ]
+
+    def switch(day: date, kind: str, cost: float) -> dict[str, object]:
+        return {"date": day.isoformat(), "event": kind, "symbol": "QQQ", "units": 0.1,
+                "price": 400.0, "amount": cost / 0.002, "cost": cost}
+
+    events: list[dict[str, object]] = [
+        switch(days[0], "vehicle_buy", 0.2),
+        {"date": "2012-01-04", "event": "entry", "symbol": "AAA"},
+        switch(days[1], "vehicle_sell", 0.08),
+        switch(days[3], "vehicle_buy", 0.1),
+    ]
+    result = SimulationResult(days[0], days[-1], curve, [], events, open_positions=[])
+    assert vehicle_stats(result, CashVehicle("QQQ", 0.002)) == VehicleStats(
+        symbol="QQQ",
+        cost_per_side=0.002,
+        share_vehicle=approx(0.75),
+        share_stocks=approx(0.225),
+        share_cash=approx(0.025),
+        switches=3,
+        buys=2,
+        sells=1,
+        switch_cost=approx(0.38),
+    )
