@@ -7,7 +7,7 @@ import pytest
 
 from signalbench.backtest.simulator import Opened, Orders, SimState, initial_state
 from signalbench.ingest.prices import Split
-from signalbench.paper.splits import adjust_for_splits, rescale
+from signalbench.paper.splits import Mark, adjust_for_splits, rescale
 from signalbench.paper.start import PaperRefusedError
 from signalbench.strategy.decision import EntryOrder, ExitOrder
 from signalbench.strategy.market_view import MarketView
@@ -134,3 +134,50 @@ def test_a_vehicle_split_is_checked_against_the_benchmark() -> None:
     assert [e["symbol"] for e in events] == ["QQQ"]
     with pytest.raises(PaperRefusedError, match="p-test: QQQ"):
         _adjust({"QQQ": 2.0}, {})
+
+
+def _marked(
+    stored: dict[str, float], known: dict[str, list[Split]], scales: dict[str, float] | None = None
+) -> tuple[SimState, list[dict[str, object]]]:
+    """Each held or pending symbol's raw close on the last session, saved with the state (AAA
+    100, BBB 80, QQQ 300), against the stored raw close for that session tonight."""
+    saved = {"AAA": 100.0, "BBB": 80.0, "QQQ": 300.0}
+    marks = [Mark(symbol, LAST, price, price * stored.get(symbol, 1.0))
+             for symbol, price in saved.items()]
+    return adjust_for_splits(_state(), market=_market(scales or {}), known=known, applied=(),
+                             target=TARGET, vehicle="QQQ", where="p-test", marks=marks)
+
+
+@pytest.mark.parametrize("move", [0.98, 1.0, 1.02])
+def test_a_dividend_or_a_small_revision_of_the_saved_close_passes(move: float) -> None:
+    assert _marked({"AAA": move}, {}) == (_state(), [])
+
+
+@pytest.mark.parametrize(("ratio", "name"), [(1.25, "5-for-4"), (4 / 3, "4-for-3"), (1.2, "6-for-5")])
+def test_a_small_split_nobody_listed_is_refused(ratio: float, name: str) -> None:
+    """The stored adjusted closes alone allow for years of dividends (0.75 to 1.02), which a
+    5-for-4 split fits in; the close saved last night does not."""
+    with pytest.raises(PaperRefusedError, match=r"p-test: AAA .* close saved with the state"):
+        _marked({"AAA": 1.0 / ratio}, {}, scales={"AAA": ratio})
+
+
+def test_a_listed_split_explains_the_saved_close() -> None:
+    state, events = _marked({"AAA": 0.8}, {"AAA": [Split(EX_DATE, 1.25)]}, scales={"AAA": 1.25})
+    assert state == rescale(_state(), "AAA", 1.25, vehicle="QQQ")
+    assert [e["ratio"] for e in events] == [1.25]
+
+
+def test_a_missing_stored_close_for_a_saved_session_is_refused() -> None:
+    marks = [Mark("AAA", LAST, 100.0, None)]
+    with pytest.raises(PaperRefusedError, match=f"p-test: AAA has no stored close on {LAST}"):
+        adjust_for_splits(_state(), market=_market({}), known={}, applied=(), target=TARGET,
+                          vehicle="QQQ", where="p-test", marks=marks)
+
+
+def test_a_split_on_the_session_after_the_target_is_applied_once_the_prices_show_it() -> None:
+    """A run during the ex-date's session (the target is the session before): the stored history
+    is already on the new scale, so the listed split is applied now, not refused."""
+    later = DAYS[253]
+    state, events = _adjust({"AAA": 2.0}, {"AAA": [Split(later, 2.0)]})
+    assert state == rescale(_state(), "AAA", 2.0, vehicle="QQQ")
+    assert events == [{"symbol": "AAA", "ex_date": later.isoformat(), "ratio": 2.0}]

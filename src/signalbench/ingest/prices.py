@@ -83,20 +83,20 @@ def ingest_daily_prices(
     history_start: date,
     full: bool = False,
 ) -> PriceIngestResult:
+    """Fetch, then write in one commit. When the refetch window shows that older closes changed
+    (a dividend or split rescaled the whole history), the whole history is fetched first and
+    written instead, so a failed full fetch writes nothing: the stored history never mixes two
+    scales, and the next run sees the same change and tries again."""
     start = fetch_start(session, ticker, history_start, full=full)
     symbol = ticker.price_symbol or ticker.symbol
-    existing = {
-        row.date: row
-        for row in session.exec(
-            select(Price).where(Price.ticker_id == ticker.id, col(Price.date) >= start)
-        ).all()
-    }
-    # The newest stored row may be a partial session; a change to an older close means a
-    # dividend or split rescaled the whole history, not just the refetch window.
-    last_complete = max(existing) if existing else None
-    history_rescaled = False
+    existing = _stored(session, ticker, start)
+    bars = fetch(symbol, start)
+    if not full and _history_rescaled(existing, bars):
+        logger.info("%s history was rescaled; refetching from %s", symbol, history_start)
+        existing = _stored(session, ticker, history_start)
+        bars = fetch(symbol, history_start)
     created = updated = rejected = 0
-    for bar in fetch(symbol, start):
+    for bar in bars:
         reason = validate_bar(bar)
         if reason is not None:
             logger.warning("Rejected %s bar on %s: %s", symbol, bar.date, reason)
@@ -117,12 +117,6 @@ def ingest_daily_prices(
             existing[bar.date] = row
             created += 1
         elif _row_values(row) != _bar_values(bar):
-            if (
-                last_complete is not None
-                and bar.date < last_complete
-                and (row.close, row.adj_close) != (bar.close, bar.adj_close)
-            ):
-                history_rescaled = True
             row.open = bar.open
             row.high = bar.high
             row.low = bar.low
@@ -134,16 +128,34 @@ def ingest_daily_prices(
             continue
         session.add(row)
     session.commit()
-    result = PriceIngestResult(created=created, updated=updated, rejected=rejected)
-    if history_rescaled and not full:
-        logger.info("%s history was rescaled; refetching from %s", symbol, history_start)
-        rest = ingest_daily_prices(session, ticker, fetch, history_start, full=True)
-        result = PriceIngestResult(
-            created=result.created + rest.created,
-            updated=result.updated + rest.updated,
-            rejected=rest.rejected,  # the full pass sees every rejected bar again
-        )
-    return result
+    return PriceIngestResult(created=created, updated=updated, rejected=rejected)
+
+
+def _stored(session: Session, ticker: Ticker, start: date) -> dict[date, Price]:
+    return {
+        row.date: row
+        for row in session.exec(
+            select(Price).where(Price.ticker_id == ticker.id, col(Price.date) >= start)
+        ).all()
+    }
+
+
+def _history_rescaled(existing: dict[date, Price], bars: list[DailyBar]) -> bool:
+    """The newest stored row may be a partial session; a change to an older close means a
+    dividend or split rescaled the whole history, not just the refetch window."""
+    if not existing:
+        return False
+    last_complete = max(existing)
+    for bar in bars:
+        row = existing.get(bar.date)
+        if (
+            row is not None
+            and validate_bar(bar) is None
+            and bar.date < last_complete
+            and (row.close, row.adj_close) != (bar.close, bar.adj_close)
+        ):
+            return True
+    return False
 
 
 def _row_values(row: Price) -> tuple[Decimal, Decimal, Decimal, Decimal, Decimal, int]:

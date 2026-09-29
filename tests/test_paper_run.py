@@ -395,14 +395,15 @@ def _split_bars(bars: list[AdjustedBar], ratio: float) -> list[AdjustedBar]:
     ]
 
 
-def _split_stored(session: Session, symbol: str, ratio: int) -> None:
+def _split_stored(session: Session, symbol: str, ratio: float) -> None:
     """What tonight's `ingest prices` does after a split: it sees older closes change and
     refetches the whole, rescaled history."""
     ticker = session.exec(select(Ticker).where(Ticker.symbol == symbol)).one()
+    by = Decimal(str(ratio))
     for row in session.exec(select(Price).where(Price.ticker_id == ticker.id)).all():
-        row.open, row.high, row.low = row.open / ratio, row.high / ratio, row.low / ratio
-        row.close, row.adj_close = row.close / ratio, row.adj_close / ratio
-        row.volume *= ratio
+        row.open, row.high, row.low = row.open / by, row.high / by, row.low / by
+        row.close, row.adj_close = row.close / by, row.adj_close / by
+        row.volume = round(row.volume * ratio)
         session.add(row)
     session.commit()
 
@@ -484,16 +485,115 @@ def test_stored_prices_rescaled_without_a_known_split_fail_the_run(
     assert _portfolio(session, "p-plain").last_session == DAYS[255]
 
 
-def test_a_failed_split_lookup_warns_and_the_prices_decide(session: Session, repo: Path) -> None:
+def _nightly_to(session: Session, repo: Path, last: int) -> None:
+    for i in range(FIRST, last + 1):
+        assert _run(session, repo, Clock(evening(DAYS[i]))).status == "ok"
+
+
+def test_a_5_for_4_split_with_a_failed_lookup_is_refused_and_caught_up_the_next_night(
+    session: Session, repo: Path
+) -> None:
+    _nightly_to(session, repo, 255)  # AAA is held from DAYS[252]
+    ex_date = DAYS[256]
+    _split_stored(session, "AAA", 1.25)
+    split_bars = {**BARS, "AAA": _split_bars(BARS["AAA"], 1.25)}
+
     def down(_symbol: str, _since: date) -> list[Split]:
         raise RuntimeError("yfinance down")
 
-    for i in range(FIRST, 256):
-        assert _run(session, repo, Clock(evening(DAYS[i])), splits=down).status == "ok"
     lines: list[str] = []
+    clock = Clock(evening(ex_date))
+    outcome = _run(session, repo, clock, Feed(clock, split_bars), splits=down, echo=lines.append)
+    assert (outcome.status, outcome.stepped) == ("failed", {})
+    assert outcome.error is not None
+    assert outcome.error.startswith(
+        "PaperRefusedError: p-plain: the split lookup for AAA failed (RuntimeError: yfinance "
+        "down), so it was not stepped; the next run catches up"
+    )
+    assert "splits AAA: RuntimeError: yfinance down" in lines
+    assert {_portfolio(session, n).last_session for n in ("p-plain", "p-twin", "p-qqq")} == {
+        DAYS[255]
+    }
+
+    def listed(symbol: str, since: date) -> list[Split]:
+        return [Split(ex_date, 1.25)] if symbol == "AAA" and ex_date > since else []
+
+    clock = Clock(evening(DAYS[257]))
+    later = _run(session, repo, clock, Feed(clock, split_bars), splits=listed)
+    assert (later.status, later.stepped) == ("ok", {"p-plain": 2, "p-twin": 2, "p-qqq": 2})
+    adjusts = [e for e in _events(session, "p-plain") if e.kind == "split_adjust"]
+    assert [(e.session, e.payload["ratio"]) for e in adjusts] == [(ex_date, 1.25)]
+
+
+def test_a_5_for_4_split_nobody_lists_is_refused(session: Session, repo: Path) -> None:
+    """Its 0.8 fits the loose check of the saved signal close (years of dividends), not the
+    check of the close saved last night."""
+    _nightly_to(session, repo, 255)
+    _split_stored(session, "AAA", 1.25)
     clock = Clock(evening(DAYS[256]))
-    assert _run(session, repo, clock, splits=down, echo=lines.append).status == "ok"
-    assert "splits AAA: RuntimeError: yfinance down; checking the stored prices only" in lines
+    outcome = _run(session, repo, clock, Feed(clock, {**BARS, "AAA": _split_bars(BARS["AAA"], 1.25)}))
+    assert outcome.status == "failed"
+    assert outcome.error is not None
+    assert outcome.error.startswith("PaperRefusedError: p-plain: AAA stored raw close on ")
+    assert _portfolio(session, "p-plain").last_session == DAYS[255]
+
+
+def test_a_2_percent_dividend_passes(session: Session, repo: Path) -> None:
+    """A dividend lowers every older adjusted close and leaves the raw closes alone."""
+    _nightly_to(session, repo, 255)
+    ticker = session.exec(select(Ticker).where(Ticker.symbol == "AAA")).one()
+    for row in session.exec(select(Price).where(Price.ticker_id == ticker.id)).all():
+        row.adj_close = row.adj_close * Decimal("0.98")
+        session.add(row)
+    session.commit()
+    outcome = _run(session, repo, Clock(evening(DAYS[256])))
+    assert (outcome.status, outcome.stepped) == ("ok", {"p-plain": 1, "p-twin": 1, "p-qqq": 1})
+
+
+def test_one_portfolios_split_refusal_does_not_stop_the_others(
+    session: Session, repo: Path
+) -> None:
+    """p-qqq holds QQQ from its first session; the lookup fails for QQQ only."""
+    def qqq_down(symbol: str, _since: date) -> list[Split]:
+        if symbol == "QQQ":
+            raise RuntimeError("yfinance down")
+        return []
+
+    assert _run(session, repo, Clock(evening(DAYS[FIRST])), splits=qqq_down).status == "ok"
+    outcome = _run(session, repo, Clock(evening(DAYS[FIRST + 1])), splits=qqq_down)
+    assert (outcome.status, outcome.stepped) == ("failed", {"p-plain": 1, "p-twin": 1})
+    assert outcome.error is not None
+    assert outcome.error.startswith("PaperRefusedError: p-qqq: the split lookup for QQQ failed")
+    assert _portfolio(session, "p-qqq").last_session == DAYS[FIRST]
+    assert _portfolio(session, "p-plain").last_session == DAYS[FIRST + 1]
+
+
+def test_a_run_during_the_ex_dates_session_applies_the_split_the_prices_show(
+    session: Session, repo: Path
+) -> None:
+    """A log-on run at 11:00 on the ex-date, a night behind: the target is the session before
+    the ex-date, and the morning's ingest has already stored the rescaled history."""
+    ex_date = DAYS[256]
+    _nightly_to(session, repo, 254)
+
+    def splits(symbol: str, since: date) -> list[Split]:
+        return [Split(ex_date, 2.0)] if symbol == "AAA" and ex_date > since else []
+
+    _split_stored(session, "AAA", 2)
+    morning = Clock(evening(ex_date, hour=11))
+    outcome = _run(session, repo, morning, Feed(morning, SPLIT_BARS), splits=splits)
+    assert (outcome.status, outcome.target) == ("ok", DAYS[255])
+    for i in range(256, LAST + 1):
+        clock = Clock(evening(DAYS[i]))
+        assert _run(session, repo, clock, Feed(clock, SPLIT_BARS), splits=splits).status == "ok"
+    whole = _simulated(session, repo, "data/strategy_test.yaml")
+    assert [r.equity for r in _equity(session, "p-plain")] == pytest.approx(
+        [p.equity for p in whole.equity_curve], rel=1e-9
+    )
+    adjusts = [e for e in _events(session, "p-plain") if e.kind == "split_adjust"]
+    assert [(e.session, e.payload["ex_date"]) for e in adjusts] == [
+        (DAYS[255], ex_date.isoformat()),
+    ]
 
 
 def _event(session: Session, symbol: str, day: date, source: str) -> None:

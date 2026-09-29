@@ -11,10 +11,16 @@ Each saved price is also checked against the stored close it came from: once the
 are applied, the two must agree up to later dividends (which lower older adjusted closes a
 little). Anything else, such as a split yfinance does not list or one the stored prices do not
 show yet, refuses the portfolio instead of stepping on two scales.
+
+That check allows for years of dividends, which a 5-for-4 split fits in, so each stepped session
+also saves the raw close (split-adjusted, not dividend-adjusted) of every held or pending symbol
+(`Mark`), and the next run compares it with the stored raw close for the same session: a
+dividend leaves it unchanged, and any move beyond MARK_TOLERANCE that the known splits do not
+explain refuses the portfolio.
 """
 
 import math
-from collections.abc import Callable, Collection, Mapping
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import date
 from typing import Any
@@ -28,6 +34,9 @@ SplitFetcher = Callable[[str, date], list[Split]]  # symbol, since: splits with 
 # Stored close / (saved price x the known splits' factor). Dividends after the save lower the
 # stored adjusted close by a few percent; a missed 3-for-2 split is 1.5 or 0.67.
 SCALE_BAND = (0.75, 1.02)
+# Stored raw close / saved raw close, for the same session, once the known splits are applied.
+# A split changes it by 1/ratio (5-for-4: 0.8); a dividend does not change it at all.
+MARK_TOLERANCE = 0.03
 
 
 @dataclass(frozen=True)
@@ -38,6 +47,17 @@ class Reference:
     day: date
     price: float
     vehicle: bool  # the cash vehicle, marked on the benchmark series
+
+
+@dataclass(frozen=True)
+class Mark:
+    """A symbol's raw close on `day`, saved with the state that night, and the stored raw close
+    for that session tonight (None when none is stored)."""
+
+    symbol: str
+    day: date
+    saved: float
+    stored: float | None
 
 
 def references(state: SimState, vehicle: str | None) -> list[Reference]:
@@ -96,40 +116,78 @@ def adjust_for_splits(
     target: date,
     vehicle: str | None,
     where: str,
+    marks: Sequence[Mark] = (),
 ) -> tuple[SimState, list[dict[str, Any]]]:
     """Apply every known split with an ex-date after the state's last session, up to `target`,
-    that is not in `applied` (symbol, ex-date: logged by an earlier run). Returns the new state
-    and one `split_adjust` payload per split. Raises PaperRefusedError when a saved price and
-    the stored prices disagree after the splits."""
+    that is not in `applied` (symbol, ex-date: logged by an earlier run). A split dated after
+    the target is applied too when the stored prices already show it (a run during its
+    ex-date's session, whose target is the session before). Returns the new state and one
+    `split_adjust` payload per split. Raises PaperRefusedError when a saved price or a saved
+    raw close (`marks`) and the stored prices disagree after the splits."""
     last = state.last_session
     events: list[dict[str, Any]] = []
     if last is None:
         return state, events
     refs = references(state, vehicle)
     for symbol in sorted({ref.symbol for ref in refs}):
-        due = sorted(
+        pending = sorted(
             (s for s in known.get(symbol, [])
-             if last < s.ex_date <= target and (symbol, s.ex_date) not in applied),
+             if last < s.ex_date and (symbol, s.ex_date) not in applied),
             key=lambda s: s.ex_date,
         )
-        factor = math.prod(1.0 / s.ratio for s in due)
-        for ref in (r for r in refs if r.symbol == symbol):
-            view = market.at(ref.day)
-            snap = view.benchmark() if ref.vehicle else view.snapshot(symbol)
-            if snap is None or ref.price <= 0.0:
-                continue
-            observed = snap.close / ref.price
-            if not SCALE_BAND[0] <= observed / factor <= SCALE_BAND[1]:
-                splits = ", ".join(f"{s.ratio:g}-for-1 on {s.ex_date}" for s in due) or "none"
-                raise PaperRefusedError(
-                    f"{where}: {symbol} stored close on {ref.day} is {observed:.4g}x the "
-                    f"{ref.price:.4f} in the saved state, and the splits since {last} ({splits}) "
-                    f"explain {factor:.4g}x. Not stepped: its prices and saved state are on "
-                    "different scales (check the split in the stored prices and rerun)."
-                )
+        due = [s for s in pending if s.ex_date <= target]
+        problem = _disagreement(symbol, refs, marks, due, market, last, where)
+        if (
+            problem is not None
+            and len(due) < len(pending)
+            and _disagreement(symbol, refs, marks, pending, market, last, where) is None
+        ):
+            due, problem = pending, None  # the stored prices already show the later split
+        if problem is not None:
+            raise PaperRefusedError(problem)
         for split in due:
             state = rescale(state, symbol, split.ratio, vehicle)
             events.append(
                 {"symbol": symbol, "ex_date": split.ex_date.isoformat(), "ratio": split.ratio}
             )
     return state, events
+
+
+def _disagreement(
+    symbol: str,
+    refs: Sequence[Reference],
+    marks: Sequence[Mark],
+    due: Sequence[Split],
+    market: MarketView,
+    last: date,
+    where: str,
+) -> str | None:
+    """Why `symbol`'s stored prices and saved state are on different scales once `due` is
+    applied, or None when they agree."""
+    factor = math.prod(1.0 / s.ratio for s in due)
+    splits = ", ".join(f"{s.ratio:g}-for-1 on {s.ex_date}" for s in due) or "none"
+    not_stepped = ("Not stepped: its prices and saved state are on different scales (check the "
+                   "split in the stored prices and rerun).")
+    for ref in (r for r in refs if r.symbol == symbol):
+        view = market.at(ref.day)
+        snap = view.benchmark() if ref.vehicle else view.snapshot(symbol)
+        if snap is None or ref.price <= 0.0:
+            continue
+        observed = snap.close / ref.price
+        if not SCALE_BAND[0] <= observed / factor <= SCALE_BAND[1]:
+            return (
+                f"{where}: {symbol} stored close on {ref.day} is {observed:.4g}x the "
+                f"{ref.price:.4f} in the saved state, and the splits since {last} ({splits}) "
+                f"explain {factor:.4g}x. {not_stepped}"
+            )
+    for mark in (m for m in marks if m.symbol == symbol and m.saved > 0.0):
+        if mark.stored is None:
+            return f"{where}: {symbol} has no stored close on {mark.day} any more. {not_stepped}"
+        observed = mark.stored / mark.saved
+        if abs(observed / factor - 1.0) > MARK_TOLERANCE:
+            return (
+                f"{where}: {symbol} stored raw close on {mark.day} is {observed:.4g}x the "
+                f"{mark.saved:.4f} close saved with the state that night, and the splits since "
+                f"{last} ({splits}) explain {factor:.4g}x. {not_stepped}"
+            )
+    return None

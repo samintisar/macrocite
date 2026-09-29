@@ -223,6 +223,8 @@ class PaperPortfolio(SQLModel, table=True):
     started_on: date  # the first session stepped
     state: dict[str, Any] = Field(sa_column=Column(JSON, nullable=False))  # a SimState
     last_session: date | None = None  # updated with `state`, once per stepped session
+    # Each held or pending symbol's [session, raw close], saved with `state` (paper/splits.py)
+    marks: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON, nullable=False))
     created_at: datetime = Field(
         default_factory=utcnow,
         sa_column=Column(UTCDateTime(), nullable=False),

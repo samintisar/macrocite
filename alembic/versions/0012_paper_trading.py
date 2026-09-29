@@ -27,6 +27,7 @@ def upgrade() -> None:
         sa.Column("started_on", sa.Date(), nullable=False),
         sa.Column("state", sa.JSON(), nullable=False),
         sa.Column("last_session", sa.Date(), nullable=True),
+        sa.Column("marks", sa.JSON(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("start_git_sha", sa.String(), nullable=True),
         sa.PrimaryKeyConstraint("id"),

@@ -1,6 +1,7 @@
 from datetime import date
 from decimal import Decimal
 
+import pytest
 from sqlmodel import Session, select
 
 from signalbench.db.models import Price, Ticker, TickerKind
@@ -155,3 +156,32 @@ def test_full_refetch_asks_for_history_start_despite_stored_rows(session: Sessio
     assert requested == [HISTORY_START]
     assert (result.created, result.updated) == (1, 0)
     assert len(session.exec(select(Price)).all()) == 2
+
+
+def test_a_failed_full_refetch_writes_nothing_and_the_next_run_repairs_it(
+    session: Session,
+) -> None:
+    """A rescale is found in the 10-day window, then the full refetch fails: the window must not
+    be written on the new scale over an old-scale history, or the next run's window would match
+    and the older rows would never be fixed."""
+    ticker = _ticker(session)
+    days = (date(2010, 1, 4), date(2024, 1, 10), date(2024, 1, 12))
+    ingest_daily_prices(
+        session, ticker, fetch=lambda _s, _d: [_bar(day) for day in days], history_start=HISTORY_START
+    )
+    requested: list[date] = []
+
+    def split(_symbol: str, start: date) -> list[DailyBar]:
+        requested.append(start)
+        if start == HISTORY_START and len(requested) == 2:
+            raise RuntimeError("yfinance timed out")
+        return [_bar(day, adj_close="92.6000", close="92.7500") for day in days if day >= start]
+
+    with pytest.raises(RuntimeError, match="timed out"):
+        ingest_daily_prices(session, ticker, fetch=split, history_start=HISTORY_START)
+    session.rollback()
+    assert {row.close for row in session.exec(select(Price)).all()} == {Decimal("185.5000")}
+    result = ingest_daily_prices(session, ticker, fetch=split, history_start=HISTORY_START)
+    assert requested == [date(2024, 1, 2), HISTORY_START, date(2024, 1, 2), HISTORY_START]
+    assert (result.created, result.updated) == (0, 3)
+    assert {row.close for row in session.exec(select(Price)).all()} == {Decimal("92.7500")}
