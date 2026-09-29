@@ -27,9 +27,11 @@ from signalbench.backtest.sim_state import state_from_json, state_to_json
 from signalbench.backtest.simulator import SimState, StepResult, step
 from signalbench.db.models import PaperEquity, PaperEvent, PaperPortfolio, PaperRun
 from signalbench.ingest.cdr import CdrEntry
+from signalbench.ingest.prices import Split
 from signalbench.market.calendar import HISTORY_START, Sessions
 from signalbench.paper.portfolios import paper_setup
 from signalbench.paper.report import report_due, write_weekly_report
+from signalbench.paper.splits import SplitFetcher, adjust_for_splits, references
 from signalbench.paper.start import PaperRefusedError
 from signalbench.strategy.config import (
     StrategyConfig,
@@ -64,11 +66,14 @@ def run_paper(
     calendar: Sessions,
     clock: Callable[[], datetime],
     ingest: Callable[[Session], list[str]],
+    splits: SplitFetcher,
     reports_dir: Path,
     echo: Callable[[str], None],
 ) -> RunOutcome:
     """The nightly job. `lock` yields False when another run holds it: nothing is done.
-    `ingest` refreshes prices (and the liquidity flags) and returns what failed. `clock` must
+    `ingest` refreshes prices (and the liquidity flags) and returns what failed. `splits` lists
+    a symbol's splits after a date, for the symbols a portfolio holds (paper/splits.py); a
+    failed lookup is printed and the stored prices alone are checked. `clock` must
     return timezone-aware times. The first run of an ISO week writes the weekly report into
     `reports_dir`, after stepping (a portfolio refused for its config does not stop it)."""
     with lock as held:
@@ -82,7 +87,10 @@ def run_paper(
         stepped: dict[str, int] = {}
         report: Path | None = None
         try:
-            refused = _step_all(session, run, repo, universe, calendar, clock, ingest, echo, stepped)
+            refused = _step_all(
+                session, run, repo, universe, calendar, clock, ingest, _cached(splits, echo), echo,
+                stepped,
+            )
             today = clock().astimezone(NEW_YORK).date()
             if report_due(reports_dir, today):
                 report = write_weekly_report(session, reports_dir, today)
@@ -106,6 +114,7 @@ def _step_all(
     calendar: Sessions,
     clock: Callable[[], datetime],
     ingest: Callable[[Session], list[str]],
+    splits: SplitFetcher,
     echo: Callable[[str], None],
     stepped: dict[str, int],
 ) -> list[str]:
@@ -143,9 +152,27 @@ def _step_all(
             inputs[symbol] = load_market_inputs(session, universe, symbol, target)
             check_series_current(inputs[symbol], symbol, target)
         market = _market(inputs[symbol], config, calendar, target)
-        _step_portfolio(session, portfolio, config, market, calendar, target, clock, stepped)
+        _step_portfolio(session, portfolio, config, market, calendar, target, clock, splits, stepped)
         echo(f"{portfolio.name}: {stepped.get(portfolio.name, 0)} sessions to {target.isoformat()}")
     return refused
+
+
+def _cached(fetch: SplitFetcher, echo: Callable[[str], None]) -> SplitFetcher:
+    """One lookup per symbol and date in a run. A failed lookup is printed and counts as no
+    known split: the stored-price check still refuses a state on another scale."""
+    seen: dict[tuple[str, date], list[Split]] = {}
+
+    def splits(symbol: str, since: date) -> list[Split]:
+        if (symbol, since) not in seen:
+            try:
+                seen[symbol, since] = fetch(symbol, since)
+            except Exception as error:  # noqa: BLE001  # the price check below still guards
+                echo(f"splits {symbol}: {type(error).__name__}: {error}; "
+                     "checking the stored prices only")
+                seen[symbol, since] = []
+        return seen[symbol, since]
+
+    return splits
 
 
 def _market(
@@ -167,19 +194,28 @@ def _step_portfolio(
     calendar: Sessions,
     target: date,
     clock: Callable[[], datetime],
+    splits: SplitFetcher,
     stepped: dict[str, int],
 ) -> None:
     """Every session after the portfolio's last one, up to the target, in order: each is one
-    transaction (state, events, and equity row together)."""
+    transaction (state, events, and equity row together). Splits since the last session
+    rescale the saved state first, logged in the first session's transaction."""
     assert portfolio.id is not None
     state = state_from_json(portfolio.state)
     last = portfolio.last_session
     days = [d for d in calendar.sessions_between(portfolio.started_on, target) if last is None or d > last]
+    if not days:
+        return
+    state, adjusted = _adjust_for_splits(session, portfolio, state, config, market, target, splits)
     for day in days:
         exit_orders, entry_orders = _order_ids(session, portfolio.id, state)
         result = step(state, market, NullReadingsView(), config, day)
         recorded_at = clock()
         catch_up = recorded_at >= _next_open(calendar, day)
+        for payload in adjusted:
+            session.add(PaperEvent(portfolio_id=portfolio.id, session=day, kind="split_adjust",
+                                   payload=payload, recorded_at=recorded_at, catch_up=catch_up))
+        adjusted = []
         _record(session, portfolio.id, day, result, exit_orders, entry_orders, recorded_at, catch_up)
         portfolio.state = state_to_json(result.state)
         portfolio.last_session = day
@@ -187,6 +223,30 @@ def _step_portfolio(
         session.commit()
         state = result.state
         stepped[portfolio.name] = stepped.get(portfolio.name, 0) + 1
+
+
+def _adjust_for_splits(
+    session: Session,
+    portfolio: PaperPortfolio,
+    state: SimState,
+    config: StrategyConfig,
+    market: MarketView,
+    target: date,
+    splits: SplitFetcher,
+) -> tuple[SimState, list[dict[str, Any]]]:
+    if state.last_session is None:
+        return state, []
+    vehicle = None if config.cash_vehicle is None else config.cash_vehicle.symbol
+    symbols = sorted({ref.symbol for ref in references(state, vehicle)})
+    known = {symbol: splits(symbol, state.last_session) for symbol in symbols}
+    logged = session.exec(
+        select(PaperEvent).where(
+            PaperEvent.portfolio_id == portfolio.id, PaperEvent.kind == "split_adjust"
+        )
+    ).all()
+    applied = {(str(e.payload["symbol"]), date.fromisoformat(str(e.payload["ex_date"]))) for e in logged}
+    return adjust_for_splits(state, market=market, known=known, applied=applied, target=target,
+                             vehicle=vehicle, where=portfolio.name)
 
 
 def _next_open(calendar: Sessions, day: date) -> datetime:

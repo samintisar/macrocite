@@ -47,7 +47,11 @@ from signalbench.ingest.edgar import backfill_filing_text, ingest_eight_ks_for_s
 from signalbench.ingest.finnhub import FinnhubClient
 from signalbench.ingest.liquidity import update_liquidity_flags
 from signalbench.ingest.news import ingest_company_news, last_news_date, news_windows
-from signalbench.ingest.prices import fetch_yfinance_daily, ingest_daily_prices
+from signalbench.ingest.prices import (
+    fetch_yfinance_daily,
+    fetch_yfinance_splits,
+    ingest_daily_prices,
+)
 from signalbench.ingest.seed import BENCHMARKS, seed_universe
 from signalbench.ingest.stats import collect_stats
 from signalbench.jev.backfill import (
@@ -771,6 +775,7 @@ def paper_run() -> None:
                 calendar=NyseSessions(),
                 clock=_now,
                 ingest=_ingest_prices,
+                splits=fetch_yfinance_splits,
                 reports_dir=PAPER_REPORTS_DIR,
                 echo=typer.echo,
             )

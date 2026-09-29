@@ -6,7 +6,7 @@ at the DAYS[262] open. The portfolios start on DAYS[240], the Monday after `pape
 
 from collections.abc import Callable
 from contextlib import nullcontext
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -28,9 +28,11 @@ from signalbench.db.models import (
     TickerKind,
 )
 from signalbench.ingest.cdr import CdrEntry
+from signalbench.ingest.prices import Split
 from signalbench.market.bars import AdjustedBar
 from signalbench.market.calendar import HISTORY_START
 from signalbench.paper.run import RunOutcome, run_paper
+from signalbench.paper.splits import SplitFetcher
 from signalbench.paper.start import start_portfolios
 from signalbench.strategy.config import load_strategy_config
 from signalbench.strategy.market_view import MarketView
@@ -76,14 +78,15 @@ class Feed:
     """Stands in for `ingest prices`: stores every fixture bar dated on or before the clock's
     New York date that is not stored yet."""
 
-    def __init__(self, clock: Clock) -> None:
+    def __init__(self, clock: Clock, bars: dict[str, list[AdjustedBar]] = BARS) -> None:
         self.clock = clock
+        self.bars = bars
         self.calls = 0
 
     def __call__(self, session: Session) -> list[str]:
         self.calls += 1
         today = self.clock().date()
-        for symbol, bars in BARS.items():
+        for symbol, bars in self.bars.items():
             ticker = session.exec(select(Ticker).where(Ticker.symbol == symbol)).one()
             last = session.exec(select(func.max(Price.date)).where(Price.ticker_id == ticker.id)).one()
             for bar in bars:
@@ -109,14 +112,19 @@ def repo(session: Session, tmp_path: Path) -> Path:
     return root
 
 
+def _no_splits(_symbol: str, _since: date) -> list[Split]:
+    return []
+
+
 def _run(
     session: Session, repo: Path, clock: Clock, ingest: Callable[[Session], list[str]] | None = None,
-    held: bool = True,
+    held: bool = True, *, splits: SplitFetcher = _no_splits,
+    echo: Callable[[str], None] = lambda _line: None,
 ) -> RunOutcome:
     return run_paper(
         session, lock=nullcontext(held), repo=repo, universe=UNIVERSE, calendar=WeekdaySessions(),
-        clock=clock, ingest=ingest or Feed(clock), reports_dir=repo / "reports" / "paper",
-        echo=lambda _line: None,
+        clock=clock, ingest=ingest or Feed(clock), splits=splits,
+        reports_dir=repo / "reports" / "paper", echo=echo,
     )
 
 
@@ -326,3 +334,114 @@ def test_a_refused_portfolio_does_not_stop_the_weekly_report(session: Session, r
     assert outcome.status == "failed"
     assert outcome.report is not None
     assert "| p-qqq | 2023-12-04 | not stepped yet | 0 |" in outcome.report.read_text(encoding="utf-8")
+
+
+def _split_bars(bars: list[AdjustedBar], ratio: float) -> list[AdjustedBar]:
+    """The history a price source serves after a `ratio`-for-1 split: every price divided by
+    the ratio and every volume multiplied by it, on every date."""
+    return [
+        replace(bar, open=bar.open / ratio, high=bar.high / ratio, low=bar.low / ratio,
+                close=bar.close / ratio, volume=round(bar.volume * ratio))
+        for bar in bars
+    ]
+
+
+def _split_stored(session: Session, symbol: str, ratio: int) -> None:
+    """What tonight's `ingest prices` does after a split: it sees older closes change and
+    refetches the whole, rescaled history."""
+    ticker = session.exec(select(Ticker).where(Ticker.symbol == symbol)).one()
+    for row in session.exec(select(Price).where(Price.ticker_id == ticker.id)).all():
+        row.open, row.high, row.low = row.open / ratio, row.high / ratio, row.low / ratio
+        row.close, row.adj_close = row.close / ratio, row.adj_close / ratio
+        row.volume *= ratio
+        session.add(row)
+    session.commit()
+
+
+SPLIT_BARS = {**BARS, "AAA": _split_bars(BARS["AAA"], 2.0)}
+
+
+def _through_split(session: Session, repo: Path, ex_date: date) -> SplitFetcher:
+    """Nightly runs over DAYS[FIRST..LAST], with AAA splitting 2-for-1 on `ex_date`: yfinance
+    lists the split from the start, and the stored history is rescaled on its ex-date night."""
+    def splits(symbol: str, since: date) -> list[Split]:
+        return [Split(ex_date, 2.0)] if symbol == "AAA" and ex_date > since else []
+
+    for i in range(FIRST, LAST + 1):
+        clock = Clock(evening(DAYS[i]))
+        if DAYS[i] == ex_date:
+            _split_stored(session, "AAA", 2)
+        feed = Feed(clock, SPLIT_BARS if DAYS[i] >= ex_date else BARS)
+        assert _run(session, repo, clock, feed, splits=splits).status == "ok"
+    return splits
+
+
+@pytest.mark.parametrize(
+    ("name", "config_path"),
+    [("p-plain", "data/strategy_test.yaml"), ("p-qqq", "data/strategy_test-qqq.yaml")],
+)
+def test_a_held_position_keeps_its_value_through_a_2_for_1_split(
+    session: Session, repo: Path, name: str, config_path: str
+) -> None:
+    ex_date = DAYS[256]  # AAA is held from DAYS[252] to DAYS[262]
+    _through_split(session, repo, ex_date)
+    whole = _simulated(session, repo, config_path)  # the backtest on the rescaled history
+    assert [(r.session, r.open_positions) for r in _equity(session, name)] == [
+        (p.date, p.open_positions) for p in whole.equity_curve
+    ]
+    assert [r.equity for r in _equity(session, name)] == pytest.approx(
+        [p.equity for p in whole.equity_curve], rel=1e-9
+    )
+    [trade] = whole.trades
+    [fill] = [e for e in _events(session, name) if e.kind == "fill_exit"]
+    assert (fill.session, fill.payload["reason"]) == (DAYS[262], "time")  # not the stop
+    assert fill.payload["r"] == pytest.approx(trade.r, rel=1e-9)
+    assert fill.payload["trade"]["units"] == pytest.approx(trade.units, rel=1e-9)
+    adjusts = [e for e in _events(session, name) if e.kind == "split_adjust"]
+    assert [(e.session, e.payload) for e in adjusts] == [
+        (ex_date, {"symbol": "AAA", "ex_date": ex_date.isoformat(), "ratio": 2.0}),
+    ]
+
+
+def test_a_pending_entry_is_rescaled_across_a_split_on_its_fill_day(
+    session: Session, repo: Path
+) -> None:
+    ex_date = DAYS[252]  # the order is decided at the DAYS[251] close, before the split
+    _through_split(session, repo, ex_date)
+    [order] = [e for e in _events(session, "p-plain") if e.kind == "order_entry"]
+    [fill] = [e for e in _events(session, "p-plain") if e.kind == "fill_entry"]
+    assert fill.session == ex_date
+    assert fill.payload["units"] == pytest.approx(2 * order.payload["units"], rel=1e-9)
+    whole = _simulated(session, repo, "data/strategy_test.yaml")
+    assert [r.equity for r in _equity(session, "p-plain")] == pytest.approx(
+        [p.equity for p in whole.equity_curve], rel=1e-9
+    )
+    assert [e.kind for e in _events(session, "p-plain") if e.session == ex_date][:2] == [
+        "split_adjust", "fill_entry",
+    ]
+
+
+def test_stored_prices_rescaled_without_a_known_split_fail_the_run(
+    session: Session, repo: Path
+) -> None:
+    for i in range(FIRST, 256):
+        assert _run(session, repo, Clock(evening(DAYS[i]))).status == "ok"
+    _split_stored(session, "AAA", 2)
+    clock = Clock(evening(DAYS[256]))
+    outcome = _run(session, repo, clock, Feed(clock, SPLIT_BARS))
+    assert outcome.status == "failed"
+    assert outcome.error is not None
+    assert outcome.error.startswith("PaperRefusedError: p-plain: AAA")
+    assert _portfolio(session, "p-plain").last_session == DAYS[255]
+
+
+def test_a_failed_split_lookup_warns_and_the_prices_decide(session: Session, repo: Path) -> None:
+    def down(_symbol: str, _since: date) -> list[Split]:
+        raise RuntimeError("yfinance down")
+
+    for i in range(FIRST, 256):
+        assert _run(session, repo, Clock(evening(DAYS[i])), splits=down).status == "ok"
+    lines: list[str] = []
+    clock = Clock(evening(DAYS[256]))
+    assert _run(session, repo, clock, splits=down, echo=lines.append).status == "ok"
+    assert "splits AAA: RuntimeError: yfinance down; checking the stored prices only" in lines

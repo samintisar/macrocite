@@ -39,6 +39,12 @@ class PriceIngestResult:
 PriceFetcher = Callable[[str, date], list[DailyBar]]
 
 
+@dataclass(frozen=True)
+class Split:
+    ex_date: date
+    ratio: float  # new shares per old share: 2.0 for a 2-for-1 split, 0.1 for a 1-for-10 reverse
+
+
 def validate_bar(bar: DailyBar) -> str | None:
     if min(bar.open, bar.high, bar.low, bar.close, bar.adj_close) <= 0:
         return "non_positive_price"
@@ -178,6 +184,23 @@ def fetch_yfinance_daily(symbol: str, start: date) -> list[DailyBar]:
             )
         )
     return bars
+
+
+def fetch_yfinance_splits(symbol: str, since: date) -> list[Split]:
+    """The splits yfinance lists with an ex-date after `since`. Its prices (`close` and
+    `adj_close` alike) are already divided by every later split, on every date."""
+    import yfinance as yf
+
+    frame = yf.Ticker(symbol).history(
+        start=(since + timedelta(days=1)).isoformat(), auto_adjust=False, actions=True, timeout=30
+    )
+    if "Stock Splits" not in frame.columns:
+        return []
+    return [
+        Split(ex_date=idx.date(), ratio=float(ratio))
+        for idx, ratio in frame["Stock Splits"].items()
+        if float(ratio) > 0.0 and idx.date() > since
+    ]
 
 
 def _decimal(value: float) -> Decimal:
