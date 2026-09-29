@@ -9,7 +9,7 @@ from datetime import date
 
 from pytest import approx
 
-from signalbench.backtest.simulator import SimulationResult, simulate
+from signalbench.backtest.simulator import DUST, SimulationResult, simulate
 from signalbench.market.bars import AdjustedBar
 from signalbench.strategy.config import CashVehicle, StrategyConfig
 from signalbench.strategy.readings import NullReadingsView
@@ -143,3 +143,229 @@ def test_the_drawdown_pause_sees_the_qqq_value() -> None:
     assert [e for e in plain.events if e["event"] == "pause"] == []
     assert _vehicle_events(plain) == []
     assert {point.vehicle_value for point in plain.equity_curve} == {0.0}
+
+
+def _events_on(result: SimulationResult, i: int) -> list[dict[str, object]]:
+    return [e for e in result.events if e["date"] == DAYS[i].isoformat()]
+
+
+def _vehicle_events_on(result: SimulationResult, i: int) -> list[dict[str, object]]:
+    return [e for e in _events_on(result, i) if str(e["event"]).startswith("vehicle_")]
+
+
+def _two_stocks(
+    exit_open: float | None = None,
+) -> tuple[dict[str, list[AdjustedBar]], dict[str, str]]:
+    """AAA runs as in the fixture (enters at ENTRY, exits at the EXIT open). BBB signals on the
+    session AAA's exit is decided, so it enters on the very session AAA exits. `exit_open`
+    moves AAA's open on EXIT, which sets the size of the exit proceeds."""
+    aaa = series(DAYS, pullback_closes(len(DAYS)))
+    if exit_open is not None:
+        aaa = with_bar(aaa, EXIT, open=exit_open, high=exit_open + 1.0)
+    bbb = series(DAYS, pullback_closes(len(DAYS), dip=EXIT - 1))
+    return {"AAA": aaa, "BBB": bbb}, {"AAA": "Energy", "BBB": "Utilities"}
+
+
+def _exit_and_entry_day(exit_open: float | None) -> tuple[SimulationResult, float, float]:
+    """The run, AAA's exit proceeds, and BBB's entry cost, both on DAYS[EXIT]."""
+    bars, sectors = _two_stocks(exit_open)
+    result = _run(bars=bars, sectors=sectors)
+    exits = [e for e in _events_on(result, EXIT) if e["event"] == "exit"]
+    entries = [e for e in _events_on(result, EXIT) if e["event"] == "entry"]
+    assert [(e["symbol"], e["reason"]) for e in exits] == [("AAA", "time")]
+    assert [e["symbol"] for e in entries] == ["BBB"]
+    [trade] = result.trades
+    proceeds = trade.units * trade.exit_price
+    [entry] = entries
+    cost = float(str(entry["units"])) * float(str(entry["price"]))
+    return result, proceeds, cost
+
+
+def test_an_exit_and_an_entry_on_one_session_make_one_net_vehicle_sell() -> None:
+    result, proceeds, cost = _exit_and_entry_day(None)
+    assert cost > proceeds  # BBB costs more than AAA returns: QQQ pays the difference
+    [event] = _vehicle_events_on(result, EXIT)
+    assert (event["event"], event["price"]) == ("vehicle_sell", _qqq(EXIT))
+    assert float(str(event["amount"])) * (1 - COST) == approx(cost - proceeds)
+    assert event["cost"] == approx(float(str(event["amount"])) * COST)
+    assert _point(result, EXIT)[1] == 0.0
+
+
+def test_an_exit_and_an_entry_on_one_session_make_one_net_vehicle_buy() -> None:
+    result, proceeds, cost = _exit_and_entry_day(170.0)
+    assert proceeds > cost  # AAA returns more than BBB costs: the difference is parked
+    [event] = _vehicle_events_on(result, EXIT)
+    assert (event["event"], event["price"]) == ("vehicle_buy", _qqq(EXIT))
+    assert float(str(event["amount"])) * (1 + COST) == approx(proceeds - cost)
+    assert event["cost"] == approx(float(str(event["amount"])) * COST)
+    assert _point(result, EXIT)[1] == 0.0
+
+
+def test_a_skipped_order_is_not_a_fill_and_does_not_switch() -> None:
+    # AAA opens 2% above its signal close on ENTRY: gap_up. It signals again and fills a
+    # session later, so the only QQQ trades are the parking, that fill, and the exit.
+    bars = {"AAA": with_bar(series(DAYS, pullback_closes(len(DAYS))), ENTRY, open=146.0 * 1.02)}
+    result = _run(bars=bars)
+    skips = [e["reason"] for e in _events_on(result, ENTRY) if e["event"] == "skip"]
+    assert "gap_up" in skips
+    assert [e for e in _events_on(result, ENTRY) if e["event"] in ("entry", "exit")] == []
+    assert _vehicle_events_on(result, ENTRY) == []
+    assert [(e["date"], e["event"]) for e in _vehicle_events(result)] == [
+        (DAYS[START].isoformat(), "vehicle_buy"),
+        (DAYS[ENTRY + 1].isoformat(), "vehicle_sell"),
+        (DAYS[EXIT + 1].isoformat(), "vehicle_buy"),
+    ]
+    equity = PARKED * _qqq(ENTRY)  # still all in QQQ at the close of the skipped session
+    assert _point(result, ENTRY) == approx((equity, 0.0, equity))
+
+
+def test_a_deferred_exit_is_not_a_fill_and_does_not_switch() -> None:
+    # AAA has no bar on EXIT: its time exit is deferred a session, and QQQ does not trade.
+    bars = series(DAYS, pullback_closes(len(DAYS)))
+    result = _run(bars={"AAA": bars[:EXIT] + bars[EXIT + 1 :]})
+    assert [e["event"] for e in _events_on(result, EXIT) if e["event"].startswith("exit")] == [
+        "exit_deferred"
+    ]
+    assert _vehicle_events_on(result, EXIT) == []
+    [trade] = result.trades
+    assert trade.exit_date == DAYS[EXIT + 1]
+    [_, _, park] = _vehicle_events(result)
+    assert park["date"] == DAYS[EXIT + 1].isoformat()
+
+
+def test_an_entry_needing_qqq_money_is_skipped_when_qqq_has_no_bar() -> None:
+    # QQQ has no bar on ENTRY, when AAA would fill. All the money is in QQQ and QQQ cannot be
+    # sold, so the entry is skipped for want of cash; QQQ stays at its last close (SIGNAL's).
+    benchmark = trend_bars(DAYS, 300.0, 0.5)
+    result = _run(benchmark=benchmark[:ENTRY] + benchmark[ENTRY + 1 :])
+    day = _events_on(result, ENTRY)
+    assert _vehicle_events_on(result, ENTRY) == []
+    assert ("AAA", "no_cash") in [(e["symbol"], e["reason"]) for e in day if e["event"] == "skip"]
+    assert [e for e in day if e["event"] == "entry"] == []
+    held = PARKED * _qqq(SIGNAL)
+    assert _point(result, ENTRY) == approx((held, 0.0, held))
+    # QQQ trades again at the next fill, and the day after ENTRY it is marked at its own close.
+    assert _point(result, ENTRY + 1)[2] == approx(PARKED * _qqq(ENTRY + 1))
+
+
+def test_leftover_cash_waits_for_the_next_session_with_a_fill() -> None:
+    # AAA exits on EXIT but QQQ has no bar that day: the proceeds stay cash, QQQ is marked at
+    # its last close, and with no later fill the cash is never parked.
+    benchmark = trend_bars(DAYS, 300.0, 0.5)
+    result = _run(benchmark=benchmark[:EXIT] + benchmark[EXIT + 1 :])
+    [trade] = result.trades
+    proceeds = trade.units * trade.exit_price
+    assert [e["event"] for e in _vehicle_events(result)] == ["vehicle_buy", "vehicle_sell"]
+    left = PARKED - float(str(_vehicle_events(result)[1]["units"]))
+    for i in (EXIT, EXIT + 1, 270):
+        equity, cash, vehicle = _point(result, i)
+        mark = _qqq(EXIT - 1) if i == EXIT else _qqq(i)  # EXIT has no bar: its last close
+        assert cash == approx(proceeds)
+        assert vehicle == approx(left * mark)
+        assert equity == approx(proceeds + left * mark)
+
+
+def _replay(result: SimulationResult, qqq_close: dict[date, float]) -> None:
+    """Rebuild cash and QQQ units from the events, from `start_equity`, and compare them with
+    the equity curve at every session. Exits pay units x fill, entries cost units x fill, a
+    vehicle_buy costs amount + cost, a vehicle_sell pays amount - cost."""
+    units_by_trade = {trade.position_id: trade.units for trade in result.trades}
+    by_day: dict[str, list[dict[str, object]]] = {}
+    for event in result.events:
+        by_day.setdefault(str(event["date"]), []).append(event)
+    cash, qqq_units, mark = QQQ.start_equity, 0.0, 0.0
+    for point in result.equity_curve:
+        for event in by_day.get(point.date.isoformat(), []):
+            kind = event["event"]
+            if kind == "exit":
+                cash += units_by_trade[str(event["position_id"])] * float(str(event["price"]))
+            elif kind == "entry":
+                cash -= float(str(event["units"])) * float(str(event["price"]))
+            elif kind == "vehicle_buy":
+                cash -= float(str(event["amount"])) + float(str(event["cost"]))
+                qqq_units += float(str(event["units"]))
+            elif kind == "vehicle_sell":
+                cash += float(str(event["amount"])) - float(str(event["cost"]))
+                qqq_units -= float(str(event["units"]))
+            assert qqq_units >= 0.0
+        assert cash >= -DUST  # entries may overdraw only until the day's vehicle_sell
+        mark = qqq_close.get(point.date, mark)  # a session with no QQQ bar keeps the last close
+        assert point.cash == approx(cash, abs=1e-9, rel=0)
+        assert point.vehicle_value == approx(qqq_units * mark, abs=1e-9, rel=0)
+
+
+def _closes(bars: list[AdjustedBar]) -> dict[date, float]:
+    return {bar.date: bar.close for bar in bars}
+
+
+def test_money_is_conserved_across_several_trades() -> None:
+    # Three stocks dip a few sessions apart: entries and exits overlap, some sessions are
+    # exit-only, entry-only or both, and the vehicle is sold and re-bought around them.
+    sectors = {"AAA": "Energy", "BBB": "Utilities", "CCC": "Financials"}
+    bars = {
+        "AAA": series(DAYS, pullback_closes(len(DAYS))),
+        "BBB": series(DAYS, pullback_closes(len(DAYS), dip=EXIT - 1)),
+        "CCC": series(DAYS, pullback_closes(len(DAYS), dip=SIGNAL + 3)),
+    }
+    result = _run(bars=bars, sectors=sectors, end=279)
+    assert len(result.trades) == 3  # the scenario really has several round trips
+    sold_and_bought = {str(e["event"]) for e in _vehicle_events(result)}
+    assert sold_and_bought == {"vehicle_buy", "vehicle_sell"}
+    _replay(result, _closes(trend_bars(DAYS, 300.0, 0.5)))
+
+
+def test_money_is_conserved_when_qqq_is_sold_out_and_has_a_missing_bar() -> None:
+    # Three signals open 1% up (the last is trimmed and every QQQ unit is sold), then QQQ
+    # misses the exit session: cash waits and the vehicle keeps its last close.
+    bars = with_bar(series(DAYS, pullback_closes(len(DAYS))), ENTRY, open=146.0 * 1.01)
+    sectors = {"AAA": "Energy", "BBB": "Utilities", "CCC": "Financials"}
+    benchmark = trend_bars(DAYS, 300.0, 0.5)
+    thin = benchmark[:EXIT] + benchmark[EXIT + 1 :]
+    result = _run(bars={s: bars for s in sectors}, sectors=sectors, benchmark=thin, end=270)
+    assert len(result.trades) == 3
+    _replay(result, _closes(thin))
+
+
+def _idle_cash_run(bbb: list[AdjustedBar]) -> SimulationResult:
+    """AAA exits on EXIT while QQQ has no bar, so its proceeds sit idle as cash; BBB is the
+    stock whose skipped or deferred order falls on a later session that has a QQQ bar."""
+    benchmark = trend_bars(DAYS, 300.0, 0.5)
+    return _run(
+        bars={"AAA": series(DAYS, pullback_closes(len(DAYS))), "BBB": bbb},
+        sectors={"AAA": "Energy", "BBB": "Utilities"},
+        benchmark=benchmark[:EXIT] + benchmark[EXIT + 1 :],
+        end=272,
+    )
+
+
+def test_a_skipped_order_does_not_sweep_idle_cash_into_qqq() -> None:
+    # BBB's only order on DAYS[265] is a gap_up skip. The idle cash stays cash that session
+    # and goes to work on the next one that has a fill (BBB's entry on 266).
+    closes = pullback_closes(len(DAYS), dip=264)
+    bbb = with_bar(series(DAYS, closes), 265, open=closes[264] * 1.02)
+    result = _idle_cash_run(bbb)
+    idle = _point(result, EXIT)[1]
+    assert idle > 1.0
+    assert [e["reason"] for e in _events_on(result, 265) if e["event"] == "skip"] == ["gap_up"]
+    for i in range(EXIT, 266):
+        assert _vehicle_events_on(result, i) == []
+        assert _point(result, i)[1] == approx(idle)
+    assert [e["event"] for e in _vehicle_events_on(result, 266)] == ["vehicle_sell"]
+    assert _point(result, 266)[1] == 0.0
+
+
+def test_a_deferred_exit_does_not_sweep_idle_cash_into_qqq() -> None:
+    # BBB has no bar on DAYS[265], when its time exit is due: it is deferred, and the idle
+    # cash stays cash until the exit fills on 266 and one purchase parks it all.
+    bbb = series(DAYS, pullback_closes(len(DAYS), dip=254))
+    result = _idle_cash_run(bbb[:265] + bbb[266:])
+    idle = _point(result, EXIT)[1]
+    assert idle > 1.0
+    assert [e["event"] for e in _events_on(result, 265) if e["event"].startswith("exit")] == [
+        "exit_deferred"
+    ]
+    for i in range(EXIT, 266):
+        assert _vehicle_events_on(result, i) == []
+        assert _point(result, i)[1] == approx(idle)
+    assert [e["event"] for e in _vehicle_events_on(result, 266)] == ["vehicle_buy"]
+    assert _point(result, 266)[1] == 0.0

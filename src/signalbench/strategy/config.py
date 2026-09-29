@@ -268,7 +268,7 @@ def _cash_vehicle(top: _Section, where: str) -> CashVehicle:
         symbol=section.text("symbol"), cost_per_side=section.number("cost_per_side")
     )
     section.done()
-    if vehicle.cost_per_side >= VEHICLE_COST_LIMIT:
+    if not 0.0 <= vehicle.cost_per_side < VEHICLE_COST_LIMIT:  # also refuses NaN
         raise ConfigError(
             f"{where}.cash_vehicle.cost_per_side: expected a number in "
             f"[0, {VEHICLE_COST_LIMIT}), got {vehicle.cost_per_side}"

@@ -160,6 +160,8 @@ def test_cash_vehicle_parses_and_survives_with_setups() -> None:
         ({"symbol": "SPY", "cost_per_side": 0.002}, "cash_vehicle.symbol: must be the regime symbol 'QQQ'"),
         ({"symbol": "QQQ", "cost_per_side": -0.001}, "cash_vehicle.cost_per_side: expected a number >= 0"),
         ({"symbol": "QQQ", "cost_per_side": 0.05}, r"cash_vehicle.cost_per_side: expected a number in \[0, 0.05\)"),
+        ({"symbol": "QQQ", "cost_per_side": float("nan")}, r"cash_vehicle.cost_per_side: expected a number in \[0, 0.05\)"),
+        ({"symbol": "QQQ", "cost_per_side": float("inf")}, r"cash_vehicle.cost_per_side: expected a number in \[0, 0.05\)"),
         ({"symbol": "QQQ"}, "cash_vehicle: missing key 'cost_per_side'"),
         ({"symbol": "QQQ", "cost_per_side": 0.002, "sma": 200}, r"cash_vehicle: unknown keys \['sma'\]"),
         (None, "config.cash_vehicle: expected a mapping"),

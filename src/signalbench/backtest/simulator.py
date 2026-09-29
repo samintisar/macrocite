@@ -7,6 +7,12 @@ With a cash vehicle (spec 06), idle cash waits in the regime symbol (QQQ): on a 
 fills, QQQ is sold at the open just enough to pay for the entries, or the cash left after the
 fills buys QQQ at the open. The start equity is parked at the first open. Configs without a
 cash vehicle never touch QQQ and behave exactly as before.
+
+Two consequences of "QQQ trades only at an open with a bar, and only on a session with a fill":
+- On a session where the vehicle has no bar, it does not trade (it is marked at its last
+  close), so an entry that needs vehicle money is skipped as `no_cash`.
+- Cash left over on such a session, or after a session with only skips or deferred exits,
+  waits as cash until the next session with a fill and a vehicle bar.
 """
 
 from dataclasses import dataclass, field, replace
