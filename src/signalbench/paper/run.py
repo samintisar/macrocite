@@ -29,6 +29,7 @@ from signalbench.db.models import PaperEquity, PaperEvent, PaperPortfolio, Paper
 from signalbench.ingest.cdr import CdrEntry
 from signalbench.market.calendar import HISTORY_START, Sessions
 from signalbench.paper.portfolios import paper_setup
+from signalbench.paper.report import report_due, write_weekly_report
 from signalbench.paper.start import PaperRefusedError
 from signalbench.strategy.config import (
     StrategyConfig,
@@ -51,6 +52,7 @@ class RunOutcome:
     target: date | None = None
     stepped: dict[str, int] = field(default_factory=dict)  # sessions stepped per portfolio
     error: str | None = None
+    report: Path | None = None  # the weekly report, when this run wrote one
 
 
 def run_paper(
@@ -62,11 +64,13 @@ def run_paper(
     calendar: Sessions,
     clock: Callable[[], datetime],
     ingest: Callable[[Session], list[str]],
+    reports_dir: Path,
     echo: Callable[[str], None],
 ) -> RunOutcome:
     """The nightly job. `lock` yields False when another run holds it: nothing is done.
     `ingest` refreshes prices (and the liquidity flags) and returns what failed. `clock` must
-    return timezone-aware times."""
+    return timezone-aware times. The first run of an ISO week writes the weekly report into
+    `reports_dir`, after stepping (a portfolio refused for its config does not stop it)."""
     with lock as held:
         if not held:
             echo("Another paper run holds the lock; nothing to do.")
@@ -76,17 +80,22 @@ def run_paper(
         session.commit()
         session.refresh(run)
         stepped: dict[str, int] = {}
+        report: Path | None = None
         try:
             refused = _step_all(session, run, repo, universe, calendar, clock, ingest, echo, stepped)
+            today = clock().astimezone(NEW_YORK).date()
+            if report_due(reports_dir, today):
+                report = write_weekly_report(session, reports_dir, today)
+                echo(f"weekly report: {report}")
             if refused:
                 raise PaperRefusedError("; ".join(refused))
         except Exception as error:  # noqa: BLE001  # spec 07: any error fails the run, recorded
             session.rollback()
             message = f"{type(error).__name__}: {error}"
             _finish(session, run, "failed", clock(), stepped, message)
-            return RunOutcome("failed", run.id, run.target_session, stepped, message)
+            return RunOutcome("failed", run.id, run.target_session, stepped, message, report)
         _finish(session, run, "ok", clock(), stepped, None)
-        return RunOutcome("ok", run.id, run.target_session, stepped, None)
+        return RunOutcome("ok", run.id, run.target_session, stepped, None, report)
 
 
 def _step_all(

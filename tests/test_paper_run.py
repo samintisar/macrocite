@@ -115,7 +115,8 @@ def _run(
 ) -> RunOutcome:
     return run_paper(
         session, lock=nullcontext(held), repo=repo, universe=UNIVERSE, calendar=WeekdaySessions(),
-        clock=clock, ingest=ingest or Feed(clock), echo=lambda _line: None,
+        clock=clock, ingest=ingest or Feed(clock), reports_dir=repo / "reports" / "paper",
+        echo=lambda _line: None,
     )
 
 
@@ -295,8 +296,33 @@ def test_prices_that_stop_before_the_target_fail_the_run(session: Session, repo:
     assert _equity(session, "p-plain") == []
 
 
-def test_a_run_without_portfolios_fails(session: Session) -> None:
-    outcome = _run(session, Path("."), Clock(evening(DAYS[FIRST])))
+def test_a_run_without_portfolios_fails(session: Session, tmp_path: Path) -> None:
+    outcome = _run(session, tmp_path, Clock(evening(DAYS[FIRST])))
     assert (outcome.status, outcome.error) == (
         "failed", "PaperRefusedError: No paper portfolios. Run `signalbench paper start` first.",
     )
+
+
+def test_the_first_run_of_each_iso_week_writes_the_weekly_report(
+    session: Session, repo: Path
+) -> None:
+    reports = repo / "reports" / "paper"
+    monday = _run(session, repo, Clock(evening(DAYS[FIRST])))
+    assert monday.report == reports / f"{DAYS[FIRST].isoformat()}-weekly.md"
+    assert "| p-qqq | 2023-12-04 | 2023-12-04 | 1 |" in monday.report.read_text(encoding="utf-8")
+    for i in range(FIRST + 1, FIRST + 5):  # Tuesday to Friday: no new report
+        assert _run(session, repo, Clock(evening(DAYS[i]))).report is None
+    next_monday = _run(session, repo, Clock(evening(DAYS[FIRST + 5])))
+    assert next_monday.report == reports / f"{DAYS[FIRST + 5].isoformat()}-weekly.md"
+    assert sorted(path.name for path in reports.iterdir()) == [
+        "2023-12-04-weekly.md", "2023-12-11-weekly.md",
+    ]
+
+
+def test_a_refused_portfolio_does_not_stop_the_weekly_report(session: Session, repo: Path) -> None:
+    with (repo / "data" / "strategy_test-qqq.yaml").open("a", encoding="utf-8") as handle:
+        handle.write("# edited\n")
+    outcome = _run(session, repo, Clock(evening(DAYS[FIRST])))
+    assert outcome.status == "failed"
+    assert outcome.report is not None
+    assert "| p-qqq | 2023-12-04 | not stepped yet | 0 |" in outcome.report.read_text(encoding="utf-8")
