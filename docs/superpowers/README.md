@@ -11,7 +11,7 @@ Start at the [overview spec](specs/2026-09-22-swing-assistant-00-overview.md). S
 | 03 | [Jev reader](specs/2026-09-22-swing-assistant-03-jev-reader-design.md) · plan: [2026-09-24-swing-03-jev-reader.md](plans/2026-09-24-swing-03-jev-reader.md) | Filter decision, Sentiment report, calibration report committed |
 | 04 | [Ledger](specs/2026-09-22-swing-assistant-04-ledger-design.md) | Hand-checked ACB fixture passes |
 | 05 | [Bot and evening scan](specs/2026-09-22-swing-assistant-05-bot-scan-design.md) | Real scheduled scan delivered to Telegram |
-| 06 | [Breakout v2: idle cash in QQQ and holding time](specs/2026-09-28-swing-assistant-06-breakout-v2-design.md) | Six post-hoc variant reports committed and logged; `v2-t30-cash` reproduces v1 Breakout |
+| 06 | [Breakout v2: idle cash in QQQ and holding time](specs/2026-09-28-swing-assistant-06-breakout-v2-design.md) · plan: [2026-09-28-swing-06-breakout-v2.md](plans/2026-09-28-swing-06-breakout-v2.md) | Six post-hoc variant reports committed and logged; `v2-t30-cash` reproduces v1 Breakout |
 
 ## History: original phases (2026-08-19)
 
