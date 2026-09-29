@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from signalbench.backtest.benchmarks import BenchmarkStats
-from signalbench.backtest.metrics import RunMetrics, TradeStats
+from signalbench.backtest.metrics import RunMetrics, TradeStats, VehicleStats
 from signalbench.backtest.passbar import Criterion
 from signalbench.backtest.simulator import SimulationResult
 from signalbench.db.models import BacktestRun
@@ -28,6 +28,22 @@ JEV_CAVEATS = (
         "Trades signalled on or after 2026-09-15 are the only fully out-of-sample ones."
     ),
     "Finnhub news covers only about the last year; earlier readings come from 8-K filings only.",
+)
+QQQ_CAVEATS = (
+    "Post-hoc: the ideas came from looking at v1's results on the same data.",
+    (
+        "QQQ's 2012–2026 run was exceptional; holding more QQQ helps less or hurts if the next "
+        "decade differs."
+    ),
+    (
+        "Taxes are not modeled. In a non-registered account each QQQ switch is a disposition, "
+        "and selling at a loss and rebuying within 30 days can be a superficial loss. "
+        "Fractional units of the ETF are assumed."
+    ),
+    (
+        "QQQ's adjusted prices stand in for the fund actually used, a CAD-listed, CAD-hedged "
+        "Nasdaq-100 ETF, the same way US prices stand in for the hedged CDRs."
+    ),
 )
 PASS_BAR_ROWS = (
     ("trades", "Trades", ">="),
@@ -81,6 +97,22 @@ def jev_payload(
     }
 
 
+def cash_vehicle_payload(
+    stats: VehicleStats, sensitivity: BenchmarkStats, sensitivity_cost: float
+) -> dict[str, Any]:
+    """Spec 06 facts stored under metrics["cash_vehicle"] for runs with a cash vehicle. The
+    sensitivity run (the same config at `sensitivity_cost` per switch) is information only."""
+    payload: dict[str, Any] = asdict(stats)
+    payload["sensitivity"] = {
+        "cost_per_side": sensitivity_cost,
+        "total_return": sensitivity.total_return,
+        "cagr": sensitivity.cagr,
+        "sharpe": sensitivity.sharpe,
+        "max_drawdown": sensitivity.max_drawdown,
+    }
+    return payload
+
+
 def pass_bar_payload(bar: dict[str, Criterion]) -> dict[str, Any]:
     return {name: asdict(criterion) for name, criterion in bar.items()}
 
@@ -93,8 +125,13 @@ def trade_log_payload(result: SimulationResult) -> dict[str, Any]:
     }
 
 
-def report_path(directory: Path, run_date: date, setup: str, jev_mode: str) -> Path:
-    return directory / f"{run_date.isoformat()}-{setup}-{jev_mode}.md"
+def report_path(
+    directory: Path, run_date: date, setup: str, jev_mode: str, version: str = "v1"
+) -> Path:
+    """<date>-<setup>-<jev>.md for v1; other versions add theirs (spec 06), so variants run on
+    the same day get their own files: <date>-<version>-<setup>-<jev>.md."""
+    name = f"{setup}-{jev_mode}" if version == "v1" else f"{version}-{setup}-{jev_mode}"
+    return directory / f"{run_date.isoformat()}-{name}.md"
 
 
 def result_label(run: BacktestRun) -> str:
@@ -106,6 +143,10 @@ def result_label(run: BacktestRun) -> str:
 
 def _pct(value: float) -> str:
     return f"{value * 100:.1f}%"
+
+
+def _cost(value: float) -> str:
+    return f"{value * 100:.2f}%"
 
 
 def _header(run: BacktestRun) -> list[str]:
@@ -134,7 +175,10 @@ def _header(run: BacktestRun) -> list[str]:
         lines += [f"**Sentiment status:** {_sentiment_status(run, jev)}", "", _period(run), ""]
     if run.strategy_version != "v1":
         lines += [
-            f"**POST-HOC** ({run.strategy_version}): cannot overturn a v1 result on its own.",
+            (
+                f"**POST-HOC** ({run.strategy_version}): cannot overturn a v1 result on its own. "
+                "A PASS only means the variant did not fail on the past; nothing goes live from it."
+            ),
             "",
         ]
     return [
@@ -268,6 +312,42 @@ def _benchmarks(m: dict[str, Any]) -> list[str]:
     ]
 
 
+def _cash_vehicle(m: dict[str, Any]) -> list[str]:
+    vehicle: dict[str, Any] | None = m.get("cash_vehicle")
+    if vehicle is None:
+        return []
+    symbol = vehicle["symbol"]
+    sensitivity = vehicle["sensitivity"]
+    return [
+        f"## Idle cash in {symbol}",
+        "",
+        "| Field | Value |",
+        "| --- | --- |",
+        f"| Switching cost per side | {_cost(vehicle['cost_per_side'])} |",
+        f"| Average share of equity in {symbol} | {_pct(vehicle['share_vehicle'])} |",
+        f"| Average share of equity in stocks | {_pct(vehicle['share_stocks'])} |",
+        f"| Average share of equity in cash | {_pct(vehicle['share_cash'])} |",
+        (
+            f"| {symbol} switches (buys / sells) | {vehicle['switches']} "
+            f"({vehicle['buys']} / {vehicle['sells']}) |"
+        ),
+        f"| Total switching cost (equity units) | {vehicle['switch_cost']:.2f} |",
+        "",
+        (
+            f"Exposure above counts sessions holding a stock; {symbol} is not counted. Total "
+            f"return, Sharpe, and drawdown are of total equity, {symbol} included."
+        ),
+        "",
+        (
+            f"**Sensitivity (information only): {symbol} switching at "
+            f"{_cost(sensitivity['cost_per_side'])}** — total return "
+            f"{_pct(sensitivity['total_return'])}, CAGR {_pct(sensitivity['cagr'])}, Sharpe "
+            f"{sensitivity['sharpe']:.2f}, max drawdown {_pct(sensitivity['max_drawdown'])}. "
+            f"Only the {_cost(vehicle['cost_per_side'])} run is stored and judged."
+        ),
+    ]
+
+
 def _skips_and_caveats(m: dict[str, Any]) -> list[str]:
     skips: dict[str, int] = m["skips_by_reason"]
     rows = [f"| {reason} | {count} |" for reason, count in skips.items()] or ["| none | 0 |"]
@@ -282,6 +362,7 @@ def _skips_and_caveats(m: dict[str, Any]) -> list[str]:
         "",
         *[f"- {caveat}" for caveat in CAVEATS],
         *([f"- {caveat}" for caveat in JEV_CAVEATS] if "jev" in m else []),
+        *([f"- {caveat}" for caveat in QQQ_CAVEATS] if "cash_vehicle" in m else []),
     ]
 
 
@@ -331,6 +412,7 @@ def render_report(run: BacktestRun) -> str:
         _metrics(run.metrics),
         _jev(run.metrics),
         _benchmarks(run.metrics),
+        _cash_vehicle(run.metrics),
         _skips_and_caveats(run.metrics),
         _trades(run),
         _open_at_end(run),
