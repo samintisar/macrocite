@@ -17,7 +17,7 @@ class Position:
     entry_date: date
     stop: float
     target: float | None
-    time_limit: int
+    time_limit: int | None  # sessions; None: no time limit (spec 06, Breakout only)
     sessions_held: int  # the entry session counts as 1
     highest_close: float  # highest close since entry, entry session included
 
