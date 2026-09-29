@@ -12,7 +12,7 @@ Start at the [overview spec](specs/2026-09-22-swing-assistant-00-overview.md). S
 | 04 | [Ledger](specs/2026-09-22-swing-assistant-04-ledger-design.md) (v2-none-cash only) | Hand-checked ACB and CDR-split fixtures pass |
 | 05 | [Bot and evening scan](specs/2026-09-22-swing-assistant-05-bot-scan-design.md) (v2-none-cash only) | Real scheduled scan delivered to Telegram; `/deposit 100` recorded; then the first real trade |
 | 06 | [Breakout v2: idle cash in QQQ and holding time](specs/2026-09-28-swing-assistant-06-breakout-v2-design.md) · plan: [2026-09-28-swing-06-breakout-v2.md](plans/2026-09-28-swing-06-breakout-v2.md) | Six post-hoc variant reports committed and logged; `v2-t30-cash` reproduces v1 Breakout |
-| 07 | [Forward paper trading](specs/2026-09-29-swing-assistant-07-paper-trading-design.md) · plan: [2026-09-29-swing-07-paper-trading.md](plans/2026-09-29-swing-07-paper-trading.md) | Seven portfolios started and stepping nightly; judged after 12 months and 30 trades |
+| 07 | [Forward paper trading](specs/2026-09-29-swing-assistant-07-paper-trading-design.md) · plan: [2026-09-29-swing-07-paper-trading.md](plans/2026-09-29-swing-07-paper-trading.md) | Built, not started: the owner dropped paper trading on 2026-09-29 and chose v2-none-cash to trade directly |
 
 ## History: original phases (2026-08-19)
 

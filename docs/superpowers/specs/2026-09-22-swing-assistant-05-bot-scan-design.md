@@ -65,7 +65,7 @@ For each `EntryOrder`:
 🟢 BUY NVDA (CDR) — Breakout · NVIDIA
 Signal C$38.40 · Stop C$36.10 (−6.0%) · Trailing stop, no target, no time limit
 Size 1 unit (~C$38.40) · risk C$2.30 · LIMIT C$38.78
-Skip if price > C$38.78 or bid/ask spread > <survey limit>%
+Skip if price > C$38.78, price ≤ the stop C$36.10, or bid/ask spread > <survey limit>%
 Why: Closed at a 20-session high (US$181.52) on 2.3× its 50-session average volume, above its 50-session average.
 [✅ I bought] [⏭ Skip]
 ```
@@ -139,6 +139,7 @@ Symbols are CDR symbols. The bot resolves US symbols to their CDR when they're u
   - **Scan failure:** on a non-zero exit, `live_scan.ps1` shows a toast ("SignalBench scan failed: <first line of the error>"). The scan has already sent its ⚠️ Telegram message when it could.
   - **Stale scan:** before each run, the script checks `signalbench scan status --stale-after-days 3` (exit 3) and shows a toast when the last `ok` scan is more than 3 days old. The check never stops the run.
   - **Bot:** `live_bot.ps1` shows a toast when the bot exits with an error.
+  - **Bot heartbeat:** the bot writes a heartbeat time (e.g. a single-row `bot_heartbeat` table, created with `scan_runs`) at least every 10 minutes while polling. The evening scan warns in its summary and shows a toast when the last heartbeat is more than 1 hour old, so a bot that is down without exiting is noticed.
 - **Windows Task Scheduler**, registered by `scripts/windows/register-tasks.ps1`, with docs in the README:
   - `live_bot.ps1`: at logon, restart every 1 minute on failure, no time limit.
   - `live_scan.ps1`: daily at 17:00 America/New_York, converted to the PC's local time by the script, plus at logon with a 5-minute delay for catch-up.
@@ -203,3 +204,4 @@ Jev, Claude or any LLM explanation, other strategies or setups, automatic order 
   - **Running it:** the scan and bot run from a worktree pinned to the `live-v1` tag, with spec 07's `.env` loading. Failures show a ⚠️ message plus a Windows toast, and a stale-scan toast fires after 3 days.
   - **Registration:** the task time conversion handles British Columbia's clock change.
   - **Tests:** the end-to-end test is rewritten for Breakout (fire, raise, stop hit, catch-up).
+- 2026-09-29: the entry message also says to skip when the price is at or below the stop (the backtest's gap-below-stop rule); a bot heartbeat checked by the evening scan. Split corrections stay CLI-only (`ledger split`, `ledger void-action`).
