@@ -224,3 +224,12 @@ class Ledger:
   - **Splits:** a new `corporate_actions` table records US splits (the tool's US levels are rescaled) and CDR splits (units × r, ACB per unit ÷ r, total ACB unchanged). The scale check reuses spec 07's split detection. Fills and the owner's ACB are never rescaled.
   - **R:** trade R is stated in CAD on the planned risk, equal to the US-equivalent definition.
   - **Migration:** `0013_live_ledger` (`0011` and `0012` are taken).
+- 2026-09-30: implementation choices (plan [2026-09-30-swing-04-ledger.md](../plans/2026-09-30-swing-04-ledger.md)):
+  - **Ids** are integers (`/void 12`; Telegram button data is capped at 64 bytes), and the interface takes `int` where it showed `UUID`.
+  - **Columns added:** `fills.forced` (a buy recorded with `force=True`, also logged), `stop_updates.corporate_action_id` (the split a `split` row applies or undoes), and `risk_state.scale_up_history` (each scale-up result with its inputs).
+  - **Splits:** `record_split` writes the `split` stop rows itself and a CDR split withdraws the CDR's `sent` signals, in one transaction; voiding writes the undoing rows. A split recorded before a position opened rescales its initial stop without a row. A split ratio of 1 is refused. `ledger split` also takes a US symbol.
+  - **Stops:** `stop_in_force(signal, D)` replays the rows in the order written, leaving out raises decided at D's close or later, so a forced rescan sees the stop in force during D. `record_stop_update` computes the CDR display stop itself and takes no `reason` (split rows come from `record_split`).
+  - **Pending signals** hold their slot through the close of their entry session (the owner may have bought and not reported it yet).
+  - **Money:** prices, fees, and stops are stored at 4 decimals and quantities at 6; more decimals are refused, not rounded. Equity snapshots are rounded to 4 decimals before the peak and pause use them; the tax report rounds to the cent. A position with no stored CDR price is valued at its ACB.
+  - **Fills:** on one trade date, fills replay in the order recorded, after a split with that ex-date. The no-margin check is the running cash from the buy on. A void that would leave a later sale oversold is refused (record the corrected fill first). A buy may link to a `sent` or `expired` signal (then `taken`), not to a skipped or withdrawn one.
+  - **`live start`** also refuses uncommitted tracked code, like `paper start`, so `start_git_sha` names the code that ran.
