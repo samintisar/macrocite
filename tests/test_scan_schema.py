@@ -101,3 +101,25 @@ def test_a_held_session_is_unique_per_symbol(session: Session) -> None:
     session.add(ScanHold(us_symbol="NVDA", session=date(2026, 10, 9)))
     with pytest.raises(IntegrityError):
         session.commit()
+
+
+def test_migration_0016_creates_the_bot_updates_table_and_drops_it_again() -> None:
+    path = MIGRATION.with_name("0016_bot_updates.py")
+    spec = importlib.util.spec_from_file_location("migration_0016", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.down_revision == "0015_scan_holds"
+    engine = create_engine("sqlite://")
+    with engine.begin() as connection:
+        with Operations.context(MigrationContext.configure(connection)):
+            module.upgrade()
+        created = [
+            (c["name"], bool(c["nullable"])) for c in inspect(connection).get_columns("bot_updates")
+        ]
+        with Operations.context(MigrationContext.configure(connection)):
+            module.downgrade()
+        left = inspect(connection).get_table_names()
+    model = SQLModel.metadata.tables["bot_updates"]
+    assert created == [(c.name, bool(c.nullable)) for c in model.columns]
+    assert left == []

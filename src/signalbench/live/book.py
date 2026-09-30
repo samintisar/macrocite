@@ -248,8 +248,12 @@ class LedgerBook:
 
     # --- Cash ------------------------------------------------------------------------------
 
-    def record_cash(self, amount_cad: Decimal, occurred_on: date, note: str) -> CashMovement:
-        """A deposit (+) or a withdrawal (-)."""
+    def record_cash(
+        self, amount_cad: Decimal, occurred_on: date, note: str, *, force: bool = False
+    ) -> CashMovement:
+        """A deposit (+) or a withdrawal (-). A withdrawal may not take the running cash below
+        0 from its date on; `force` records it anyway (Wealthsimple is the source of truth),
+        and it is logged."""
         if amount_cad == 0:
             raise LedgerError("a cash movement cannot be 0")
         check_places(amount_cad, 2, "amount")
@@ -257,6 +261,18 @@ class LedgerBook:
             raise LedgerError(f"{occurred_on} is after today ({self.today})")
         movement = CashMovement(amount_cad=amount_cad, occurred_on=occurred_on, note=note)
         self._session.add(movement)
+        self._session.flush()
+        if amount_cad < 0:
+            lowest = self._lowest_cash_from(0, movement.id)
+            if lowest < 0 and not force:
+                self._session.rollback()
+                raise LedgerError(
+                    f"a withdrawal of {cad(-amount_cad)} on {occurred_on} takes cash to "
+                    f"{cad(lowest)}. If Wealthsimple shows it, record it with force"
+                )
+            if lowest < 0:
+                log.warning("forced withdrawal: %s on %s takes cash to %s",
+                            cad(-amount_cad), occurred_on, cad(lowest))
         self._session.commit()
         self._session.refresh(movement)
         return movement
@@ -276,17 +292,18 @@ class LedgerBook:
         total = sum((m.amount_cad for m in self._movements(as_of)), ZERO)
         return total + sum((_cash_effect(f) for f in self._fills(through=as_of)), ZERO)
 
-    def _lowest_cash_from(self, fill: Fill) -> Decimal:
-        """The lowest running cash from `fill` on, over every movement and fill in date order
-        (a movement before the fills of its date)."""
+    def _lowest_cash_from(self, kind: int, key: int | None) -> Decimal:
+        """The lowest running cash from one event on (kind 0: a cash movement, 1: a fill, with
+        its id), over every movement and fill in date order (a movement before the fills of
+        its date)."""
         events: list[tuple[date, int, int, Decimal]] = [
             (m.occurred_on, 0, m.id or 0, m.amount_cad) for m in self._movements()
         ]
         events += [(f.trade_date, 1, f.id or 0, _cash_effect(f)) for f in self._fills()]
         running, lowest, seen = ZERO, None, False
-        for day, kind, key, amount in sorted(events):
+        for _, event_kind, event_key, amount in sorted(events):
             running += amount
-            seen = seen or (kind == 1 and key == fill.id)
+            seen = seen or (event_kind, event_key) == (kind, key)
             if seen:
                 lowest = running if lowest is None else min(lowest, running)
         return ZERO if lowest is None else lowest
@@ -342,7 +359,7 @@ class LedgerBook:
         try:
             self._check_book(cdr)
             if side == "buy":
-                lowest = self._lowest_cash_from(fill)
+                lowest = self._lowest_cash_from(1, fill.id)
                 if lowest < 0 and not force:
                     raise LedgerError(
                         f"a buy of {cad(quantity * price_cad + fee_cad)} on {trade_date} "

@@ -4,7 +4,7 @@ TelegramMessenger against a Bot API that answers from memory (no network)."""
 from typing import Any
 
 import pytest
-from telegram.error import NetworkError
+from telegram.error import InvalidToken, NetworkError
 
 from signalbench.live.messenger import (
     MAX_TEXT,
@@ -14,8 +14,9 @@ from signalbench.live.messenger import (
     Messenger,
     TelegramMessenger,
     chunks,
+    redact,
 )
-from telegram_helpers import CHAT, TOKEN, FakeTelegram
+from telegram_helpers import CHAT, TOKEN, FakeTelegram, Rejecting
 
 ROW = ((Button("✅ I bought", "b:12"), Button("⏭ Skip", "s:12")),)
 
@@ -109,3 +110,13 @@ def test_a_failed_connection_is_tried_again_by_the_next_send() -> None:
     assert messenger.send("sent") == 501
     messenger.close()
     assert [name for name, _ in api.calls] == ["getMe", "getMe", "sendMessage"]
+
+
+def test_a_rejected_token_never_appears_in_the_error() -> None:
+    messenger = TelegramMessenger(TOKEN, CHAT, request=Rejecting())
+    with pytest.raises(InvalidToken) as caught:
+        messenger.send("lost")
+    assert str(caught.value) == "The token `***` was rejected by the server."
+    assert TOKEN not in repr(caught.value)
+    assert redact(f"bot{TOKEN}/getMe", TOKEN) == "bot***/getMe"
+    assert redact("nothing to hide", "") == "nothing to hide"

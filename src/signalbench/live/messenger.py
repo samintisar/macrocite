@@ -4,6 +4,10 @@ A `Messenger` sends a message with inline buttons and returns its id, and edits 
 later. `TelegramMessenger` sends through the Bot API with python-telegram-bot; `FakeMessenger`
 records messages for tests; `ConsoleMessenger` prints them (`scan --dry-run`). Button presses
 and commands are handled only by the bot process (live/telegram_bot.py).
+
+The bot token never leaves in an error: python-telegram-bot puts it in some messages (e.g.
+`InvalidToken`), so `TelegramMessenger` replaces it with `***` (`redact`) before an error
+reaches the scan's run row, its output, or the toast.
 """
 
 import asyncio
@@ -13,11 +17,18 @@ from functools import partial
 from typing import Any, Protocol, TypeVar
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import TelegramError
 from telegram.request import BaseRequest
 
 MAX_TEXT = 4096  # Bot API: a message is 1-4096 characters
 MAX_CALLBACK_BYTES = 64  # Bot API: callback_data is 1-64 bytes
+REDACTED = "***"
 T = TypeVar("T")
+
+
+def redact(text: str, secret: str) -> str:
+    """`text` with every copy of `secret` (the bot token) replaced by ***."""
+    return text.replace(secret, REDACTED) if secret else text
 
 
 @dataclass(frozen=True)
@@ -136,15 +147,25 @@ class TelegramMessenger:
 
     def __init__(self, token: str, chat_id: int, *, request: BaseRequest | None = None) -> None:
         self._bot = Bot(token, request=request)
+        self._token = token
         self._chat_id = chat_id
         self._loop = asyncio.new_event_loop()
         self._ready = False
 
     def _run(self, make: Callable[[], Coroutine[Any, Any, T]]) -> T:
-        if not self._ready:
-            self._loop.run_until_complete(self._bot.initialize())  # getMe checks the token
-            self._ready = True
-        return self._loop.run_until_complete(make())
+        try:
+            if not self._ready:
+                self._loop.run_until_complete(self._bot.initialize())  # getMe checks the token
+                self._ready = True
+            return self._loop.run_until_complete(make())
+        except TelegramError as error:  # the same type, without the token
+            error.message = redact(error.message, self._token)
+            error.__cause__ = error.__context__ = None
+            raise
+        except Exception as error:
+            if self._token and self._token in str(error):
+                raise ConnectionError(redact(str(error), self._token)) from None
+            raise
 
     def send(self, text: str, buttons: Buttons = ()) -> int:
         pieces = chunks(text)

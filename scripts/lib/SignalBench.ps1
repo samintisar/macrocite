@@ -17,9 +17,17 @@
     API, which PowerShell 7 cannot load. No modules are installed.
 #>
 
+function Hide-Secret([string]$Text) {
+    # The bot token is replaced by *** in anything logged or shown (python-telegram-bot puts it
+    # in some errors, e.g. InvalidToken). The Python side redacts too; this is the backstop.
+    $token = [Environment]::GetEnvironmentVariable('TELEGRAM_BOT_TOKEN', 'Process')
+    if ($token -and $Text) { return $Text.Replace($token, '***') }
+    $Text
+}
+
 function Write-Log([string[]]$Lines) {
     $stamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss zzz'
-    $text = @($Lines | ForEach-Object { "$stamp  $_" })
+    $text = @($Lines | ForEach-Object { "$stamp  $(Hide-Secret $_)" })
     try {
         Add-Content -Path $script:log -Encoding UTF8 -Value $text
     }
@@ -31,6 +39,8 @@ function Write-Log([string[]]$Lines) {
 
 function Show-Toast([string]$Title, [string]$Message) {
     # Never throws: a toast that cannot be shown is logged, and the script goes on.
+    $Title = Hide-Secret $Title
+    $Message = Hide-Secret $Message
     try {
         if ($NoToast) {
             Write-Log @("toast (not shown): $Title | $Message")

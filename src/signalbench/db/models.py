@@ -525,6 +525,18 @@ class ScanHold(SQLModel, table=True):
     created_at: datetime = _created_at()
 
 
+class BotUpdate(SQLModel, table=True):
+    """A Telegram update whose command or reply the bot recorded (spec 05), written in the same
+    transaction as the fill or cash movement: an update redelivered after a crash is refused."""
+
+    __tablename__ = "bot_updates"
+
+    update_id: int = Field(
+        sa_column=Column(BigInteger, primary_key=True, autoincrement=False)
+    )
+    created_at: datetime = _created_at()
+
+
 class BotHeartbeat(SQLModel, table=True):
     """The bot's last sign of life (spec 05): one row, rewritten at least every 10 minutes."""
 

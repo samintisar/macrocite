@@ -48,3 +48,15 @@ class FakeTelegram(BaseRequest):
 
     def sent(self, endpoint: str) -> list[dict[str, Any]]:
         return [params for name, params in self.calls if name == endpoint]
+
+
+class Rejecting(FakeTelegram):
+    """A Bot API that rejects the token, as Telegram answers a revoked or mistyped one."""
+
+    async def do_request(
+        self, url: str, method: str, request_data: RequestData | None = None, **_: Any
+    ) -> tuple[int, bytes]:
+        self.calls.append((url.rsplit("/", 1)[-1], {}))
+        return 401, json.dumps(
+            {"ok": False, "error_code": 401, "description": "Unauthorized"}
+        ).encode()

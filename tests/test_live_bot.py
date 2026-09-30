@@ -61,12 +61,12 @@ def test_i_bought_asks_for_units_and_price_then_records_the_linked_fill(world: W
     sent = entry(world)
     [ask] = bot.handle_callback(OWNER, "b:1", sent.message_id, sent.text)
     assert ask.text == (
-        "How many units of ZNVD did you buy, and at what price? Reply like `3 10.1` (a third "
-        "token sets the date, YYYY-MM-DD)."
+        "What was your average fill price for the 3 units of ZNVD? Reply with the price from "
+        "Wealthsimple's confirmation, like `10.10`, or `UNITS PRICE` if you bought a different "
+        "number of units. The date is the entry session, 2026-10-06; a YYYY-MM-DD token after "
+        "the price changes it."
     )
-    assert [(b.text, b.data) for row in ask.buttons for b in row] == [
-        ("Use suggested: 3 units @ C$10.10", "u:1")
-    ]
+    assert ask.buttons == ()  # no size or price is ever assumed
     assert texts(bot.handle_text(OWNER, "3 ten")) == ["⚠️ the price must be a number, not 'ten'"]
     confirm, edit = bot.handle_text(OWNER, "3 10.45")
     assert confirm.text == (
@@ -85,10 +85,140 @@ def test_i_bought_asks_for_units_and_price_then_records_the_linked_fill(world: W
     ]
 
 
-def test_use_suggested_records_the_suggested_size_at_the_signal_close(world: World) -> None:
+def test_a_whole_unit_order_needs_only_the_actual_fill_price(world: World) -> None:
+    bot = bot_brain(world)
     sent = entry(world)
-    replies = bot_brain(world).handle_callback(OWNER, "u:1", sent.message_id, sent.text)
-    assert replies[0].text.startswith("✅ Bought 3 units ZNVD @ C$10.10 on 2026-10-06 (fill 1)")
+    assert texts(bot.handle_callback(OWNER, "u:1", sent.message_id, sent.text)) == [
+        "⚠️ That button is no longer valid."  # the old [Use suggested] button assumed a price
+    ]
+    bot.handle_callback(OWNER, "b:1", sent.message_id, sent.text)
+    confirm, _ = bot.handle_text(OWNER, "10.12")
+    assert confirm.text.startswith("✅ Bought 3 units ZNVD @ C$10.12 on 2026-10-06 (fill 1)")
+
+
+def test_the_date_defaults_to_the_entry_session_and_must_be_in_the_signal_window(
+    world: World,
+) -> None:
+    bot = bot_brain(world, B + 3)  # reported two sessions late
+    sent = entry(world)
+    bot.handle_callback(OWNER, "b:1", sent.message_id, sent.text)
+    assert texts(bot.handle_text(OWNER, "3 10.12 2026-10-07")) == [
+        (
+            "⚠️ 2026-10-07 is outside signal 1's entry window (after 2026-10-05, through "
+            "2026-10-06). If Wealthsimple shows that date, add `force`."
+        )
+    ]
+    confirm, _ = bot.handle_text(OWNER, "10.12")
+    assert "on 2026-10-06 (fill 1)" in confirm.text  # the entry session, not today
+    world.session.expire_all()
+    assert world.session.exec(select(Fill)).one().trade_date == DAYS[B + 1]
+
+
+def test_a_date_outside_the_window_is_recorded_with_force(world: World) -> None:
+    bot = bot_brain(world, B + 3)
+    sent = entry(world)
+    bot.handle_callback(OWNER, "b:1", sent.message_id, sent.text)
+    confirm, _ = bot.handle_text(OWNER, "3 10.12 2026-10-07 force")
+    assert "on 2026-10-07 (fill 1)" in confirm.text
+
+
+def test_a_fractional_order_needs_both_the_units_and_the_price(world: World) -> None:
+    signal = world.session.exec(select(TradeSignal)).one()
+    signal.order_type = "market"
+    world.session.add(signal)
+    world.session.commit()
+    bot = bot_brain(world)
+    sent = entry(world)
+    [ask] = bot.handle_callback(OWNER, "b:1", sent.message_id, sent.text)
+    assert ask.text.startswith("How many units of ZNVD did you buy, and at what average price?")
+    assert texts(bot.handle_text(OWNER, "10.12")) == [
+        "⚠️ A fractional order needs both: reply `UNITS PRICE`, like `3 10.10`."
+    ]
+    confirm, _ = bot.handle_text(OWNER, "2.97 10.12")
+    assert confirm.text.startswith("✅ Bought 2.97 units ZNVD @ C$10.12")
+
+
+def test_a_price_far_from_the_signal_or_too_many_units_asks_first(world: World) -> None:
+    bot = bot_brain(world)
+    sent = entry(world)
+    bot.handle_callback(OWNER, "b:1", sent.message_id, sent.text)
+    [check] = bot.handle_text(OWNER, "7 11.20")
+    assert check.text == (
+        "⚠️ Check this before I record it:\n"
+        "• C$11.20 is 10.9% above the signal's CDR reference C$10.10\n"
+        "• 7 units is more than 2× the suggested 3\n"
+        "Record: buy 7 units ZNVD @ C$11.20 on 2026-10-06 for signal 1?"
+    )
+    [[ok, no]] = check.buttons
+    assert (ok.text, ok.data, no.text, no.data) == ("✅ Confirm", "ok:1", "Cancel", "no:1")
+    assert world.session.exec(select(Fill)).all() == []
+    [cancelled] = bot.handle_callback(OWNER, "no:1", 77, check.text)
+    assert (cancelled.edit, cancelled.text) == (77, f"{check.text}\nCancelled: nothing recorded.")
+    assert texts(bot.handle_callback(OWNER, "ok:1", 77, check.text)) == [
+        "⚠️ That button is no longer valid."
+    ]
+    [check] = bot.handle_text(OWNER, "3 11.20")  # awaiting still stands: a corrected reply
+    confirm, entry_edit, check_edit = bot.handle_callback(OWNER, "ok:2", 78, check.text)
+    assert confirm.text.startswith("✅ Bought 3 units ZNVD @ C$11.20 on 2026-10-06 (fill 1)")
+    assert (entry_edit.edit, check_edit.edit) == (sent.message_id, 78)
+    assert check_edit.text == f"{check.text}\n✅ Recorded (fill 1)."
+    assert bot.awaiting is None and bot.confirming is None
+
+
+def test_a_sale_price_far_from_the_mark_asks_first(world: World) -> None:
+    _exit_alert(world)
+    bot = bot_brain(world, B + 5)
+    [check] = bot.handle_text(OWNER, "/sell ZNVD all 8.00")
+    assert check.text.splitlines()[1] == "• C$8.00 is 17.9% below the latest CDR mark C$9.75"
+    assert check.text.splitlines()[-1] == "Record: sell 3 units ZNVD @ C$8.00 on 2026-10-12?"
+    [sold] = texts(bot.handle_callback(OWNER, "ok:1", 80, check.text))[:1]
+    assert sold.startswith("✅ Sold 3 units ZNVD @ C$8.00")
+
+
+def test_a_manual_buy_far_from_the_mark_asks_first(world: World) -> None:
+    bot = bot_brain(world)
+    [check] = bot.handle_text(OWNER, "/buy ZXOM 2 5")
+    assert check.text.splitlines()[1] == "• C$5.00 is 50.0% below the latest CDR mark C$10.00"
+    assert world.session.exec(select(Fill)).all() == []
+    assert texts(bot.handle_callback(OWNER, "ok:1", 81, check.text))[0].startswith(
+        "✅ Bought 2 units ZXOM @ C$5.00"
+    )
+
+
+def test_a_redelivered_command_is_recorded_once(world: World) -> None:
+    bot = bot_brain(world)
+    assert texts(bot.handle_text(OWNER, "/deposit 50", update_id=900)) == [
+        "Deposit of C$50.00 recorded on 2026-10-06. Cash is now C$150.00."
+    ]
+    redelivered = "⚠️ Already recorded: Telegram delivered update 900 again."
+    assert texts(bot.handle_text(OWNER, "/deposit 50", update_id=900)) == [redelivered]
+    bot.handle_text(OWNER, "/buy ZXOM 2 10", update_id=901)
+    assert texts(bot_brain(world).handle_text(OWNER, "/buy ZXOM 2 10", update_id=901)) == [
+        "⚠️ Already recorded: Telegram delivered update 901 again."
+    ]
+    bot.handle_text(OWNER, "/sell ZXOM 1 10", update_id=902)
+    bot.handle_text(OWNER, "/withdraw 5", update_id=903)
+    for update_id, command in ((902, "/sell ZXOM 1 10"), (903, "/withdraw 5")):
+        assert texts(bot.handle_text(OWNER, command, update_id=update_id)) == [
+            f"⚠️ Already recorded: Telegram delivered update {update_id} again."
+        ]
+    world.session.expire_all()
+    assert len(world.session.exec(select(Fill)).all()) == 2
+    assert world.ledger(B + 1).cash() == Decimal("135.00")  # 100 + 50 - 20 + 10 - 5
+    assert texts(bot.handle_text(OWNER, "/deposit 50", update_id=904))[0].endswith("C$185.00.")
+
+
+def test_a_withdrawal_cannot_leave_cash_negative_without_force(world: World) -> None:
+    bot = bot_brain(world)
+    assert texts(bot.handle_text(OWNER, "/withdraw 100.01")) == [
+        (
+            "⚠️ a withdrawal of C$100.01 on 2026-10-06 takes cash to C$-0.01. If Wealthsimple "
+            "shows it, record it with force"
+        )
+    ]
+    assert texts(bot.handle_text(OWNER, "/withdraw 100.01 force")) == [
+        "Withdrawal of C$100.01 recorded on 2026-10-06. Cash is now −C$0.01."
+    ]
 
 
 def test_skip_asks_for_a_reason_and_records_it(world: World) -> None:
@@ -128,7 +258,10 @@ def test_sold_asks_for_units_and_price_and_closes_the_position(world: World) -> 
     bot = bot_brain(world, B + 5)
     [ask] = bot.handle_callback(OWNER, "x:1", alert.message_id, alert.text)
     assert ask.text.startswith("How many units did you sell, and at what price?")
-    sold, edit = bot.handle_text(OWNER, "9.70")
+    [check] = bot.handle_text(OWNER, "9.70")  # one token: never silently "all"
+    assert check.text == "Sell ALL 3 units ZNVD @ C$9.70 on 2026-10-12?"
+    assert [b.data for row in check.buttons for b in row] == ["ok:1", "no:1"]
+    sold, edit, _ = bot.handle_callback(OWNER, "ok:1", 90, check.text)
     assert sold.text == (
         "✅ Sold 3 units ZNVD @ C$9.70 on 2026-10-12 (fill 2). Position closed: P&L −C$2.25 · "
         "−1.88R on planned risk."
@@ -176,19 +309,19 @@ def test_buy_and_sell_commands_and_their_errors(world: World) -> None:
     assert texts(bot.handle_text(OWNER, "/buy xom 1 5 2026-13-01")) == [
         "⚠️ the date must be YYYY-MM-DD, not '2026-13-01'"
     ]
-    [refused] = texts(bot.handle_text(OWNER, "/buy XOM 20 5.10"))  # a US symbol, one CDR
+    [refused] = texts(bot.handle_text(OWNER, "/buy XOM 10 10.20"))  # a US symbol, one CDR
     assert refused.startswith("⚠️ a buy of C$102.00 on 2026-10-06 takes cash to C$-2.00")
-    assert texts(bot.handle_text(OWNER, "/buy XOM 20 5.10 force")) == [
-        "✅ Bought 20 units ZXOM @ C$5.10 on 2026-10-06 (fill 1), manual: no stop or exit alerts."
+    assert texts(bot.handle_text(OWNER, "/buy XOM 10 10.20 force")) == [
+        "✅ Bought 10 units ZXOM @ C$10.20 on 2026-10-06 (fill 1), manual: no stop or exit alerts."
     ]
-    assert texts(bot.handle_text(OWNER, "/sell ZXOM 25 5.20")) == [
-        "⚠️ ZXOM: a sale of 25 on 2026-10-06 is more than the 20 units held"
+    assert texts(bot.handle_text(OWNER, "/sell ZXOM 25 10.40")) == [
+        "⚠️ ZXOM: a sale of 25 on 2026-10-06 is more than the 10 units held"
     ]
-    assert texts(bot.handle_text(OWNER, "/sell ZXOM 5 5.20")) == [
-        "✅ Sold 5 units ZXOM @ C$5.20 on 2026-10-06 (fill 2). Still holding 15 units."
+    assert texts(bot.handle_text(OWNER, "/sell ZXOM 5 10.40")) == [
+        "✅ Sold 5 units ZXOM @ C$10.40 on 2026-10-06 (fill 2). Still holding 5 units."
     ]
-    assert texts(bot.handle_text(OWNER, "/sell ZXOM all 5.00 2026-10-06")) == [
-        "✅ Sold 15 units ZXOM @ C$5.00 on 2026-10-06 (fill 3). Position closed: P&L −C$1.00."
+    assert texts(bot.handle_text(OWNER, "/sell ZXOM all 9.80 2026-10-06")) == [
+        "✅ Sold 5 units ZXOM @ C$9.80 on 2026-10-06 (fill 3). Position closed: P&L −C$1.00."
     ]
     assert texts(bot.handle_text(OWNER, "/sell ZXOM all 5.00")) == [
         "⚠️ no ZXOM units are held"
@@ -204,7 +337,7 @@ def test_cash_void_and_the_read_only_commands(world: World) -> None:
     assert texts(bot.handle_text(OWNER, "/withdraw 50.005")) == [
         "⚠️ amount -50.005 has more than 2 decimals"
     ]
-    bot.handle_text(OWNER, "/buy ZXOM 2 5")
+    bot.handle_text(OWNER, "/buy ZXOM 2 10")
     assert texts(bot.handle_text(OWNER, "/void 1 typo")) == [
         "Fill 1 voided: typo. Cash is now C$200.00."
     ]

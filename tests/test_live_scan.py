@@ -33,9 +33,14 @@ from signalbench.db.models import (
     TradeSignal,
 )
 from signalbench.ingest.prices import Split
-from signalbench.live.messenger import ConsoleMessenger, FakeMessenger
+from signalbench.live.messenger import (
+    ConsoleMessenger,
+    FakeMessenger,
+    TelegramMessenger,
+)
 from signalbench.live.scan import ABANDONED, _Scan, dry_run_session, run_scan
 from strategy_helpers import WeekdaySessions
+from telegram_helpers import CHAT, TOKEN, Rejecting
 
 ENTRY = (
     "🟢 BUY NVDA (CDR ZNVD) — Breakout · NVDA\n"
@@ -484,3 +489,16 @@ def test_a_held_session_whose_close_hit_the_stop_still_exits_once_the_hold_clear
         "(exits and stop raises only, sent marked late)"
     ) in texts[-1].splitlines()
     assert world.scan(B + 6).counts.get("exits") is None  # reviewed once
+
+
+def test_a_rejected_bot_token_is_redacted_from_the_run_row_and_the_output(world: World) -> None:
+    messenger = TelegramMessenger(TOKEN, CHAT, request=Rejecting())
+    outcome = world.scan(B, messenger=messenger)
+    assert outcome.error == "InvalidToken: The token `***` was rejected by the server."
+    [run] = _runs(world.session)
+    assert run.error == outcome.error
+    assert not [line for line in world.echoed if TOKEN in line]
+    assert world.echoed[-1] == (
+        "ERROR: Scan failed at step 9 (send): InvalidToken: The token `***` was rejected by the "
+        "server."
+    )

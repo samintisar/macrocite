@@ -2,19 +2,28 @@
 Bot API that answers from memory (no network)."""
 
 import asyncio
+import io
+import logging
 from datetime import timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 import pytest
 from sqlmodel import Session
 from telegram import Bot, Update
+from telegram.error import InvalidToken
 from telegram.ext import TypeHandler
 
 from paper_helpers import evening
 from scan_helpers import DAYS, OWNER, B, World, bot_brain, make_world
 from signalbench.live.heartbeat import heartbeat_problem, write_heartbeat
-from signalbench.live.telegram_bot import beat_once, build_application, handle_update
+from signalbench.live.telegram_bot import (
+    RedactingFormatter,
+    beat_once,
+    build_application,
+    handle_update,
+)
 from telegram_helpers import TOKEN, FakeTelegram
 
 USER = {"id": OWNER, "is_bot": False, "first_name": "Owner"}
@@ -66,10 +75,8 @@ def test_a_button_press_is_answered_and_its_reply_asks_for_the_fill(world: World
     _run(api, [press], world)
     assert [name for name, _ in api.calls] == ["getMe", "answerCallbackQuery", "sendMessage"]
     [ask] = api.sent("sendMessage")
-    assert ask["text"].startswith("How many units of ZNVD did you buy")
-    assert ask["reply_markup"] == {
-        "inline_keyboard": [[{"text": "Use suggested: 3 units @ C$10.10", "callback_data": "u:1"}]]
-    }
+    assert ask["text"].startswith("What was your average fill price for the 3 units of ZNVD?")
+    assert "reply_markup" not in ask  # nothing is assumed: the owner types the fill
 
 
 def test_a_foreign_chat_gets_no_answer_at_all(world: World) -> None:
@@ -117,3 +124,32 @@ def test_a_heartbeat_needs_telegram_to_answer_and_the_scan_sees_its_age(world: W
             return super()._result(endpoint, params)
 
     assert asyncio.run(beat(Down())) is False  # the first getMe initializes; the beat fails
+
+
+def test_an_update_delivered_again_after_a_crash_is_recorded_once(world: World) -> None:
+    api = FakeTelegram()
+    deposit = _message(OWNER, "/deposit 50")
+    _run(api, [deposit, deposit], world)
+    first, again = (sent["text"] for sent in api.sent("sendMessage"))
+    assert first == "Deposit of C$50.00 recorded on 2026-10-06. Cash is now C$150.00."
+    assert again == "⚠️ Already recorded: Telegram delivered update 1 again."
+    assert world.ledger(B + 1).cash() == Decimal("150.00")
+
+
+def test_log_lines_and_tracebacks_never_show_the_token() -> None:
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(RedactingFormatter(TOKEN, "%(levelname)s %(message)s"))
+    logger = logging.getLogger("signalbench.test.redaction")
+    logger.addHandler(handler)
+    try:
+        try:
+            raise InvalidToken(f"The token `{TOKEN}` was rejected by the server.")
+        except InvalidToken:
+            logger.exception("polling failed for %s", f"https://api.telegram.org/bot{TOKEN}/getMe")
+    finally:
+        logger.removeHandler(handler)
+    text = stream.getvalue()
+    assert TOKEN not in text
+    assert text.startswith("ERROR polling failed for https://api.telegram.org/bot***/getMe\n")
+    assert "InvalidToken: The token `***` was rejected by the server." in text

@@ -92,12 +92,12 @@ from signalbench.live.book import LedgerError, SplitKind
 from signalbench.live.bot import BotBrain
 from signalbench.live.heartbeat import write_heartbeat
 from signalbench.live.ledger import Ledger
-from signalbench.live.messenger import ConsoleMessenger, TelegramMessenger
+from signalbench.live.messenger import ConsoleMessenger, TelegramMessenger, redact
 from signalbench.live.scan import LIVE_SCAN_LOCK, ScanOutcome, dry_run_session, run_scan
 from signalbench.live.start import LIVE_CONFIG, start_live
 from signalbench.live.status import scan_stale_message, scan_status_lines
 from signalbench.live.tax import tax_csv, tax_text
-from signalbench.live.telegram_bot import build_application
+from signalbench.live.telegram_bot import build_application, redact_logs
 from signalbench.market.calendar import HISTORY_START, CboeCanadaSessions, NyseSessions
 from signalbench.market.legal_close import LegalCloses
 from signalbench.paper.lock import advisory_lock
@@ -1019,7 +1019,7 @@ def scan(
                 allow_any_commit=allow_any_commit,
             )
     except Exception as error:  # noqa: BLE001  # e.g. the database is down: no run row to mark
-        typer.echo(f"ERROR: {type(error).__name__}: {_first_line(error)}", err=True)
+        typer.echo(f"ERROR: {type(error).__name__}: {redact(_first_line(error), token)}", err=True)
         raise typer.Exit(1) from None
     finally:
         messenger.close()
@@ -1087,7 +1087,9 @@ def scan_status(
 def bot_run() -> None:
     """Poll Telegram for the owner's commands and button presses until stopped."""
     token, chat = _telegram()
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    log_format = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+    logging.basicConfig(level=logging.INFO, format=log_format)
+    redact_logs(token, log_format)  # the token never reaches the log or the toast
     logging.getLogger("httpx").setLevel(logging.WARNING)  # its request lines show the token
 
     def beat() -> None:
@@ -1097,4 +1099,10 @@ def bot_run() -> None:
     brain = BotBrain(chat_id=chat, sessions=get_session, calendar=NyseSessions(), clock=_now,
                      next_run=_next_scan_run)
     typer.echo("bot: polling Telegram; only TELEGRAM_CHAT_ID is answered")
-    build_application(token, brain, beat).run_polling(allowed_updates=["message", "callback_query"])
+    try:
+        build_application(token, brain, beat).run_polling(
+            allowed_updates=["message", "callback_query"]
+        )
+    except Exception as error:  # noqa: BLE001  # one redacted line for the log and the toast
+        typer.echo(f"ERROR: {type(error).__name__}: {redact(_first_line(error), token)}", err=True)
+        raise typer.Exit(1) from None

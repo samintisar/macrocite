@@ -83,7 +83,9 @@ def test_breakout_fill_raise_stop_hit_and_sale(session: Session, tmp_path: Path)
     # D+6: ✅ Sold, "9.70": the position closes with the right P&L, ACB, and R.
     bot = bot_brain(world, B + 6)
     bot.handle_callback(OWNER, f"x:{alert.id}", alert_message.message_id, alert_message.text)
-    [sold, _] = bot.handle_text(OWNER, "9.70")
+    [check] = bot.handle_text(OWNER, "9.70")
+    assert check.text == "Sell ALL 3 units ZNVD @ C$9.70 on 2026-10-13?"
+    [sold, _, _] = bot.handle_callback(OWNER, "ok:1", 99, check.text)
     assert sold.text == (
         "✅ Sold 3 units ZNVD @ C$9.70 on 2026-10-13 (fill 2). Position closed: P&L −C$2.25 · "
         "−1.88R on planned risk."

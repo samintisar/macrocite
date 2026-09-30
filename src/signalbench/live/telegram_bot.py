@@ -4,6 +4,10 @@ One handler takes every update to `BotBrain` (live/bot.py) and carries its repli
 new messages, or edits of the message whose button was pressed. Only the owner's chat is
 answered. A background task checks that Telegram answers and then writes the heartbeat every
 five minutes, so the evening scan notices a bot that is down without exiting.
+
+Each command or reply is passed with its Telegram `update_id`, so one delivered again after a
+crash is not recorded twice (live/bot.py). `redact_logs` keeps the bot token out of every log
+line, tracebacks included.
 """
 
 import asyncio
@@ -17,7 +21,7 @@ from telegram.ext import Application, ApplicationBuilder, ContextTypes, TypeHand
 from telegram.request import BaseRequest
 
 from signalbench.live.bot import BotBrain, Reply
-from signalbench.live.messenger import chunks, keyboard
+from signalbench.live.messenger import chunks, keyboard, redact
 
 HEARTBEAT_SECONDS = 300.0  # at least every 10 minutes while polling (spec 05)
 log = logging.getLogger(__name__)
@@ -54,12 +58,30 @@ async def handle_update(update: Update, brain: BotBrain, bot: Bot) -> None:
         replies = brain.handle_callback(
             chat.id, query.data or "", 0 if message is None else message.message_id,
             "" if message is None or message.text is None else message.text,
+            update.update_id,
         )
     elif update.message is not None and update.message.text:
-        replies = brain.handle_text(chat.id, update.message.text)
+        replies = brain.handle_text(chat.id, update.message.text, update.update_id)
     else:
         return
     await send_replies(bot, chat.id, replies)
+
+
+class RedactingFormatter(logging.Formatter):
+    """A formatter whose lines, tracebacks included, never show the bot token."""
+
+    def __init__(self, token: str, fmt: str | None = None) -> None:
+        super().__init__(fmt)
+        self._token = token
+
+    def format(self, record: logging.LogRecord) -> str:
+        return redact(super().format(record), self._token)
+
+
+def redact_logs(token: str, fmt: str | None = None) -> None:
+    """Every root log handler formats through RedactingFormatter."""
+    for handler in logging.getLogger().handlers:
+        handler.setFormatter(RedactingFormatter(token, fmt))
 
 
 async def beat_once(bot: Bot, write: Callable[[], None]) -> bool:

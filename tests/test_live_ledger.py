@@ -161,3 +161,17 @@ def test_a_bad_cash_movement_is_refused(
 ) -> None:
     with pytest.raises(LedgerError, match=message):
         ledger.record_cash(amount, day, "note")
+
+
+def test_a_withdrawal_may_not_overdraw_cash_from_its_date_on_unless_forced(
+    ledger: Ledger, caplog: pytest.LogCaptureFixture
+) -> None:
+    ledger.record_cash(Decimal("100.00"), DAY, "deposit")
+    _buy(ledger, "2", "30.00", date(2026, 5, 6))  # cash 40 from May 6
+    with pytest.raises(LedgerError, match=r"takes cash to C\$-10.00"):
+        ledger.record_cash(Decimal("-50.00"), date(2026, 5, 5), "backdated withdrawal")
+    assert ledger.cash() == Decimal(40)
+    with caplog.at_level(logging.WARNING, logger="signalbench.live.book"):
+        ledger.record_cash(Decimal("-50.00"), date(2026, 5, 5), "forced", force=True)
+    assert ledger.cash() == Decimal(-10)
+    assert caplog.messages == ["forced withdrawal: C$50.00 on 2026-05-05 takes cash to C$-10.00"]

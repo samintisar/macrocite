@@ -14,7 +14,7 @@ def _script() -> ScriptDirectory:
 
 
 def test_migrations_have_single_head() -> None:
-    assert _script().get_heads() == ["0015_scan_holds"]
+    assert _script().get_heads() == ["0016_bot_updates"]
 
 
 def test_0007_drops_sentiment_tables_and_enum() -> None:
