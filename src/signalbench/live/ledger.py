@@ -5,10 +5,11 @@ Built in layers: live/book.py (fills, cash, voids, signals, exit alerts), then l
 the scale-up check).
 """
 
-from signalbench.live.book import LedgerBook, LedgerError
+from signalbench.live.book import LedgerError
+from signalbench.live.levels import LedgerLevels
 
 __all__ = ["Ledger", "LedgerError"]
 
 
-class Ledger(LedgerBook):
+class Ledger(LedgerLevels):
     """Everything derived from what the owner did on Wealthsimple."""

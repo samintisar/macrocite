@@ -1,5 +1,6 @@
 """Shared by the spec 04 ledger tests: the hand-checked examples, tickers, prices, a ledger."""
 
+from collections.abc import Sequence
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -9,7 +10,7 @@ import yaml
 from sqlmodel import Session
 
 from paper_helpers import evening
-from signalbench.db.models import Ticker, TickerKind, TradeSignal
+from signalbench.db.models import Price, Ticker, TickerKind, TradeSignal
 from signalbench.live.acb import SplitEvent, Trade
 from signalbench.live.ledger import Ledger
 from strategy_helpers import WeekdaySessions
@@ -95,3 +96,23 @@ def send_signal(
         suggested_units=Decimal(units), order_type="limit", risk_amount_cad=Decimal("2.40"),
         explanation="Closed at a 20-session high.", expires_at=evening(entry, 16),
     )
+
+
+def add_prices(
+    session: Session,
+    ticker: Ticker,
+    days: Sequence[date],
+    closes: Sequence[float],
+    *,
+    volume: int = 1_000_000,
+    volumes: Sequence[int] | None = None,
+) -> None:
+    """Stored bars: open = close, high = close + 1, low = close - 1, adj_close = close."""
+    for index, (day, close) in enumerate(zip(days, closes, strict=True)):
+        value = Decimal(str(close))
+        session.add(
+            Price(ticker_id=ticker.id, date=day, open=value, high=value + 1, low=value - 1,
+                  close=value, adj_close=value,
+                  volume=volume if volumes is None else volumes[index])
+        )
+    session.commit()
