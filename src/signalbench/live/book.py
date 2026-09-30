@@ -11,10 +11,11 @@ Ids are integers: the owner types `/void 12`, and Telegram button data is capped
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, time
 from decimal import ROUND_HALF_UP, Decimal
-from typing import Literal
+from typing import Literal, get_args
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from sqlmodel import Session, col, select
 
@@ -46,9 +47,12 @@ SplitKind = Literal["us_split", "cdr_split"]
 SplitSource = Literal["yfinance", "owner"]
 OrderType = Literal["limit", "market"]
 
+NEW_YORK = ZoneInfo("America/New_York")
+MARKET_CLOSE = time(16, 0)  # a signal expires at the close of its entry session
 QUANTITY_STEP = Decimal("0.000001")  # units: 6 decimals, as stored
 PRICE_STEP = Decimal("0.0001")  # prices, fees, and stops: 4 decimals, as stored
 CENT = Decimal("0.01")
+STOP_PCT_STEP = Decimal("0.00000001")
 ZERO = Decimal(0)
 
 log = logging.getLogger(__name__)
@@ -107,6 +111,27 @@ class Episode:
         """Cash in minus cash out over the episode, fees included (the realized P&L once
         closed). Splits move no cash, so they never change it."""
         return sum((_cash_effect(fill) for fill in self.fills), ZERO)
+
+
+@dataclass(frozen=True)
+class ClosedTrade:
+    """A position that went back to 0 units. R only for managed ones."""
+
+    episode: Episode
+    cdr_symbol: str
+    opened_on: date
+    closed_on: date
+    pnl: Decimal  # CAD, after fees
+    planned_risk: Decimal | None  # CAD: signal-linked buy units x (cdr_signal_close - cdr_stop)
+    r: Decimal | None  # pnl / planned_risk: R on planned risk (spec 02)
+
+
+def signal_stop(
+    us_signal_close: Decimal, us_stop: Decimal, cdr_signal_close: Decimal
+) -> tuple[Decimal, Decimal]:
+    """(stop_pct, cdr_stop): the US stop's distance, applied to the CDR close (spec 05)."""
+    stop_pct = ((us_signal_close - us_stop) / us_signal_close).quantize(STOP_PCT_STEP)
+    return stop_pct, q4(cdr_signal_close * (1 - stop_pct))
 
 
 def episodes(fills: Sequence[Fill], splits: Sequence[CorporateAction]) -> list[Episode]:
@@ -422,3 +447,170 @@ class LedgerBook:
             )
             for cdr_id in self._held_cdr_ids()
         }
+
+    # --- Signals and exit alerts (written by the evening scan, spec 05) --------------------
+
+    def record_signal(
+        self,
+        *,
+        as_of: date,
+        us_symbol: str,
+        cdr_symbol: str,
+        us_signal_close: Decimal,
+        us_stop: Decimal,
+        cdr_signal_close: Decimal,
+        suggested_units: Decimal,
+        order_type: OrderType,
+        risk_amount_cad: Decimal,
+        explanation: str,
+        expires_at: datetime,
+    ) -> TradeSignal:
+        """A sent entry signal. stop_pct and cdr_stop are derived here (signal_levels())."""
+        us = self._ticker(us_symbol, TickerKind.us_stock)
+        cdr = self._cdr(cdr_symbol)
+        if cdr.us_ticker_id != us.id:
+            raise LedgerError(f"{cdr_symbol} is not the CDR of {us_symbol}")
+        check_choice(order_type, get_args(OrderType), "order type")
+        if not 0 < us_stop < us_signal_close or cdr_signal_close <= 0 or suggested_units <= 0:
+            raise LedgerError("a signal needs 0 < stop < close, a CDR close, and units above 0")
+        taken = self._session.exec(
+            select(TradeSignal).where(
+                TradeSignal.as_of == as_of, TradeSignal.us_symbol == us_symbol,
+                TradeSignal.setup == "breakout",
+            )
+        ).first()
+        if taken is not None:
+            raise LedgerError(f"a {us_symbol} signal for {as_of} is already recorded ({taken.id})")
+        stop_pct, cdr_stop = signal_stop(us_signal_close, us_stop, cdr_signal_close)
+        signal = TradeSignal(
+            as_of=as_of, us_symbol=us_symbol, cdr_ticker_id=cdr.id,
+            us_signal_close=q4(us_signal_close), us_stop=q4(us_stop), stop_pct=stop_pct,
+            cdr_signal_close=q4(cdr_signal_close), cdr_stop=cdr_stop,
+            suggested_units=suggested_units.quantize(QUANTITY_STEP), order_type=order_type,
+            risk_amount_cad=q4(risk_amount_cad), explanation=explanation, expires_at=expires_at,
+        )
+        self._session.add(signal)
+        self._session.commit()
+        self._session.refresh(signal)
+        return signal
+
+    def mark_signal(
+        self, signal_id: int, status: SignalStatus, skip_reason: SignalSkip | None = None
+    ) -> TradeSignal:
+        """A sent signal becomes skipped (with a reason), expired, or withdrawn. `taken` is
+        set by record_fill."""
+        signal = self.signal(signal_id)
+        check_choice(status, ("skipped", "expired", "withdrawn"), "status")
+        if signal.status != "sent":
+            raise LedgerError(f"signal {signal_id} is already {signal.status}")
+        if (status == "skipped") != (skip_reason is not None):
+            raise LedgerError("a skip, and only a skip, needs a skip reason")
+        if skip_reason is not None:
+            check_choice(skip_reason, get_args(SignalSkip), "skip reason")
+        signal.status = status
+        signal.skip_reason = skip_reason
+        self._session.add(signal)
+        self._session.commit()
+        self._session.refresh(signal)
+        return signal
+
+    def pending_signals(self, as_of: date) -> list[TradeSignal]:
+        """Signals sent before `as_of` that are still `sent` and expire at or after its close:
+        they hold slots (spec 04). A signal expires at the close of its entry session, so on
+        that session's evening it still holds its slot: the owner may have bought without
+        reporting it yet, as the backtest's entry would already be a position."""
+        close = datetime.combine(as_of, MARKET_CLOSE, tzinfo=NEW_YORK)
+        rows = self._session.exec(
+            select(TradeSignal)
+            .where(TradeSignal.status == "sent", col(TradeSignal.as_of) < as_of)
+            .order_by(col(TradeSignal.id))
+        ).all()
+        return [s for s in rows if s.expires_at >= close]
+
+    def record_exit_alert(
+        self, *, signal_id: int, as_of: date, reason: AlertReason, late: bool = False
+    ) -> ExitAlert:
+        """A stop or earnings exit for the open managed position of `signal_id`. One `sent`
+        alert per position at a time."""
+        check_choice(reason, get_args(AlertReason), "reason")
+        signal = self.signal(signal_id)
+        if self._open_episode(signal) is None:
+            raise LedgerError(f"signal {signal_id} has no open position")
+        if self.open_exit_alert(signal_id) is not None:
+            raise LedgerError(f"signal {signal_id} already has an open exit alert")
+        alert = ExitAlert(
+            signal_id=signal_id, cdr_ticker_id=signal.cdr_ticker_id, as_of=as_of, reason=reason,
+            late=late,
+        )
+        self._session.add(alert)
+        self._session.commit()
+        self._session.refresh(alert)
+        return alert
+
+    def open_exit_alert(self, signal_id: int) -> ExitAlert | None:
+        return self._session.exec(
+            select(ExitAlert).where(ExitAlert.signal_id == signal_id, ExitAlert.status == "sent")
+        ).first()
+
+    def mark_exit_alert(self, alert_id: int, status: AlertStatus) -> ExitAlert:
+        """A sent alert becomes done or ignored. After `ignored`, the position is managed
+        again from the next session."""
+        alert = self.exit_alert(alert_id)
+        check_choice(status, ("done", "ignored"), "status")
+        if alert.status != "sent":
+            raise LedgerError(f"exit alert {alert_id} is already {alert.status}")
+        alert.status = status
+        self._session.add(alert)
+        self._session.commit()
+        self._session.refresh(alert)
+        return alert
+
+    # --- Positions over time ----------------------------------------------------------------
+
+    def _episodes(self, cdr_id: UUID, through: date | None = None) -> list[Episode]:
+        splits = self._actions("cdr_split", cdr_id=cdr_id)
+        if through is not None:
+            splits = [s for s in splits if s.ex_date <= through]
+        return episodes(self._fills(cdr_id, through), splits)
+
+    def _open_episode(self, signal: TradeSignal) -> Episode | None:
+        for episode in self._episodes(signal.cdr_ticker_id):
+            if episode.signal_id == signal.id and episode.closed_on is None:
+                return episode
+        return None
+
+    def open_episodes(self) -> list[Episode]:
+        """Every open position today, managed and manual, by CDR symbol."""
+        found: list[tuple[str, Episode]] = []
+        for cdr_id in self._held_cdr_ids():
+            episodes_ = self._episodes(cdr_id)
+            if episodes_ and episodes_[-1].closed_on is None:
+                found.append((self._by_id(cdr_id).symbol, episodes_[-1]))
+        return [episode for _, episode in sorted(found, key=lambda pair: pair[0])]
+
+    def closed_trades(self) -> list[ClosedTrade]:
+        """Every position that went back to 0 units, oldest close first."""
+        trades: list[ClosedTrade] = []
+        for cdr_id in self._held_cdr_ids():
+            cdr = self._by_id(cdr_id)
+            for episode in self._episodes(cdr_id):
+                if episode.closed_on is None:
+                    continue
+                planned = r = None
+                if episode.signal_id is not None:
+                    signal = self.signal(episode.signal_id)
+                    units = sum(
+                        (f.quantity for f in episode.fills
+                         if f.side == "buy" and f.signal_id == signal.id),
+                        ZERO,
+                    )
+                    planned = units * (signal.cdr_signal_close - signal.cdr_stop)
+                    r = episode.pnl() / planned
+                trades.append(
+                    ClosedTrade(
+                        episode=episode, cdr_symbol=cdr.symbol,
+                        opened_on=episode.opening.trade_date, closed_on=episode.closed_on,
+                        pnl=episode.pnl(), planned_risk=planned, r=r,
+                    )
+                )
+        return sorted(trades, key=lambda t: (t.closed_on, t.episode.fills[-1].id or 0))

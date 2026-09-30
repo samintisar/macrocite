@@ -8,7 +8,8 @@ from typing import Any
 import yaml
 from sqlmodel import Session
 
-from signalbench.db.models import Ticker, TickerKind
+from paper_helpers import evening
+from signalbench.db.models import Ticker, TickerKind, TradeSignal
 from signalbench.live.acb import SplitEvent, Trade
 from signalbench.live.ledger import Ledger
 from strategy_helpers import WeekdaySessions
@@ -72,3 +73,25 @@ def record_example(ledger: Ledger, example: dict[str, Any], symbol: str = "ZTST"
             price_cad=Decimal(event["price"]), trade_date=event["date"],
             fee_cad=Decimal(event.get("fee", "0")),
         )
+
+
+def send_signal(
+    ledger: Ledger,
+    as_of: date,
+    *,
+    us: str = "NVDA",
+    cdr: str = "ZNVD",
+    us_close: str = "200",
+    us_stop: str = "188",
+    cdr_close: str = "40",
+    units: str = "1",
+) -> TradeSignal:
+    """A sent signal: stop_pct 6%, so cdr_stop 37.60 with the defaults. It expires at 16:00
+    New York on the next weekday (its entry session)."""
+    entry = WeekdaySessions().next_sessions(as_of, 1)[0]
+    return ledger.record_signal(
+        as_of=as_of, us_symbol=us, cdr_symbol=cdr, us_signal_close=Decimal(us_close),
+        us_stop=Decimal(us_stop), cdr_signal_close=Decimal(cdr_close),
+        suggested_units=Decimal(units), order_type="limit", risk_amount_cad=Decimal("2.40"),
+        explanation="Closed at a 20-session high.", expires_at=evening(entry, 16),
+    )
