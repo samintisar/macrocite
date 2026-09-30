@@ -484,3 +484,34 @@ class LiveRiskState(SQLModel, table=True):
     scale_up_history: list[dict[str, Any]] = Field(
         default_factory=list, sa_column=Column(JSON, nullable=False)
     )
+
+
+class ScanRun(SQLModel, table=True):
+    """One `signalbench scan` (spec 05). `running` until it ends; a scan killed or crashed
+    leaves it `running`, and the next scan marks it failed once it is two hours old."""
+
+    __tablename__ = "scan_runs"
+
+    id: int | None = Field(default=None, primary_key=True)
+    as_of: date  # the target session
+    started_at: datetime = Field(sa_column=Column(UTCDateTime(), nullable=False))
+    finished_at: datetime | None = Field(
+        default=None, sa_column=Column(UTCDateTime(), nullable=True)
+    )
+    status: str  # running | ok | failed
+    failed_step: int | None = None  # 1-11 (spec 05, Evening scan)
+    error: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    warnings: list[str] = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
+    counts: dict[str, int] = Field(default_factory=dict, sa_column=Column(JSON, nullable=False))
+    git_sha: str | None = None  # HEAD of the code that ran (None when git itself failed)
+    git_dirty: bool | None = None  # tracked code had uncommitted changes: the scan was refused
+    config_sha256: str | None = None  # the live config's, once step 1 has checked it
+
+
+class BotHeartbeat(SQLModel, table=True):
+    """The bot's last sign of life (spec 05): one row, rewritten at least every 10 minutes."""
+
+    __tablename__ = "bot_heartbeat"
+
+    id: int = Field(default=1, primary_key=True, sa_column_kwargs={"autoincrement": False})
+    beat_at: datetime = Field(sa_column=Column(UTCDateTime(), nullable=False))

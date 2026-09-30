@@ -14,7 +14,7 @@ def _script() -> ScriptDirectory:
 
 
 def test_migrations_have_single_head() -> None:
-    assert _script().get_heads() == ["0013_live_ledger"]
+    assert _script().get_heads() == ["0014_scan_runs"]
 
 
 def test_0007_drops_sentiment_tables_and_enum() -> None:
@@ -67,3 +67,10 @@ def test_0013_creates_the_nine_ledger_tables() -> None:
         assert f'op.create_table(\n        "{table}"' in text
     assert "postgresql_where=sa.text(\"reason = 'trail'\")" in text
     assert 'sa.Column("amount_cad", sa.Numeric(12, 2), nullable=False)' in text
+
+
+def test_0014_creates_scan_runs_and_the_bot_heartbeat() -> None:
+    text = (VERSIONS / "0014_scan_runs.py").read_text(encoding="utf-8")
+    assert 'down_revision: str | None = "0013_live_ledger"' in text
+    for table in ("scan_runs", "bot_heartbeat"):
+        assert f'op.create_table(\n        "{table}"' in text
