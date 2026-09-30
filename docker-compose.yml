@@ -1,6 +1,7 @@
 services:
   postgres:
     image: postgres:16
+    restart: unless-stopped  # spec 05: back after a reboot, for the scheduled scan and the bot
     environment:
       POSTGRES_USER: signalbench
       POSTGRES_PASSWORD: signalbench
