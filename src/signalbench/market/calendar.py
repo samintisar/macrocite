@@ -25,10 +25,13 @@ class Sessions(Protocol):
 class NyseSessions:
     """The XNYS calendar from exchange_calendars, exposed as `datetime.date` values."""
 
+    CODE = "XNYS"
+    NAME = "NYSE"
+
     def __init__(self, start: date = HISTORY_START) -> None:
         import exchange_calendars as xcals
 
-        self._calendar: Any = xcals.get_calendar("XNYS", start=start.isoformat())
+        self._calendar: Any = xcals.get_calendar(self.CODE, start=start.isoformat())
         self._first: date = self._calendar.first_session.date()
 
     def sessions_between(self, start: date, end: date) -> list[date]:
@@ -42,7 +45,9 @@ class NyseSessions:
         horizon = day + timedelta(days=2 * count + 10)
         found = self.sessions_between(day + timedelta(days=1), horizon)
         if len(found) < count:
-            raise ValueError(f"Only {len(found)} NYSE sessions known after {day}; need {count}")
+            raise ValueError(
+                f"Only {len(found)} {self.NAME} sessions known after {day}; need {count}"
+            )
         return found[:count]
 
     def is_session(self, day: date) -> bool:
@@ -54,3 +59,11 @@ class NyseSessions:
             return []
         closes = self._calendar.closes.loc[start.isoformat() : end.isoformat()]
         return [(stamp.date(), close.to_pydatetime()) for stamp, close in closes.items()]
+
+
+class CboeCanadaSessions(NyseSessions):
+    """Cboe Canada, where the CDRs trade (spec 05). exchange_calendars has no Cboe Canada
+    calendar, so Toronto's XTSE stands in for it: the same holidays and hours."""
+
+    CODE = "XTSE"
+    NAME = "Cboe Canada"
