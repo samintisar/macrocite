@@ -25,6 +25,7 @@ from paper_helpers import evening, git
 from signalbench.db.models import LiveConfig, Price, Ticker
 from signalbench.ingest.cdr import CdrEntry
 from signalbench.ingest.prices import Split
+from signalbench.live.bot import BotBrain
 from signalbench.live.heartbeat import write_heartbeat
 from signalbench.live.ledger import Ledger
 from signalbench.live.messenger import FakeMessenger, Messenger
@@ -179,3 +180,15 @@ def rescale(session: Session, symbol: str, ratio: float) -> None:
         row.close, row.adj_close = row.close / factor, row.adj_close / factor
         session.add(row)
     session.commit()
+
+
+OWNER = 4242  # the owner's chat: TELEGRAM_CHAT_ID
+
+
+def bot_brain(world: World, index: int = B + 1, hour: int = 10) -> BotBrain:
+    """The bot's brain on `index`'s New York date (by default the session after the signal)."""
+    return BotBrain(
+        chat_id=OWNER, sessions=lambda: Session(world.session.get_bind()),
+        calendar=WeekdaySessions(), clock=lambda: evening(DAYS[index], hour),
+        next_run=lambda: "2026-10-06 15:00 (local)",
+    )
