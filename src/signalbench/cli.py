@@ -1,6 +1,7 @@
 import uuid
 from collections.abc import Callable
 from datetime import UTC, date, datetime
+from decimal import Decimal, InvalidOperation
 from enum import Enum
 from pathlib import Path
 from typing import Annotated
@@ -83,6 +84,10 @@ from signalbench.jev.store import (
     reading_builds,
     resolved_builds,
 )
+from signalbench.live.book import LedgerError, SplitKind
+from signalbench.live.ledger import Ledger
+from signalbench.live.start import LIVE_CONFIG, start_live
+from signalbench.live.tax import tax_csv, tax_text
 from signalbench.market.calendar import HISTORY_START, NyseSessions
 from signalbench.market.legal_close import LegalCloses
 from signalbench.paper.lock import advisory_lock
@@ -102,6 +107,7 @@ REPORTS_DIR = REPO_ROOT / "reports" / "backtests"
 JEV_REPORTS_DIR = REPO_ROOT / "reports" / "jev"
 PAPER_V1_PATH = REPO_ROOT / "data" / "paper_v1.yaml"
 PAPER_REPORTS_DIR = REPO_ROOT / "reports" / "paper"
+LIVE_CONFIG_PATH = REPO_ROOT / LIVE_CONFIG
 STALE_EXIT = 3  # `paper status --stale-after-days`: no ok paper run for too long
 JEV_CONCURRENCY = 4
 NEW_YORK = ZoneInfo("America/New_York")
@@ -826,3 +832,92 @@ def paper_status(
     if stale is not None:
         typer.echo(stale, err=True)
         raise typer.Exit(STALE_EXIT)
+
+
+live_app = typer.Typer(help="The one live strategy, v2-none-cash (spec 04).")
+app.add_typer(live_app, name="live")
+ledger_app = typer.Typer(help="The live ledger: the tax report and split corrections (spec 04).")
+app.add_typer(ledger_app, name="ledger")
+
+
+def _ledger(session: Session) -> Ledger:
+    return Ledger(session, calendar=NyseSessions(), today=_now().date())
+
+
+@live_app.command("start")
+def live_start() -> None:
+    """Freeze data/strategy_v2-none-cash.yaml as the live config. Runs once."""
+    try:
+        with get_session() as session:
+            row = start_live(
+                session, repo=REPO_ROOT, config_path=LIVE_CONFIG_PATH,
+                survey_path=SPREAD_SURVEY_PATH, today=_now().date(),
+            )
+            line = (
+                f"live config: {row.config_path} | config_sha256 {row.config_sha256[:12]} | "
+                f"started {row.started_on} | code {row.start_git_sha[:12]}"
+            )
+    except (ValueError, yaml.YAMLError) as error:  # LiveRefusedError, RunRefusedError, ConfigError
+        typer.echo(" ".join(str(error).split()), err=True)
+        raise typer.Exit(1) from None
+    typer.echo(line)
+
+
+@ledger_app.command("tax")
+def ledger_tax(
+    year: Annotated[int, typer.Argument(help="The tax year, e.g. 2026.")],
+    csv_path: Annotated[
+        Path | None, typer.Option("--csv", help="Also write every disposition to this CSV.")
+    ] = None,
+) -> None:
+    """The year's ACB report: dispositions, superficial losses, and CDR splits."""
+    with get_session() as session:
+        report = _ledger(session).tax_report(year)
+    for line in tax_text(report):
+        typer.echo(line)
+    if csv_path is not None:
+        csv_path.write_text(tax_csv(report), encoding="utf-8")
+        typer.echo(f"csv: {csv_path}")
+
+
+@ledger_app.command("split")
+def ledger_split(
+    symbol: Annotated[str, typer.Argument(help="A CDR (ZNVD) or a US symbol (NVDA).")],
+    ratio: Annotated[str, typer.Argument(help="New units per old unit: 2 for a 2-for-1.")],
+    ex_date: Annotated[str, typer.Argument(help="The ex-date, YYYY-MM-DD.")],
+) -> None:
+    """Record a split yfinance missed (source owner)."""
+    try:
+        new_per_old, day = Decimal(ratio), date.fromisoformat(ex_date)
+    except (InvalidOperation, ValueError):
+        typer.echo("RATIO must be a number and EX_DATE a YYYY-MM-DD date.", err=True)
+        raise typer.Exit(2) from None
+    try:
+        with get_session() as session:
+            cdr = session.exec(
+                select(Ticker).where(Ticker.symbol == symbol, Ticker.kind == TickerKind.cdr)
+            ).first()
+            kind: SplitKind = "us_split" if cdr is None else "cdr_split"
+            action = _ledger(session).record_split(
+                kind=kind, symbol=symbol, ex_date=day, ratio=new_per_old, source="owner"
+            )
+            line = f"corporate action {action.id}: {symbol} {kind} {ratio}-for-1, ex-date {day}"
+    except LedgerError as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(1) from None
+    typer.echo(line)
+
+
+@ledger_app.command("void-action")
+def ledger_void_action(
+    action_id: Annotated[int, typer.Argument(help="The corporate action's id.")],
+    reason: Annotated[str, typer.Argument(help="Why it is wrong.")],
+) -> None:
+    """Void a wrong split; its stop rows are undone by new split rows."""
+    try:
+        with get_session() as session:
+            _ledger(session).void_corporate_action(action_id, reason)
+    except LedgerError as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(1) from None
+    typer.echo(f"corporate action {action_id} voided: {reason}")
