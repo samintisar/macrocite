@@ -1,6 +1,6 @@
 # Spec 05 — Telegram Bot and Evening Scan
 
-**Parent:** [Overview](2026-09-22-swing-assistant-00-overview.md) · **Depends on:** spec 01 (ingest), spec 02 (`decide()`), spec 04 (ledger), spec 06 (`data/strategy_v2-none-cash.yaml`), and spec 07 (code only: the safe price ingest, the earnings-calendar ingest, split detection, and the pinned-worktree script with its toast; paper trading was never started).
+**Parent:** [Overview](2026-09-22-swing-assistant-00-overview.md) · **Depends on:** spec 01 (ingest), spec 02 (`decide()`), spec 04 (ledger), spec 06 (`data/strategy_v2-none-cash.yaml`), and code first written for spec 07 (the safe price ingest, the earnings-calendar ingest, split detection, and the pinned-worktree script with its toast; paper trading itself was never started and was removed on 2026-09-30).
 **Live strategy:** only `data/strategy_v2-none-cash.yaml`, Breakout only, produces entries. The file is frozen by spec 04's `live_config` row.
 **Goal:** Run the evening scan on the owner's PC; deliver entries, stop raises, exits, and a summary to Telegram; and take fills back through buttons and commands.
 
@@ -132,13 +132,13 @@ Symbols are CDR symbols. The bot resolves US symbols to their CDR when they're u
 - `python-telegram-bot` (async), long polling. Confirm the current major version and API in the plan with ctx7.
 - **Allowlist:** only `TELEGRAM_CHAT_ID`. Updates from any other chat are ignored with no reply, and logged.
 - A `Messenger` protocol (`send(text, buttons) -> message_id`, `edit(message_id, text, buttons)`), with `TelegramMessenger` and `FakeMessenger`. The scan sends through the Bot API. Button presses and commands are handled only by the bot process.
-- **Pinned worktree** (spec 07's pattern for `scripts/paper_nightly.ps1`):
+- **Pinned worktree** (first written for spec 07's nightly paper script, since removed):
   - Both scheduled tasks run a git worktree checked out at a tag (`live-v1`), so the code that trades changes only by a deliberate checkout of a new tag.
   - `.env` is not tracked, so the scripts load the main checkout's `.env` (`-RepoRoot`, `-EnvFile`). The environment wins, and values are never logged.
   - The scripts run `uv run --frozen signalbench scan` or `uv run --frozen signalbench bot run`, and append their output to `logs/scan-<yyyy-MM>.log` or `logs/bot-<yyyy-MM>.log` (git-ignored).
   - Each scan records its code version (`scan_runs.git_sha`, `git_dirty`). Step 1 refuses a dirty tree.
   - Migrations are run by hand, once, before the tasks are registered.
-- **Scripts:** `scripts/live_scan.ps1` and `scripts/live_bot.ps1` share the `.env` loading and toast code with `paper_nightly.ps1`, and need Windows PowerShell 5.1 for the toast.
+- **Scripts:** `scripts/live_scan.ps1` and `scripts/live_bot.ps1` share the `.env` loading and toast code in `scripts/lib/SignalBench.ps1`, and need Windows PowerShell 5.1 for the toast.
   - **Scan failure:** on a non-zero exit, `live_scan.ps1` shows a toast ("SignalBench scan failed: <first line of the error>"). The scan has already sent its ⚠️ Telegram message when it could.
   - **Stale scan:** before each run, the script checks `signalbench scan status --stale-after-days 3` (exit 3) and shows a toast when the last `ok` scan is more than 3 days old. The check never stops the run.
   - **Bot:** `live_bot.ps1` shows a toast when the bot exits with an error.
@@ -229,3 +229,4 @@ Jev, Claude or any LLM explanation, other strategies or setups, automatic order 
   - **Withdrawals:** `/withdraw` refuses to take cash below 0 unless `force`; the peak moves with cash movements (spec 04), so a withdrawal alone never pauses.
   - **Pinned code:** step 1 also refuses a HEAD that is neither `live_config.start_git_sha` nor a `live-v*` tag (`--allow-any-commit` for development).
   - **Late runs:** entries sent after their session opened are marked "late — check the price before placing", with their buttons.
+- 2026-09-30: paper trading removed (plan `2026-09-30-remove-paper-trading.md`): `paper_nightly.ps1` is gone; the scan's advisory lock is `signalbench/db/lock.py`, and its earnings-calendar ingest is `_ingest_calendar_earnings`.

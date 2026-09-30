@@ -1,6 +1,6 @@
 # Spec 04 — Ledger
 
-**Parent:** [Overview](2026-09-22-swing-assistant-00-overview.md) · **Depends on:** spec 01 (CDR tickers, CDR prices), spec 02 (`decide()`, `PortfolioState`), spec 06 (`data/strategy_v2-none-cash.yaml` and `time_limit: null`), and spec 07 (code only: split detection and the earnings-calendar ingest; paper trading was never started).
+**Parent:** [Overview](2026-09-22-swing-assistant-00-overview.md) · **Depends on:** spec 01 (CDR tickers, CDR prices), spec 02 (`decide()`, `PortfolioState`), spec 06 (`data/strategy_v2-none-cash.yaml` and `time_limit: null`), and code first written for spec 07 (split detection and the earnings-calendar ingest; paper trading itself was never started and was removed on 2026-09-30).
 **Live strategy:** `data/strategy_v2-none-cash.yaml`, Breakout only. It is the one strategy traded live (owner decision, overview changelog 2026-09-29).
 **Goal:** Record what the owner actually did on Wealthsimple. From that alone, derive positions, cash, equity, peak, the pause state, each managed position's stop, the scale-up check, and a CRA-style cost base (ACB) report. Nothing here is typed in as a total. Every number is computed from fills, cash movements, and corporate actions.
 
@@ -23,7 +23,7 @@
 
 ## Tables (migration `0013_live_ledger`)
 
-`0011` (Jev readings) and `0012` (paper trading) are already in the tree; `0013` sits on top of them. Spec 05's `scan_runs` is migration `0014`.
+`0011` (Jev readings) is the last migration before this one; `0012` (paper trading) was removed on 2026-09-30 without ever being applied, so `0013` revises `0011`. Spec 05's `scan_runs` is migration `0014`.
 
 All money is CAD, stored as `Numeric`, and computed with `Decimal`. US-equivalent levels are USD, stored as `Numeric(12, 4)`.
 
@@ -232,9 +232,10 @@ class Ledger:
   - **Pending signals** hold their slot through the close of their entry session (the owner may have bought and not reported it yet).
   - **Money:** prices, fees, and stops are stored at 4 decimals and quantities at 6; more decimals are refused, not rounded. Equity snapshots are rounded to 4 decimals before the peak and pause use them; the tax report rounds to the cent. A position with no stored CDR price is valued at its ACB.
   - **Fills:** on one trade date, fills replay in the order recorded, after a split with that ex-date. The no-margin check is the running cash from the buy on. A void that would leave a later sale oversold is refused (record the corrected fill first). A buy may link to a `sent` or `expired` signal (then `taken`), not to a skipped or withdrawn one.
-  - **`live start`** also refuses uncommitted tracked code, like `paper start`, so `start_git_sha` names the code that ran.
+  - **`live start`** also refuses uncommitted tracked code, like `paper start` did, so `start_git_sha` names the code that ran.
 - 2026-09-30: review fixes before real money (owner-approved; spec 05 has the scan and bot side):
   - **Peak:** each earlier snapshot is adjusted by the cash movements after it (+ deposits, − withdrawals), so a withdrawal alone never looks like a drawdown or pauses; the pause review no longer lists withdrawals.
   - **Withdrawals:** `record_cash` refuses a withdrawal that takes the running cash below 0 from its date on, unless `force` (logged).
   - **Pending cash:** a pending signal's `planned_cost` is `suggested_units × limit`, not × the close.
   - **Scale check:** the CDR side compares the CDR mark of the signal's `as_of` (the basis of the new CDR reference), so a stale zero-volume close is not taken for a split; a failed split lookup no longer holds a symbol.
+- 2026-09-30: paper trading removed (plan `2026-09-30-remove-paper-trading.md`): migration `0013` now revises `0011`; the split tolerance (3%) is a constant in `live/levels.py`; `paper_earnings_dates` is now `calendar_earnings_dates`.

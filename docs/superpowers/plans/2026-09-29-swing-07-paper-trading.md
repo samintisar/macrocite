@@ -1,5 +1,7 @@
 # Swing Assistant 07 — Forward Paper Trading Implementation Plan
 
+> **Retired 2026-09-30.** Paper trading was never started, and its code, CLI commands, nightly script, and tables were removed (plan `2026-09-30-remove-paper-trading.md`). This document is kept as history; the code is in git history (branch `feat/swing-07-paper-trading`). The pieces the live scan still uses moved: the advisory lock to `signalbench/db/lock.py`, `SplitFetcher` to `signalbench/ingest/prices.py`, `uncommitted_code` to `signalbench/backtest/provenance.py`, and `paper_earnings_dates` became `calendar_earnings_dates`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Step the seven pre-registered Breakout portfolios forward one NYSE session at a time, on prices that did not exist when their orders were decided; save every state, order, fill, and equity point; write a weekly report; and warn by Windows toast when the nightly run fails or stops running. Minimal build only (spec 07, Scope): no `paper judge`, no CDR reality check, no twin-match report line.

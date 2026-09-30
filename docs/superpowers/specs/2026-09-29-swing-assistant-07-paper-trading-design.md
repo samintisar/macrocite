@@ -1,5 +1,7 @@
 # Spec 07 — Forward paper trading
 
+> **Retired 2026-09-30.** Paper trading was never started, and its code, CLI commands, nightly script, and tables were removed (plan `2026-09-30-remove-paper-trading.md`). This document is kept as history; the code is in git history (branch `feat/swing-07-paper-trading`). The pieces the live scan still uses moved: the advisory lock to `signalbench/db/lock.py`, `SplitFetcher` to `signalbench/ingest/prices.py`, `uncommitted_code` to `signalbench/backtest/provenance.py`, and `paper_earnings_dates` became `calendar_earnings_dates`.
+
 **Parent:** [Overview](2026-09-22-swing-assistant-00-overview.md) · **Depends on:** spec 06 (branch `feat/swing-06-breakout-v2`: the cash vehicle and the six v2 configs), which sits on spec 03 (not merged yet).
 **Goal:** Run seven Breakout portfolios forward, one session at a time, on prices that did not exist when their orders were decided. This is the only out-of-sample test of spec 06: every backtest so far reused 2012–2026, which had already been seen. No money is involved.
 
