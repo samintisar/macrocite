@@ -11,7 +11,7 @@ import pytest
 from sqlmodel import Session, select
 from typer.testing import CliRunner
 
-from paper_helpers import evening, git
+from repo_helpers import evening, git
 from scan_helpers import DAYS, UNIVERSE, B, World, make_world, savepoint_engine
 from signalbench import cli
 from signalbench.cli import app
@@ -40,7 +40,7 @@ def _wire(monkeypatch: pytest.MonkeyPatch, world: World, now: datetime) -> Closa
     monkeypatch.setattr(cli, "CboeCanadaSessions", WeekdaySessions)
     monkeypatch.setattr(cli, "_now", lambda: now)
     monkeypatch.setattr(cli, "_ingest_prices", lambda _session: [])
-    monkeypatch.setattr(cli, "_ingest_paper_earnings", lambda _session, _since: [])
+    monkeypatch.setattr(cli, "_ingest_calendar_earnings", lambda _session, _since: [])
     monkeypatch.setattr(cli, "fetch_yfinance_splits", lambda _symbol, _since: [])
     monkeypatch.setattr(cli, "_next_scan_run", lambda: "2026-10-06 15:00:00 (local time)")
     monkeypatch.setattr(cli, "TelegramMessenger", lambda _token, _chat: messenger)

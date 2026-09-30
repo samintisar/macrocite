@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from sqlmodel import Session
 
-from paper_helpers import git
+from repo_helpers import git
 from signalbench.backtest.preregistration import RunRefusedError
 from signalbench.db.models import LiveConfig, LiveRiskState
 from signalbench.live.start import (

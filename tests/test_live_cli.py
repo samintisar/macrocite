@@ -9,7 +9,7 @@ from sqlmodel import Session
 from typer.testing import CliRunner
 
 from live_helpers import add_pair, load_example, make_ledger, record_example
-from paper_helpers import NEW_YORK, git
+from repo_helpers import NEW_YORK, git
 from signalbench import cli
 from signalbench.cli import app
 from signalbench.db.models import LiveConfig

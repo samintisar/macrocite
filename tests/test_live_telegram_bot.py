@@ -15,7 +15,7 @@ from telegram import Bot, Update
 from telegram.error import InvalidToken
 from telegram.ext import TypeHandler
 
-from paper_helpers import evening
+from repo_helpers import evening
 from scan_helpers import DAYS, OWNER, B, World, bot_brain, make_world
 from signalbench.live.heartbeat import heartbeat_problem, write_heartbeat
 from signalbench.live.telegram_bot import (

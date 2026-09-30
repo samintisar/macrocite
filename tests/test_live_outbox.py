@@ -8,7 +8,7 @@ import pytest
 from sqlmodel import Session, select
 
 from live_helpers import add_pair, add_prices, make_ledger, send_signal
-from paper_helpers import evening
+from repo_helpers import evening
 from signalbench.db.models import ExitAlert, StopUpdateRow, TradeSignal
 from signalbench.live.ledger import Ledger
 from signalbench.live.messenger import Buttons, FakeMessenger

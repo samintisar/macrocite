@@ -82,7 +82,7 @@ def ingest_finnhub_calendar_for_ticker(
     is kept only if an SEC Item 2.02 event within CLUSTER_DAYS confirms it; otherwise it was
     a wrong estimate.
 
-    `since` (paper runs only: the oldest last session of a portfolio that is behind) starts
+    `since` (the live scan's catch-up: the first session it has not scanned) starts
     the query there instead of today, and stored dates from then on are replaced by its
     answer rather than dropped as unconfirmed, so a date that passed during missed nights is
     still there for their catch-up.
@@ -157,10 +157,10 @@ def sec_earnings_dates(session: Session, ticker_id: uuid.UUID) -> list[date]:
     return sorted(set(dates))
 
 
-def paper_earnings_dates(session: Session, ticker_id: uuid.UUID) -> list[date]:
+def calendar_earnings_dates(session: Session, ticker_id: uuid.UUID) -> list[date]:
     """Every SEC Item 2.02 date plus every stored Finnhub calendar date, upcoming ones included:
-    paper trading's earnings dates (spec 07 changelog). Forward, a date is known from the
-    calendar weeks before its 8-K is filed. Unclustered, like sec_earnings_dates()."""
+    the live scan's earnings dates. Forward, a date is known from the calendar weeks before its
+    8-K is filed. Unclustered, like sec_earnings_dates()."""
     dates = session.exec(
         select(col(EarningsEvent.event_date)).where(
             EarningsEvent.ticker_id == ticker_id,

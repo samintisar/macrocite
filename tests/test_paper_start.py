@@ -6,7 +6,8 @@ from pathlib import Path
 import pytest
 from sqlmodel import Session, select
 
-from paper_helpers import PAPER_FILE, PORTFOLIOS, evening, git, make_repo
+from paper_helpers import PAPER_FILE, PORTFOLIOS, make_repo
+from repo_helpers import evening, git
 from signalbench.backtest.sim_state import state_from_json
 from signalbench.backtest.simulator import initial_state
 from signalbench.db.models import PaperPortfolio

@@ -16,7 +16,8 @@ import httpx
 import pytest
 from sqlmodel import Session, col, func, select
 
-from paper_helpers import PAPER_FILE, evening, git, make_repo
+from paper_helpers import PAPER_FILE, make_repo
+from repo_helpers import evening, git
 from signalbench.backtest.runner import load_market_inputs
 from signalbench.backtest.simulator import SimulationResult, simulate
 from signalbench.db.models import (
@@ -36,12 +37,11 @@ from signalbench.ingest.earnings import (
     ingest_finnhub_calendar_for_ticker,
 )
 from signalbench.ingest.finnhub import FinnhubClient
-from signalbench.ingest.prices import Split
+from signalbench.ingest.prices import Split, SplitFetcher
 from signalbench.ingest.ratelimit import RateLimiter
 from signalbench.market.bars import AdjustedBar
 from signalbench.market.calendar import HISTORY_START
 from signalbench.paper.run import RunOutcome, run_paper
-from signalbench.paper.splits import SplitFetcher
 from signalbench.paper.start import start_portfolios
 from signalbench.strategy.config import load_strategy_config
 from signalbench.strategy.market_view import MarketView

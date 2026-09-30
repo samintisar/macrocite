@@ -19,7 +19,7 @@ def _use(monkeypatch: pytest.MonkeyPatch, session: Session, held: bool = True) -
     """The test session, a lock that is `held` (or not), and an ingest that counts its calls."""
     calls: list[int] = []
     monkeypatch.setattr(cli, "get_session", lambda: session)
-    monkeypatch.setattr(cli, "advisory_lock", lambda _engine: nullcontext(held))
+    monkeypatch.setattr(cli, "paper_lock", lambda _engine: nullcontext(held))
     monkeypatch.setattr(cli, "_ingest_prices", lambda _session: calls.append(1) or [])
     return calls
 
@@ -109,5 +109,5 @@ def test_the_paper_earnings_ingest_skips_the_calendar_without_a_finnhub_key(
     session: Session, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.setattr(cli.settings, "finnhub_api_key", None)
-    assert cli._ingest_paper_earnings(session, date(2026, 10, 12)) == []
+    assert cli._ingest_calendar_earnings(session, date(2026, 10, 12)) == []
     assert "FINNHUB_API_KEY is not set; skipping the upcoming earnings calendar" in capsys.readouterr().err

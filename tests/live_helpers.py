@@ -9,7 +9,7 @@ from typing import Any
 import yaml
 from sqlmodel import Session
 
-from paper_helpers import evening
+from repo_helpers import evening
 from signalbench.db.models import Price, Ticker, TickerKind, TradeSignal
 from signalbench.ingest.cdr import CdrEntry
 from signalbench.live.acb import SplitEvent, Trade

@@ -29,6 +29,14 @@ class CodeVersion:
         return bool(self.changed)
 
 
+def uncommitted_code(version: CodeVersion) -> str:
+    """Why a command refuses a working tree with uncommitted code or data changes."""
+    return (
+        f"uncommitted changes to tracked code or data ({', '.join(version.changed)}); "
+        "commit them or check out a clean tag, then rerun"
+    )
+
+
 def _head(repo: Path) -> str:
     head = _git(repo, "rev-parse", "HEAD")
     if head.returncode != 0:

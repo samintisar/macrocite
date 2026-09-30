@@ -21,7 +21,7 @@ from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
 
 from live_helpers import add_benchmark, add_pair, add_prices, make_ledger, universe
-from paper_helpers import evening, git
+from repo_helpers import evening, git
 from signalbench.db.models import LiveConfig, Price, Ticker
 from signalbench.ingest.cdr import CdrEntry
 from signalbench.ingest.prices import Split

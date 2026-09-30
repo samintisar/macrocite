@@ -29,7 +29,7 @@ from signalbench.backtest.report import (
 from signalbench.backtest.simulator import simulate
 from signalbench.db.models import BacktestRun, Ticker
 from signalbench.ingest.cdr import CdrEntry
-from signalbench.ingest.earnings import paper_earnings_dates, sec_earnings_dates
+from signalbench.ingest.earnings import calendar_earnings_dates, sec_earnings_dates
 from signalbench.jev.questions import JEV_RELEASE, MODEL, QUESTION_SET
 from signalbench.jev.store import load_document_readings, resolved_builds
 from signalbench.market.bars import AdjustedBar, adjusted_bars
@@ -108,9 +108,9 @@ def load_market_inputs(
 ) -> MarketInputs:
     """Adjusted US bars, every SEC Item 2.02 date (unclustered), and sectors per universe name.
 
-    `calendar_earnings` (paper trading only) adds the stored Finnhub calendar dates, upcoming
+    `calendar_earnings` (the live scan only) adds the stored Finnhub calendar dates, upcoming
     ones included; backtests never set it."""
-    earnings = paper_earnings_dates if calendar_earnings else sec_earnings_dates
+    earnings = calendar_earnings_dates if calendar_earnings else sec_earnings_dates
     wanted = [entry.us_symbol for entry in universe] + [benchmark_symbol]
     rows = session.exec(select(Ticker).where(col(Ticker.symbol).in_(wanted))).all()
     tickers = {ticker.symbol: ticker for ticker in rows}

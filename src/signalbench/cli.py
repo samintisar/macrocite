@@ -32,6 +32,7 @@ from signalbench.backtest.runner import (
     setups_for_run,
 )
 from signalbench.config import settings
+from signalbench.db.lock import advisory_lock
 from signalbench.db.models import BacktestRun, Ticker, TickerKind
 from signalbench.db.session import engine, get_session
 from signalbench.ingest.cdr import (
@@ -100,7 +101,7 @@ from signalbench.live.tax import tax_csv, tax_text
 from signalbench.live.telegram_bot import build_application, redact_logs
 from signalbench.market.calendar import HISTORY_START, CboeCanadaSessions, NyseSessions
 from signalbench.market.legal_close import LegalCloses
-from signalbench.paper.lock import advisory_lock
+from signalbench.paper.lock import advisory_lock as paper_lock
 from signalbench.paper.run import run_paper
 from signalbench.paper.start import start_portfolios
 from signalbench.paper.status import stale_message, status_lines
@@ -347,10 +348,9 @@ def _ingest_earnings(
     return _for_each_ticker(session, "earnings", tickers, work)
 
 
-def _ingest_paper_earnings(session: Session, since: date) -> list[str]:
-    """`ingest earnings` for `paper run`: the Finnhub calendar from `since` (the oldest last
-    session of a portfolio that is behind) on, skipped with a warning when FINNHUB_API_KEY is
-    not set."""
+def _ingest_calendar_earnings(session: Session, since: date) -> list[str]:
+    """`ingest earnings` for the scan: the Finnhub calendar from `since` on, skipped with a
+    warning when FINNHUB_API_KEY is not set."""
     with httpx.Client(timeout=30.0) as client:
         return _ingest_earnings(session, _finnhub(client), since)
 
@@ -796,13 +796,13 @@ def paper_run() -> None:
         with get_session() as session:
             outcome = run_paper(
                 session,
-                lock=advisory_lock(engine),
+                lock=paper_lock(engine),
                 repo=REPO_ROOT,
                 universe=load_universe(UNIVERSE_PATH),
                 calendar=NyseSessions(),
                 clock=_now,
                 ingest=_ingest_prices,
-                ingest_earnings=_ingest_paper_earnings,
+                ingest_earnings=_ingest_calendar_earnings,
                 splits=fetch_yfinance_splits,
                 reports_dir=PAPER_REPORTS_DIR,
                 echo=typer.echo,
@@ -1014,7 +1014,7 @@ def scan(
                 session, lock=advisory_lock(engine, LIVE_SCAN_LOCK), repo=REPO_ROOT,
                 universe=load_universe(UNIVERSE_PATH), nyse=NyseSessions(),
                 cboe=CboeCanadaSessions(), clock=_now, ingest=_ingest_prices,
-                ingest_earnings=_ingest_paper_earnings, splits=fetch_yfinance_splits,
+                ingest_earnings=_ingest_calendar_earnings, splits=fetch_yfinance_splits,
                 messenger=messenger, echo=typer.echo, force=force,
                 allow_any_commit=allow_any_commit,
             )

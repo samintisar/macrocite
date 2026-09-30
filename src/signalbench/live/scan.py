@@ -32,7 +32,7 @@ from typing import Literal, TypeVar
 from sqlalchemy import Engine
 from sqlmodel import Session, col, func, select
 
-from signalbench.backtest.provenance import code_version
+from signalbench.backtest.provenance import code_version, uncommitted_code
 from signalbench.backtest.runner import last_complete_session
 from signalbench.db.models import (
     CorporateAction,
@@ -45,6 +45,7 @@ from signalbench.db.models import (
     TradeSignal,
 )
 from signalbench.ingest.cdr import CdrEntry
+from signalbench.ingest.prices import SplitFetcher
 from signalbench.live.book import (
     MARKET_CLOSE,
     MARKET_OPEN,
@@ -72,8 +73,6 @@ from signalbench.live.summary import (
 )
 from signalbench.live.why import why_line
 from signalbench.market.calendar import Sessions
-from signalbench.paper.splits import SplitFetcher
-from signalbench.paper.start import uncommitted_code
 from signalbench.strategy.config import StrategyConfig
 from signalbench.strategy.decision import EntryOrder
 from signalbench.strategy.market_view import MarketView

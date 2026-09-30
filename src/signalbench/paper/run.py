@@ -17,7 +17,7 @@ from zoneinfo import ZoneInfo
 from sqlmodel import Session, col, select
 
 from signalbench.backtest.preregistration import RunRefusedError
-from signalbench.backtest.provenance import code_version
+from signalbench.backtest.provenance import code_version, uncommitted_code
 from signalbench.backtest.runner import (
     MarketInputs,
     check_series_current,
@@ -36,12 +36,12 @@ from signalbench.db.models import (
     Ticker,
 )
 from signalbench.ingest.cdr import CdrEntry
-from signalbench.ingest.prices import Split
+from signalbench.ingest.prices import Split, SplitFetcher
 from signalbench.market.calendar import HISTORY_START, Sessions
 from signalbench.paper.portfolios import paper_setup
 from signalbench.paper.report import report_due, write_weekly_report
-from signalbench.paper.splits import Mark, SplitFetcher, adjust_for_splits, references
-from signalbench.paper.start import PaperRefusedError, uncommitted_code
+from signalbench.paper.splits import Mark, adjust_for_splits, references
+from signalbench.paper.start import PaperRefusedError
 from signalbench.strategy.config import (
     StrategyConfig,
     config_sha256,

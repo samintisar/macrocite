@@ -20,7 +20,7 @@ explain refuses the portfolio.
 """
 
 import math
-from collections.abc import Callable, Collection, Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import date
 from typing import Any
@@ -30,7 +30,6 @@ from signalbench.ingest.prices import Split
 from signalbench.paper.start import PaperRefusedError
 from signalbench.strategy.market_view import MarketView
 
-SplitFetcher = Callable[[str, date], list[Split]]  # symbol, since: splits with an ex-date after it
 # Stored close / (saved price x the known splits' factor). Dividends after the save lower the
 # stored adjusted close by a few percent; a missed 3-for-2 split is 1.5 or 0.67.
 SCALE_BAND = (0.75, 1.02)

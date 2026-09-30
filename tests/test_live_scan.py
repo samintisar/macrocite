@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from sqlmodel import Session, col, select
 
-from paper_helpers import evening, git
+from repo_helpers import evening, git
 from scan_helpers import (
     DAYS,
     LIVE,

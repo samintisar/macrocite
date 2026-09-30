@@ -45,6 +45,9 @@ class Split:
     ratio: float  # new shares per old share: 2.0 for a 2-for-1 split, 0.1 for a 1-for-10 reverse
 
 
+SplitFetcher = Callable[[str, date], list[Split]]  # symbol, since: splits with an ex-date after it
+
+
 def validate_bar(bar: DailyBar) -> str | None:
     if min(bar.open, bar.high, bar.low, bar.close, bar.adj_close) <= 0:
         return "non_positive_price"

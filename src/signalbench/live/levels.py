@@ -33,9 +33,8 @@ from signalbench.live.book import (
     check_places,
     q4,
 )
-from signalbench.paper.splits import MARK_TOLERANCE
 
-TOLERANCE = Decimal(str(MARK_TOLERANCE))  # spec 07's 3%: a larger gap is an unrecorded split
+TOLERANCE = Decimal("0.03")  # a larger gap than 3% between two closes is an unrecorded split
 
 
 @dataclass(frozen=True)

@@ -1,27 +1,16 @@
 """A throwaway git repo with test configs and a paper file, shared by the paper tests."""
 
-import subprocess
-from datetime import date, datetime, time
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
+from repo_helpers import git
 from strategy_helpers import FIXTURE_CONFIG
 
-NEW_YORK = ZoneInfo("America/New_York")
 PAPER_FILE = "data/paper_test.yaml"
 PORTFOLIOS = {  # name: (config, setup)
     "p-plain": ("data/strategy_test.yaml", "pullback"),
     "p-twin": ("data/strategy_test.yaml", "pullback"),
     "p-qqq": ("data/strategy_test-qqq.yaml", "pullback"),
 }
-
-
-def git(repo: Path, *args: str) -> str:
-    return subprocess.run(
-        ["git", "-C", str(repo), "-c", "user.name=Test", "-c", "user.email=test@example.com",
-         "-c", "commit.gpgsign=false", *args],
-        capture_output=True, text=True, check=True,
-    ).stdout.strip()
 
 
 def make_repo(root: Path) -> Path:
@@ -41,8 +30,3 @@ def make_repo(root: Path) -> Path:
     git(root, "add", "data")
     git(root, "commit", "-q", "-m", "configs")
     return root
-
-
-def evening(day: date, hour: int = 18) -> datetime:
-    """`hour`:00 New York time on `day`."""
-    return datetime.combine(day, time(hour, 0), tzinfo=NEW_YORK)

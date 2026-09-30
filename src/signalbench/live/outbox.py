@@ -21,7 +21,7 @@ from signalbench.db.models import (
     TickerKind,
     TradeSignal,
 )
-from signalbench.ingest.earnings import paper_earnings_dates
+from signalbench.ingest.earnings import calendar_earnings_dates
 from signalbench.live.book import MARKET_OPEN, NEW_YORK, ZERO
 from signalbench.live.ledger import Ledger
 from signalbench.live.messages import (
@@ -119,7 +119,7 @@ def entry_text(
 
 
 def _earnings_after(session: Session, us: Ticker, day: date) -> date | None:
-    return next((d for d in paper_earnings_dates(session, us.id) if d > day), None)
+    return next((d for d in calendar_earnings_dates(session, us.id) if d > day), None)
 
 
 def exit_text(session: Session, ledger: Ledger, alert: ExitAlert) -> str:

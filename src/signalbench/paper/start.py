@@ -8,9 +8,9 @@ from sqlmodel import Session, col, select
 
 from signalbench.backtest.preregistration import check_config_path
 from signalbench.backtest.provenance import (
-    CodeVersion,
     code_version,
     committed_unchanged,
+    uncommitted_code,
 )
 from signalbench.backtest.sim_state import state_to_json
 from signalbench.backtest.simulator import initial_state
@@ -24,14 +24,6 @@ NEW_YORK = ZoneInfo("America/New_York")
 
 class PaperRefusedError(ValueError):
     """A paper command was refused. The message says why."""
-
-
-def uncommitted_code(version: CodeVersion) -> str:
-    """Why a paper command refuses a working tree with uncommitted code or data changes."""
-    return (
-        f"uncommitted changes to tracked code or data ({', '.join(version.changed)}); "
-        "commit them or check out a clean tag, then rerun"
-    )
 
 
 def start_portfolios(
