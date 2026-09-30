@@ -9,8 +9,9 @@ US split rescales only its own levels, and a CDR split multiplies the units held
 
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
+from typing import get_args
 from uuid import UUID
 
 from sqlmodel import col, select
@@ -20,9 +21,21 @@ from signalbench.db.models import (
     Price,
     StopUpdateRow,
     Ticker,
+    TickerKind,
     TradeSignal,
 )
-from signalbench.live.book import LedgerBook, LedgerError, q4
+from signalbench.live.book import (
+    LedgerBook,
+    LedgerError,
+    SplitKind,
+    SplitSource,
+    check_choice,
+    check_places,
+    q4,
+)
+from signalbench.paper.splits import MARK_TOLERANCE
+
+TOLERANCE = Decimal(str(MARK_TOLERANCE))  # spec 07's 3%: a larger gap is an unrecorded split
 
 
 @dataclass(frozen=True)
@@ -49,6 +62,16 @@ def _split_step(ratio: Decimal, old: Decimal, new: Decimal) -> Decimal:
     split (the row moves the level the other way)."""
     applies = (new < old) == (ratio > 1)
     return 1 / ratio if applies else ratio
+
+
+def _split_row(
+    signal_id: int, action: CorporateAction, old: StopLevels, new: StopLevels
+) -> StopUpdateRow:
+    return StopUpdateRow(
+        signal_id=signal_id, session=action.ex_date, reason="split", old_us_stop=old.us,
+        new_us_stop=new.us, old_cdr_stop=old.cdr, new_cdr_stop=new.cdr,
+        corporate_action_id=action.id,
+    )
 
 
 class LedgerLevels(LedgerBook):
@@ -212,3 +235,136 @@ class LedgerLevels(LedgerBook):
         self._session.commit()
         self._session.refresh(row)
         return row
+
+    # --- Splits ----------------------------------------------------------------------------
+
+    def scale_check(self, signal_id: int) -> str | None:
+        """Why a signal's prices and the stored closes of its as_of disagree by more than 3%
+        once the recorded splits are applied (an unrecorded split or bad data), or None.
+        Compares the raw close (split-adjusted, not dividend-adjusted), so dividends pass."""
+        signal = self.signal(signal_id)
+        levels = self.signal_levels(signal_id)
+        us = self._ticker(signal.us_symbol, TickerKind.us_stock)
+        checks = [
+            ("US", us.id, levels.us_signal_close, True),
+            ("CDR", signal.cdr_ticker_id, levels.cdr_signal_close, False),
+        ]
+        for name, ticker_id, expected, exact_day in checks:
+            rows = self._prices(ticker_id, signal.as_of)
+            if exact_day:
+                rows = [r for r in rows if r.date == signal.as_of]
+            if not rows:
+                return f"no stored {name} close for {signal.as_of}"
+            stored = rows[-1].close
+            if abs(stored / expected - 1) > TOLERANCE:
+                return (
+                    f"the stored {name} close {stored} on {rows[-1].date} is "
+                    f"{stored / expected:.4f}x the signal's {expected} after recorded splits"
+                )
+        return None
+
+    def record_split(
+        self, *, kind: SplitKind, symbol: str, ex_date: date, ratio: Decimal, source: SplitSource
+    ) -> CorporateAction:
+        """A US split (the tool's US levels rescale) or a CDR split (units x ratio, the total
+        ACB unchanged). Writes a `split` stop row for each open managed position it touches,
+        and a CDR split withdraws the CDR's `sent` signals from before its ex-date."""
+        check_choice(kind, get_args(SplitKind), "kind")
+        check_choice(source, get_args(SplitSource), "source")
+        if ratio <= 0 or ratio == 1:
+            raise LedgerError(f"a split ratio must be above 0 and not 1, not {ratio}")
+        check_places(ratio, 6, "ratio")
+        if kind == "us_split":
+            us_symbol, cdr_id = self._ticker(symbol, TickerKind.us_stock).symbol, None
+            signals = self._session.exec(
+                select(TradeSignal).where(TradeSignal.us_symbol == us_symbol)
+            ).all()
+        else:
+            cdr = self._cdr(symbol)
+            us_symbol, cdr_id = None, cdr.id
+            signals = self._session.exec(
+                select(TradeSignal).where(TradeSignal.cdr_ticker_id == cdr.id)
+            ).all()
+            held = self._book(
+                self._fills(cdr.id, ex_date - timedelta(days=1)),
+                [s for s in self._actions("cdr_split", cdr_id=cdr.id) if s.ex_date < ex_date],
+            ).units
+            sent = [s for s in signals if s.status == "sent" and s.as_of < ex_date]
+            if held == 0 and not sent:
+                raise LedgerError(
+                    f"{symbol} had no open position or sent signal on {ex_date}: "
+                    "a CDR split only matters for those"
+                )
+        duplicate = self._session.exec(
+            select(CorporateAction).where(
+                CorporateAction.kind == kind, CorporateAction.us_symbol == us_symbol,
+                CorporateAction.cdr_ticker_id == cdr_id, CorporateAction.ex_date == ex_date,
+                col(CorporateAction.voided).is_(False),
+            )
+        ).first()
+        if duplicate is not None:
+            raise LedgerError(f"{symbol} {kind} on {ex_date} is already recorded ({duplicate.id})")
+        affected = [
+            (s, self.current_stop(s.id))
+            for s in signals
+            if s.id is not None and s.as_of < ex_date and self._open_episode(s) is not None
+        ]
+        action = CorporateAction(
+            kind=kind, us_symbol=us_symbol, cdr_ticker_id=cdr_id, ex_date=ex_date,
+            ratio=ratio, source=source,
+        )
+        self._session.add(action)
+        self._session.flush()
+        if cdr_id is not None:
+            try:
+                self._check_book(self._by_id(cdr_id))
+            except LedgerError:
+                self._session.rollback()
+                raise
+            for signal in signals:
+                if signal.status == "sent" and signal.as_of < ex_date:
+                    signal.status = "withdrawn"
+                    self._session.add(signal)
+        for signal, old in affected:
+            assert signal.id is not None
+            new = StopLevels(
+                q4(old.us / ratio) if kind == "us_split" else old.us,
+                q4(old.cdr / ratio) if kind == "cdr_split" else old.cdr,
+            )
+            self._session.add(_split_row(signal.id, action, old, new))
+        self._session.commit()
+        self._session.refresh(action)
+        return action
+
+    def void_corporate_action(self, action_id: int, reason: str) -> None:
+        """Void a wrong split. Its effects are recomputed, and each `split` stop row written
+        from it gets a new `split` row that undoes it. Withdrawn signals stay withdrawn."""
+        action = self._session.get(CorporateAction, action_id)
+        if action is None or action.voided:
+            raise LedgerError(f"no corporate action {action_id} to void")
+        if not reason.strip():
+            raise LedgerError("a void needs a reason")
+        undo: list[tuple[int, StopLevels]] = []
+        rows = self._session.exec(
+            select(StopUpdateRow).where(StopUpdateRow.corporate_action_id == action_id)
+        ).all()
+        for signal_id in sorted({row.signal_id for row in rows}):
+            if sum(1 for row in rows if row.signal_id == signal_id) % 2 == 1:
+                undo.append((signal_id, self.current_stop(signal_id)))
+        action.voided = True
+        action.void_reason = reason.strip()
+        self._session.add(action)
+        self._session.flush()
+        if action.cdr_ticker_id is not None:
+            try:
+                self._check_book(self._by_id(action.cdr_ticker_id))
+            except LedgerError as error:
+                self._session.rollback()
+                raise LedgerError(f"voiding corporate action {action_id}: {error}") from None
+        for signal_id, old in undo:
+            new = StopLevels(
+                q4(old.us * action.ratio) if action.kind == "us_split" else old.us,
+                q4(old.cdr * action.ratio) if action.kind == "cdr_split" else old.cdr,
+            )
+            self._session.add(_split_row(signal_id, action, old, new))
+        self._session.commit()
