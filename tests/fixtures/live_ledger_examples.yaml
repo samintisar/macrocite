@@ -66,3 +66,26 @@ fractional:  # fractional units and fees
   dispositions:
     - {date: 2026-04-06, proceeds: '13.50', acb: '12.44', gain: '1.01', denied: '0'}
   cash: '32.35'  # 50 - 20 - 11.10 + 13.45
+
+
+rebuild:  # spec 04 gate: positions and cash rebuilt from fills and corporate actions alone
+  cash:
+    - {date: 2026-05-01, amount: '500.00'}
+    - {date: 2026-06-15, amount: '-50.00'}
+  fills:  # in the order recorded; `void` voids the fill after it is recorded
+    - {date: 2026-05-04, symbol: ZAAA, side: buy, quantity: '4', price: '25.00'}
+    - {date: 2026-05-04, symbol: ZBBB, side: buy, quantity: '10', price: '12.00'}
+    - {date: 2026-05-05, symbol: ZBBB, side: buy, quantity: '10', price: '12.50', void: wrong fill}
+    - {date: 2026-05-05, symbol: ZBBB, side: buy, quantity: '2.5', price: '12.40'}
+    - {date: 2026-05-20, symbol: ZAAA, side: sell, quantity: '1', price: '27.00'}
+  splits:
+    - {date: 2026-06-01, symbol: ZBBB, ratio: '3'}
+  after_splits:
+    - {date: 2026-06-10, symbol: ZBBB, side: sell, quantity: '7.5', price: '4.30'}
+  expect:
+    # 500 - 100 - 120 - 31.00 + 27.00 + 32.25 - 50 (the voided 125.00 counts nowhere)
+    cash: '258.25'
+    positions:
+      ZAAA: {units: '3', acb: '75.00'}  # 100 x 3/4
+      # 120 + 31 = 151.00 for 12.5 units; x3 = 37.5 units; sold 151 x 7.5/37.5 = 30.20
+      ZBBB: {units: '30', acb: '120.80'}
