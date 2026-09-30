@@ -164,3 +164,14 @@ def test_positions_and_cash_rebuild_from_fills_and_corporate_actions_alone(
         symbol: (Decimal(p["units"]), Decimal(p["acb"])) for symbol, p in expect["positions"].items()
     }
     assert [p.cdr_symbol for p in ledger.positions(date(2026, 6, 30))] == ["ZAAA", "ZBBB"]
+
+
+def test_the_peak_moves_with_deposits_and_withdrawals(ledger: Ledger) -> None:
+    ledger.record_equity(D, pause_drawdown=DRAWDOWN)  # C$100, the peak
+    ledger.record_cash(Decimal("-30.00"), E, "withdrawal")
+    snapshot, paused_now = ledger.record_equity(E, pause_drawdown=DRAWDOWN)
+    assert (snapshot.equity, snapshot.peak, paused_now) == (Decimal(70), Decimal(70), False)
+    ledger.record_cash(Decimal("50.00"), F, "deposit")  # the peak rises with it, then falls again
+    ledger.record_cash(Decimal("-50.00"), G, "withdrawal")
+    snapshot, paused_now = ledger.record_equity(G, pause_drawdown=DRAWDOWN)
+    assert (snapshot.equity, snapshot.peak, paused_now) == (Decimal(70), Decimal(70), False)

@@ -235,10 +235,6 @@ def test_pnl_and_the_pause_review_compare_live_r_with_the_backtest(
             "config to compare)"
         ),
         "Your skips: none · missed exit alerts: 0",
-        (
-            "Withdrawals since the peak on 2026-06-03: C$10.00. A withdrawal lowers equity like "
-            "a loss (spec 04), so part of this drawdown is your own cash."
-        ),
         "/resume to continue (resets peak)",
     ]
 

@@ -266,7 +266,8 @@ def test_the_bot_heartbeat_is_checked(world: World) -> None:
 
 def test_a_drawdown_pauses_new_entries_and_sends_the_review(world: World) -> None:
     world.scan(B - 1)  # the peak: C$100 on 2026-10-02
-    world.ledger(B).record_cash(Decimal("-20.00"), DAYS[B], "withdrawal")
+    world.ledger(B).record_fill(cdr_symbol="ZXOM", side="buy", quantity=Decimal(4),
+                                price_cad=Decimal(15), trade_date=DAYS[B])  # worth C$40 at C$10
     before = len(world.messenger.sent)
     world.scan(B)
     review, summary = world.messenger.texts()[before:]  # no entry: the breakout is skipped
@@ -274,9 +275,16 @@ def test_a_drawdown_pauses_new_entries_and_sends_the_review(world: World) -> Non
         "⏸ New entries are paused since the close of 2026-10-05: equity C$80.00 is below 0.85 "
         "x the peak C$100.00."
     )
-    assert "Withdrawals since the peak on 2026-10-02: C$20.00." in review
     assert "skipped: paused 1" in summary
     assert "new entries PAUSED since 2026-10-05 (/resume)" in summary
+
+
+def test_a_withdrawal_lowers_the_peak_too_so_it_never_pauses(world: World) -> None:
+    world.scan(B - 1)  # the peak: C$100 on 2026-10-02
+    world.ledger(B).record_cash(Decimal("-20.00"), DAYS[B], "withdrawal")
+    world.scan(B)
+    assert world.messenger.texts()[-2].startswith("🟢 BUY NVDA")  # no pause review
+    assert "peak C$80.00 · drawdown 0.0% · new entries not paused" in world.messenger.texts()[-1]
 
 
 def test_a_run_after_the_next_open_is_late_and_says_so(world: World) -> None:

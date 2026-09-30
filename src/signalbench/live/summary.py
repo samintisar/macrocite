@@ -16,7 +16,6 @@ from sqlmodel import Session, col, select
 
 from signalbench.db.models import (
     BacktestRun,
-    CashMovement,
     EquitySnapshot,
     ExitAlert,
     Ticker,
@@ -174,17 +173,6 @@ def evening_summary(ledger: Ledger, session: Session, tonight: Tonight) -> str:
     return "\n".join(lines)
 
 
-def _peak_day(session: Session, since: date | None) -> date | None:
-    query = select(EquitySnapshot).order_by(col(EquitySnapshot.date))
-    if since is not None:
-        query = query.where(col(EquitySnapshot.date) >= since)
-    rows = session.exec(query).all()
-    if not rows:
-        return None
-    top = max(row.equity for row in rows)
-    return next(row.date for row in rows if row.equity == top)
-
-
 def pause_review(ledger: Ledger, session: Session, backtest: BacktestR | None) -> str:
     """The review sent when new entries pause, and again with /resume."""
     risk = ledger.risk_state()
@@ -205,18 +193,6 @@ def pause_review(ledger: Ledger, session: Session, backtest: BacktestR | None) -
     misses = len(ledger.scale_up_check().misses)
     skips = ", ".join(f"{reason} {n}" for reason, n in sorted(skipped.items()) if reason) or "none"
     lines.append(f"Your skips: {skips} · missed exit alerts: {misses}")
-    peak_day = _peak_day(session, risk.peak_reset_on)
-    if peak_day is not None:
-        withdrawn = -sum(
-            (m.amount_cad for m in session.exec(select(CashMovement)).all()
-             if m.amount_cad < 0 and m.occurred_on > peak_day),
-            ZERO,
-        )
-        if withdrawn > 0:
-            lines.append(
-                f"Withdrawals since the peak on {peak_day}: {cad(withdrawn)}. A withdrawal lowers "
-                "equity like a loss (spec 04), so part of this drawdown is your own cash."
-            )
     lines.append("/resume to continue (resets peak)")
     return "\n".join(lines)
 

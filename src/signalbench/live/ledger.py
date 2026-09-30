@@ -135,15 +135,24 @@ class Ledger(LedgerLevels):
 
     def equity(self, as_of: date) -> EquitySnapshot:
         """Equity at the close of `as_of`, not saved. Peak = the max equity since
-        risk_state.peak_reset_on, this one included."""
+        risk_state.peak_reset_on, this one included, each earlier snapshot adjusted by the cash
+        movements after its date through `as_of` (+ deposits, - withdrawals): moving cash in
+        or out is never a gain or a drawdown."""
         cash = self.cash(as_of)
         value = sum((p.value for p in self.positions(as_of)), ZERO)
         equity = q4(cash + value)
         reset = self.risk_state().peak_reset_on
-        query = select(col(EquitySnapshot.equity)).where(col(EquitySnapshot.date) < as_of)
+        query = select(col(EquitySnapshot.date), col(EquitySnapshot.equity)).where(
+            col(EquitySnapshot.date) < as_of
+        )
         if reset is not None:
             query = query.where(col(EquitySnapshot.date) >= reset)
-        peak = max([equity, *self._session.exec(query).all()])
+        movements = self._movements(as_of)
+        earlier = [
+            then + sum((m.amount_cad for m in movements if m.occurred_on > day), ZERO)
+            for day, then in self._session.exec(query).all()
+        ]
+        peak = q4(max([equity, *earlier]))
         return EquitySnapshot(
             date=as_of, cash=q4(cash), positions_value=q4(value), equity=equity, peak=peak
         )
