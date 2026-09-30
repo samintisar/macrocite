@@ -18,6 +18,7 @@ dependencies = [
   "lxml>=5.0",
   "tzdata>=2024.1",
   "exchange-calendars>=4.13",
+  "python-telegram-bot>=22.8,<23",
 ]
 
 [project.scripts]
