@@ -12,9 +12,17 @@ from decimal import Decimal
 
 from sqlmodel import col, select
 
-from signalbench.db.models import EquitySnapshot, LiveRiskState, TickerKind, utcnow
-from signalbench.live.book import ZERO, Episode, LedgerError, cad, q4
+from signalbench.db.models import (
+    EquitySnapshot,
+    ExitAlert,
+    LiveRiskState,
+    TickerKind,
+    TradeSignal,
+    utcnow,
+)
+from signalbench.live.book import NEW_YORK, ZERO, Episode, LedgerError, cad, q4
 from signalbench.live.levels import LedgerLevels, StopLevels
+from signalbench.live.scaleup import AlertOutcome, ScaleUpResult, SignalBuy, scale_up
 from signalbench.live.tax import TaxReport, build_tax_report
 from signalbench.strategy.portfolio import PendingEntry, PortfolioState, Position
 
@@ -203,3 +211,44 @@ class Ledger(LedgerLevels):
         """The year's dispositions, superficial losses, and CDR splits (spec 04). A loss within
         30 days of today is provisional. Not tax advice."""
         return build_tax_report(self.books(), year)
+
+    # --- The scale-up check ----------------------------------------------------------------
+
+    def scale_up_check(self) -> ScaleUpResult:
+        """The four checks over every signal, signal-linked buy, and exit alert (spec 04)."""
+        closed = sum(1 for trade in self.closed_trades() if trade.episode.managed)
+        signals = {s.id: s for s in self._session.exec(select(TradeSignal)).all()}
+        buys = [
+            SignalBuy(f.id, f.price_cad, signals[f.signal_id].cdr_signal_close)
+            for f in self._fills()
+            if f.side == "buy" and f.signal_id is not None and f.id is not None
+        ]
+        alerts = self._session.exec(select(ExitAlert).order_by(col(ExitAlert.id))).all()
+        return scale_up(
+            closed_managed=closed,
+            statuses=[(s.status, s.skip_reason) for s in signals.values()],
+            buys=buys,
+            alerts=[self._alert_outcome(alert) for alert in alerts],
+            today=self.today,
+        )
+
+    def _alert_outcome(self, alert: ExitAlert) -> AlertOutcome:
+        """The sale window: through the first session after the alert's session, or after the
+        New York date it was sent when it was late."""
+        assert alert.id is not None
+        sent_on = alert.created_at.astimezone(NEW_YORK).date() if alert.late else alert.as_of
+        sales = [
+            f.trade_date for f in self._fills(alert.cdr_ticker_id)
+            if f.side == "sell" and f.trade_date > alert.as_of
+        ]
+        return AlertOutcome(
+            alert_id=alert.id, status=alert.status,
+            deadline=self._calendar.next_sessions(sent_on, 1)[0], sold_on=min(sales, default=None),
+        )
+
+    def record_scale_up(self, result: ScaleUpResult) -> None:
+        """Append the result and its inputs to risk_state's history, for the record."""
+        risk = self.risk_state()
+        risk.scale_up_history = [*risk.scale_up_history, result.record(utcnow())]
+        self._session.add(risk)
+        self._session.commit()
