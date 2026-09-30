@@ -13,7 +13,7 @@
       is unreachable.
     - A `BOT STALE:` line (the bot's heartbeat is over an hour old) shows a toast too.
 
-    The log, toast, and .env loading are shared with paper_nightly.ps1 (lib\SignalBench.ps1).
+    The log, toast, and .env loading are shared (lib\SignalBench.ps1).
     Needs Windows PowerShell 5.1 (powershell.exe) for the toast.
 
 .PARAMETER RepoRoot

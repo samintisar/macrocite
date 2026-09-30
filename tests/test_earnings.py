@@ -207,7 +207,7 @@ def test_finnhub_calendar_drops_past_dates_that_sec_does_not_confirm(session: Se
 
 
 def test_a_catch_up_since_keeps_and_refreshes_past_calendar_dates(session: Session) -> None:
-    """Paper runs query from the oldest behind portfolio's last session: calendar dates from
+    """The scan's catch-up queries from the first session it has not scanned: calendar dates from
     then on are refreshed from the query, not deleted as unconfirmed; older ones still are."""
     mu = _ticker(session, "MU")
     for day in (date(2026, 9, 1), date(2026, 9, 17), date(2026, 9, 18)):  # none confirmed by SEC

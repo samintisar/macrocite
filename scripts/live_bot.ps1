@@ -9,7 +9,7 @@
     after -RestartSeconds (Task Scheduler's restart-on-failure is the second line of defence).
     A clean exit (0) ends the script.
 
-    The log, toast, and .env loading are shared with paper_nightly.ps1 (lib\SignalBench.ps1).
+    The log, toast, and .env loading are shared (lib\SignalBench.ps1).
     Needs Windows PowerShell 5.1 (powershell.exe) for the toast.
 
 .PARAMETER RepoRoot

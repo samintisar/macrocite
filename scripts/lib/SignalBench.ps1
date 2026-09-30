@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Shared by the scheduled SignalBench scripts (paper_nightly.ps1, live_scan.ps1, live_bot.ps1):
+    Shared by the scheduled SignalBench scripts (live_scan.ps1, live_bot.ps1):
     the log, the Windows toast, the .env loading, and `uv run --frozen signalbench`.
 
 .DESCRIPTION

@@ -34,7 +34,7 @@ def test_environment_variables_win_over_the_env_file(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """The nightly script loads the main checkout's .env into the process without overriding
-    what is already set; a run's own .env (none in the paper worktree) must not win either."""
+    what is already set; a run's own .env (none in the live worktree) must not win either."""
     env_file = tmp_path / ".env"
     env_file.write_text(
         "DATABASE_URL=postgresql+psycopg://file:file@filehost.invalid:5432/file\n"

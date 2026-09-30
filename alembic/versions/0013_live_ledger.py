@@ -1,7 +1,7 @@
 """Spec 04 live ledger
 
 Revision ID: 0013_live_ledger
-Revises: 0012_paper_trading
+Revises: 0011_jev_readings
 Create Date: 2026-09-30 12:00:00
 """
 
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "0013_live_ledger"
-down_revision: str | None = "0012_paper_trading"
+down_revision: str | None = "0011_jev_readings"
 branch_labels: Sequence[str] | None = None
 depends_on: Sequence[str] | None = None
 

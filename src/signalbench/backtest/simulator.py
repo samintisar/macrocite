@@ -3,7 +3,7 @@
 For each session t: at the open, fill the exits and then the entries decided at t-1;
 at the close, mark to market, update the peak and pause state, and call decide(t).
 `step()` is one session; `simulate()` is `initial_state()` and then `step()` over the
-sessions. Forward paper trading (spec 07) saves the `SimState` between nights.
+sessions.
 
 With a cash vehicle (spec 06), idle cash waits in the regime symbol (QQQ): on a session with
 fills, QQQ is sold at the open just enough to pay for the entries, or the cash left after the

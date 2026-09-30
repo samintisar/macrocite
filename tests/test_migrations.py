@@ -49,17 +49,9 @@ def test_0011_creates_jev_readings_unique_per_document_ticker_model_and_question
     assert '"uq_jev_readings_document_ticker_model_questions"' in text
 
 
-def test_0012_creates_the_four_paper_tables() -> None:
-    text = (VERSIONS / "0012_paper_trading.py").read_text(encoding="utf-8")
-    assert 'down_revision: str | None = "0011_jev_readings"' in text
-    for table in ("paper_portfolios", "paper_events", "paper_equity", "paper_runs"):
-        assert f'op.create_table(\n        "{table}"' in text
-    assert 'sa.PrimaryKeyConstraint("portfolio_id", "session")' in text
-
-
 def test_0013_creates_the_nine_ledger_tables() -> None:
     text = (VERSIONS / "0013_live_ledger.py").read_text(encoding="utf-8")
-    assert 'down_revision: str | None = "0012_paper_trading"' in text
+    assert 'down_revision: str | None = "0011_jev_readings"' in text
     for table in (
         "live_config", "cash_movements", "trade_signals", "exit_alerts", "corporate_actions",
         "stop_updates", "fills", "equity_snapshots", "risk_state",
