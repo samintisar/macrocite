@@ -14,7 +14,7 @@ def _script() -> ScriptDirectory:
 
 
 def test_migrations_have_single_head() -> None:
-    assert _script().get_heads() == ["0012_paper_trading"]
+    assert _script().get_heads() == ["0013_live_ledger"]
 
 
 def test_0007_drops_sentiment_tables_and_enum() -> None:
@@ -55,3 +55,15 @@ def test_0012_creates_the_four_paper_tables() -> None:
     for table in ("paper_portfolios", "paper_events", "paper_equity", "paper_runs"):
         assert f'op.create_table(\n        "{table}"' in text
     assert 'sa.PrimaryKeyConstraint("portfolio_id", "session")' in text
+
+
+def test_0013_creates_the_nine_ledger_tables() -> None:
+    text = (VERSIONS / "0013_live_ledger.py").read_text(encoding="utf-8")
+    assert 'down_revision: str | None = "0012_paper_trading"' in text
+    for table in (
+        "live_config", "cash_movements", "trade_signals", "exit_alerts", "corporate_actions",
+        "stop_updates", "fills", "equity_snapshots", "risk_state",
+    ):
+        assert f'op.create_table(\n        "{table}"' in text
+    assert "postgresql_where=sa.text(\"reason = 'trail'\")" in text
+    assert 'sa.Column("amount_cad", sa.Numeric(12, 2), nullable=False)' in text
