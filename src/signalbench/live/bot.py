@@ -14,7 +14,7 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime
-from decimal import ROUND_DOWN, Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation
 from typing import Literal, cast, get_args
 
 from sqlmodel import Session, col, select
@@ -24,7 +24,7 @@ from signalbench.live.book import NEW_YORK, LedgerError, SignalSkip
 from signalbench.live.ledger import Ledger
 from signalbench.live.messages import cad, signed_cad, skip_buttons, units_text, usd
 from signalbench.live.messenger import Button, Buttons
-from signalbench.live.sizing import CENT, LIMIT_FACTOR
+from signalbench.live.sizing import limit_price
 from signalbench.live.status import scan_status_lines
 from signalbench.live.summary import (
     BacktestR,
@@ -414,7 +414,7 @@ class BotBrain:
         lines = ["Open signals:"]
         for s in rows:
             cdr = session.get(Ticker, s.cdr_ticker_id)
-            limit = (s.cdr_signal_close * LIMIT_FACTOR).quantize(CENT, rounding=ROUND_DOWN)
+            limit = limit_price(s.cdr_signal_close)
             order = f"LIMIT {cad(limit)}" if s.order_type == "limit" else f"MARKET if ≤ {cad(limit)}"
             expires = s.expires_at.astimezone(NEW_YORK)
             lines.append(

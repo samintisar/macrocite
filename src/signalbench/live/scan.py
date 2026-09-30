@@ -52,7 +52,7 @@ from signalbench.live.messenger import Messenger
 from signalbench.live.outbox import send_unsent
 from signalbench.live.review import SessionReview, live_market, review_session
 from signalbench.live.scaleup import ScaleUpResult
-from signalbench.live.sizing import CdrSize, entry_window, size_cdr
+from signalbench.live.sizing import CdrSize, committed_cash, entry_window, size_cdr
 from signalbench.live.start import LiveRefusedError, verify_live_config
 from signalbench.live.summary import (
     BacktestR,
@@ -303,7 +303,9 @@ class _Scan:
         for day in sessions[:-1]:
             self.step(5, partial(self.review, day, market, config, True))
             self.caught_up.append(day)
-        tonight = self.step(6, lambda: self.review(self.target, market, config, self.late_run()))
+        tonight = self.step(
+            6, lambda: self.review(self.target, market, config, self.late_run(), same_day=True)
+        )
         sized = self.step(7, lambda: self.size(tonight, config))
         explained = self.step(8, lambda: [self.explain(s, market, config) for s in sized])
         self.step(9, lambda: self.send(explained))
@@ -494,16 +496,21 @@ class _Scan:
                 )
 
     def review(
-        self, day: date, market: MarketView, config: StrategyConfig, late: bool
+        self, day: date, market: MarketView, config: StrategyConfig, late: bool,
+        same_day: bool = False,
     ) -> SessionReview:
         """Steps 5 and 6: the equity snapshot and the pause, then decide() for `day`, and the
-        exit alerts and raises it calls for (a raise is recorded now, so later sessions use it)."""
+        exit alerts and raises it calls for (a raise is recorded now, so later sessions use it).
+        Tonight (`same_day`), signals a failed run already wrote for the target hold their
+        slots and cash, so a retry cannot add to them."""
         _, paused_now = self.ledger.record_equity(
             day, pause_drawdown=Decimal(repr(config.pause_drawdown))
         )
         if paused_now:
             self.pause_texts.append(pause_review(self.ledger, self.session, self.backtest))
-        result = review_session(self.ledger, market, config, day, hold=self.hold)
+        result = review_session(
+            self.ledger, market, config, day, hold=self.hold, same_day=same_day
+        )
         for call in result.exits:
             if self.ledger.open_exit_alert(call.signal_id) is None:
                 self.ledger.record_exit_alert(
@@ -525,12 +532,19 @@ class _Scan:
         return result
 
     def size(self, tonight: SessionReview, config: StrategyConfig) -> list[Sized]:
-        """Step 7: each entry on the CDR, in rank order, from the cash no pending signal holds."""
-        self.skips.update(skip.reason for skip in tonight.decision.skips)
+        """Step 7: each entry on the CDR, in rank order, from the cash no pending signal holds
+        (at its limit price). The CDR reference is the US signal close x the CDR/US ratio of the
+        last date the CDR traded (volume > 0), the equity mark's basis; a CDR that never traded
+        is skipped. A signal already written for the target (a retry) counts as already sent."""
+        pending = self.ledger.pending_signals(self.target, same_day=True)
+        written = {s.us_symbol for s in pending if s.as_of == self.target}
+        self.skips.update(
+            "already_sent" if skip.symbol in written and skip.reason == "held" else skip.reason
+            for skip in tonight.decision.skips
+        )
         snapshot = self.ledger.equity(self.target)
         cash = self.ledger.cash(self.target) - sum(
-            (s.suggested_units * s.cdr_signal_close for s in self.ledger.pending_signals(self.target)),
-            ZERO,
+            (committed_cash(s.suggested_units, s.cdr_signal_close) for s in pending), ZERO
         )
         cdrs = {entry.us_symbol: entry.cdr_symbol for entry in self.universe}
         sized: list[Sized] = []
@@ -547,24 +561,23 @@ class _Scan:
             cdr = self.session.exec(
                 select(Ticker).where(Ticker.symbol == cdrs.get(entry.symbol, ""))
             ).first()
-            close = None if cdr is None or not cdr.active else self.session.exec(
-                select(col(Price.close))
-                .where(Price.ticker_id == cdr.id, col(Price.date) <= self.target)
-                .order_by(col(Price.date).desc())
-            ).first()
-            if cdr is None or close is None:
+            ratio = None if cdr is None or not cdr.active else self.ledger.traded_ratio(
+                cdr, self.target
+            )
+            if cdr is None or ratio is None:
                 self.skips["no_cdr_price"] += 1
                 continue
+            us_close = q4(Decimal(repr(entry.signal_close)))
             size = size_cdr(
-                us_signal_close=q4(Decimal(repr(entry.signal_close))),
-                us_stop=q4(Decimal(repr(entry.stop))), cdr_close=close,
+                us_signal_close=us_close,
+                us_stop=q4(Decimal(repr(entry.stop))), cdr_close=q4(us_close * ratio),
                 equity=snapshot.equity, uncommitted_cash=cash,
                 risk_pct=Decimal(repr(config.risk_pct)), max_positions=config.max_positions,
             )
             if size is None:
                 self.skips["no_cash"] += 1
                 continue
-            cash -= size.cost
+            cash -= size.committed
             sized.append(Sized(entry, size, cdr))
         return sized
 

@@ -87,11 +87,13 @@ def review_session(
     as_of: date,
     *,
     hold: Collection[str] = (),
+    same_day: bool = False,
 ) -> SessionReview:
     """decide() at `as_of`'s close on the ledger's portfolio, Breakout only and without Jev
-    readings (spec 04, Live config). `hold` names US symbols that get no decision tonight."""
+    readings (spec 04, Live config). `hold` names US symbols that get no decision tonight.
+    `same_day`: signals already written for `as_of` (by a failed run) hold slots and cash."""
     live = config.with_setups(("breakout",))
-    state = ledger.portfolio_state(as_of)
+    state = ledger.portfolio_state(as_of, same_day=same_day)
     decision = decide(as_of, market, NullReadingsView(), state, live)
     symbols = {p.id: p.symbol for p in state.positions}
     exits: list[ExitCall] = []

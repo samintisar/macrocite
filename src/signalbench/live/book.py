@@ -514,15 +514,20 @@ class LedgerBook:
         self._session.refresh(signal)
         return signal
 
-    def pending_signals(self, as_of: date) -> list[TradeSignal]:
+    def pending_signals(self, as_of: date, *, same_day: bool = False) -> list[TradeSignal]:
         """Signals sent before `as_of` that are still `sent` and expire at or after its close:
         they hold slots (spec 04). A signal expires at the close of its entry session, so on
         that session's evening it still holds its slot: the owner may have bought without
-        reporting it yet, as the backtest's entry would already be a position."""
+        reporting it yet, as the backtest's entry would already be a position. `same_day`
+        counts `as_of`'s own signals too: a scan retrying a target whose failed run wrote them."""
         close = datetime.combine(as_of, MARKET_CLOSE, tzinfo=NEW_YORK)
+        signal_day = col(TradeSignal.as_of)
         rows = self._session.exec(
             select(TradeSignal)
-            .where(TradeSignal.status == "sent", col(TradeSignal.as_of) < as_of)
+            .where(
+                TradeSignal.status == "sent",
+                signal_day <= as_of if same_day else signal_day < as_of,
+            )
             .order_by(col(TradeSignal.id))
         ).all()
         return [s for s in rows if s.expires_at >= close]

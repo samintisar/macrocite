@@ -123,7 +123,7 @@ def test_decide_sees_positions_pending_signals_cash_and_the_pause(ledger: Ledger
     state = ledger.portfolio_state(G)  # the XOM signal from F expires at G's close
     assert [p.symbol for p in state.positions] == ["NVDA"]
     assert [(p.symbol, p.sector, p.planned_cost) for p in state.pending] == [
-        ("XOM", "Energy", 30.0)
+        ("XOM", "Energy", 30.3)  # 3 units at the C$10.10 limit
     ]
     assert (state.slots_used(), state.cash, state.equity, state.paused) == (2, 19.6, 100.4, False)
     assert pending.id is not None

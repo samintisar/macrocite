@@ -23,6 +23,7 @@ from signalbench.db.models import (
 from signalbench.live.book import NEW_YORK, ZERO, Episode, LedgerError, cad, q4
 from signalbench.live.levels import LedgerLevels, StopLevels
 from signalbench.live.scaleup import AlertOutcome, ScaleUpResult, SignalBuy, scale_up
+from signalbench.live.sizing import committed_cash
 from signalbench.live.tax import TaxReport, build_tax_report
 from signalbench.strategy.portfolio import PendingEntry, PortfolioState, Position
 
@@ -181,18 +182,21 @@ class Ledger(LedgerLevels):
         self._session.refresh(risk)
         return risk
 
-    def portfolio_state(self, as_of: date) -> PortfolioState:
+    def portfolio_state(self, as_of: date, *, same_day: bool = False) -> PortfolioState:
         """What decide() needs at `as_of`'s close: every open position (managed and manual),
-        the pending signals holding slots, cash, equity, peak, and the pause."""
+        the pending signals holding slots and their cash at the limit price, cash, equity,
+        peak, and the pause. `same_day`: as_of's own signals are pending too (a retried scan)."""
         snapshot = self.equity(as_of)
         risk = self.risk_state()
         pending = []
-        for signal in self.pending_signals(as_of):
+        for signal in self.pending_signals(as_of, same_day=same_day):
             us = self._ticker(signal.us_symbol, TickerKind.us_stock)
             pending.append(
                 PendingEntry(
                     symbol=signal.us_symbol, setup="breakout", sector=us.sector or "Unknown",
-                    planned_cost=float(signal.suggested_units * signal.cdr_signal_close),
+                    planned_cost=float(
+                        committed_cash(signal.suggested_units, signal.cdr_signal_close)
+                    ),
                 )
             )
         return PortfolioState(

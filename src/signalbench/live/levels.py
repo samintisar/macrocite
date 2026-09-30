@@ -102,14 +102,20 @@ class LedgerLevels(LedgerBook):
             (r for r in reversed(cdr_rows) if r.volume > 0 and r.date in us_closes), None
         )
 
-    def cdr_ratio(self, cdr: Ticker, through: date) -> Decimal | None:
+    def traded_ratio(self, cdr: Ticker, through: date) -> Decimal | None:
         """CDR close / US close on the latest date on or before `through` when the CDR traded
-        (volume > 0): CAD per US dollar of the stock. A CDR that has never traded uses its
-        latest close, over the US close on or before that date. None without prices."""
+        (volume > 0): CAD per US dollar of the stock. None when it has never traded."""
         cdr_rows, us_closes = self._closes(cdr, through)
         traded = self._traded(cdr_rows, us_closes)
+        return None if traded is None else traded.close / us_closes[traded.date]
+
+    def cdr_ratio(self, cdr: Ticker, through: date) -> Decimal | None:
+        """The traded ratio (traded_ratio). A CDR that has never traded uses its latest close,
+        over the US close on or before that date. None without prices."""
+        traded = self.traded_ratio(cdr, through)
         if traded is not None:
-            return traded.close / us_closes[traded.date]
+            return traded
+        cdr_rows, us_closes = self._closes(cdr, through)
         before = [day for day in us_closes if cdr_rows and day <= cdr_rows[-1].date]
         return cdr_rows[-1].close / us_closes[max(before)] if before else None
 
@@ -239,26 +245,27 @@ class LedgerLevels(LedgerBook):
     # --- Splits ----------------------------------------------------------------------------
 
     def scale_check(self, signal_id: int) -> str | None:
-        """Why a signal's prices and the stored closes of its as_of disagree by more than 3%
+        """Why a signal's prices and the stored prices of its as_of disagree by more than 3%
         once the recorded splits are applied (an unrecorded split or bad data), or None.
-        Compares the raw close (split-adjusted, not dividend-adjusted), so dividends pass."""
+        Compares the raw US close (split-adjusted, not dividend-adjusted), so dividends pass,
+        and the CDR mark of its as_of (the basis of the signal's CDR reference, spec 05)."""
         signal = self.signal(signal_id)
         levels = self.signal_levels(signal_id)
         us = self._ticker(signal.us_symbol, TickerKind.us_stock)
+        rows = [r for r in self._prices(us.id, signal.as_of) if r.date == signal.as_of]
+        if not rows:
+            return f"no stored US close for {signal.as_of}"
+        mark = self.cdr_mark(self._by_id(signal.cdr_ticker_id), signal.as_of)
+        if mark is None:
+            return f"no stored CDR close for {signal.as_of}"
         checks = [
-            ("US", us.id, levels.us_signal_close, True),
-            ("CDR", signal.cdr_ticker_id, levels.cdr_signal_close, False),
+            ("US close", rows[0].close, levels.us_signal_close),
+            ("CDR mark", mark, levels.cdr_signal_close),
         ]
-        for name, ticker_id, expected, exact_day in checks:
-            rows = self._prices(ticker_id, signal.as_of)
-            if exact_day:
-                rows = [r for r in rows if r.date == signal.as_of]
-            if not rows:
-                return f"no stored {name} close for {signal.as_of}"
-            stored = rows[-1].close
+        for name, stored, expected in checks:
             if abs(stored / expected - 1) > TOLERANCE:
                 return (
-                    f"the stored {name} close {stored} on {rows[-1].date} is "
+                    f"the stored {name} {q4(stored)} on {signal.as_of} is "
                     f"{stored / expected:.4f}x the signal's {expected} after recorded splits"
                 )
         return None

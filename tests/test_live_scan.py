@@ -302,3 +302,63 @@ def test_a_dry_run_prints_every_message_and_writes_nothing(tmp_path: Path) -> No
     with Session(engine) as after:
         assert after.exec(select(ScanRun)).all() == []
         assert after.exec(select(TradeSignal)).all() == []
+
+
+def _set_bar(world: World, symbol: str, index: int, close: str, volume: int) -> None:
+    ticker = world.session.exec(select(Ticker).where(Ticker.symbol == symbol)).one()
+    bar = world.session.exec(
+        select(Price).where(Price.ticker_id == ticker.id, Price.date == DAYS[index])
+    ).one()
+    value = Decimal(close)
+    bar.open, bar.high, bar.low, bar.close, bar.adj_close = (
+        value, value + 1, value - 1, value, value
+    )
+    bar.volume = volume
+    world.session.add(bar)
+    world.session.commit()
+
+
+def test_the_cdr_reference_is_the_us_close_at_the_last_traded_ratio_not_a_stale_close(
+    world: World,
+) -> None:
+    _set_bar(world, "ZNVD", B, "9.50", 0)  # no trade on B: a stale close carried forward
+    world.scan(B)
+    [signal] = world.session.exec(select(TradeSignal)).all()
+    assert signal.cdr_signal_close == Decimal("10.10")  # US$101 x 0.1, the ratio of B-1
+    assert world.messenger.texts()[0] == ENTRY
+    world.scan(B + 1)  # the scale check compares the same basis: the stale close is no split
+    assert _runs(world.session)[-1].warnings == []
+
+
+def test_a_cdr_that_never_traded_is_skipped_with_no_cdr_price(world: World) -> None:
+    znvd = world.session.exec(select(Ticker).where(Ticker.symbol == "ZNVD")).one()
+    for bar in world.session.exec(select(Price).where(Price.ticker_id == znvd.id)).all():
+        bar.volume = 0
+        world.session.add(bar)
+    world.session.commit()
+    world.scan(B)
+    assert world.session.exec(select(TradeSignal)).all() == []
+    assert "skipped: no_cdr_price 1" in world.messenger.texts()[-1]
+
+
+def test_a_retry_counts_the_failed_runs_signals_toward_slots_and_committed_cash(
+    session: Session, tmp_path: Path
+) -> None:
+    # XOM trades 3M shares a day, so it outranks NVDA once it breaks out.
+    world = make_world(session, tmp_path, spikes={
+        "NVDA": {B: 2_000_000}, "XOM": {i: 3_000_000 for i in range(len(DAYS))},
+    })
+    # A manual position of C$70 leaves C$30 of cash: room for one entry.
+    world.ledger(B - 1).record_fill(cdr_symbol="ZAAP", side="buy", quantity=Decimal(7),
+                                    price_cad=Decimal(10), trade_date=DAYS[B - 1])
+    assert world.scan(B, messenger=FakeMessenger(fail=True)).status == "failed"
+    [nvda] = world.session.exec(select(TradeSignal)).all()
+    assert (nvda.us_symbol, nvda.telegram_message_id) == ("NVDA", None)
+    # The retry's prices show an XOM breakout too (a late bar), on 2x its volume.
+    _set_bar(world, "XOM", B, "101", 6_000_000)
+    _set_bar(world, "ZXOM", B, "10.1", 100)
+    assert world.scan(B, hour=20).status == "ok"
+    assert [s.us_symbol for s in world.session.exec(select(TradeSignal)).all()] == ["NVDA"]
+    entry, summary = world.messenger.sent
+    assert entry.text.startswith("🟢 BUY NVDA")
+    assert "skipped: already_sent 1, no_cash 1" in summary.text

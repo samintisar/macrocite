@@ -66,3 +66,25 @@ def test_uncommitted_cash_caps_the_size_and_none_left_means_no_order() -> None:
     assert (size.rule, size.units) == ("fractional", Decimal("1.980198"))
     assert _size("101", "97", "10.10", cash="0") is None
     assert _size("101", "97", "10.10", cash="-5") is None
+
+
+def test_whole_units_must_fit_the_cash_cap_at_the_limit_price() -> None:
+    # Cash C$30.50: 3 units cost C$30.30 at the close but C$30.60 at the C$10.20 limit, so they
+    # do not fit; 2 units are under 75% of the 3.02 target, and 4 do not fit either.
+    size = _size("101", "97", "10.10", cash="30.50")
+    assert size is not None
+    assert (size.rule, size.order_type, size.units) == ("fractional", "market", Decimal("3.019801"))
+    assert size.cost <= Decimal("30.50")
+    # Cash C$50.70 (equity 200): 5 units cost C$51.00 at the limit, so 4 units (80% of the
+    # 5.02 target) are placed, and 4 x C$10.20 is what the order holds.
+    size = _size("101", "97", "10.10", equity="200", cash="50.70")
+    assert size is not None
+    assert (size.rule, size.units, size.committed) == ("floor", Decimal(4), Decimal("40.80"))
+    assert size.units * size.limit <= Decimal("50.70")
+
+
+def test_ceil_must_fit_the_cap_at_the_limit_price_too() -> None:
+    # stop 8%, close 15, limit 15.15: ceil 2 costs 30.30 at the limit, over a cap of 30.20
+    size = _size("100", "92", "15", cash="30.20")
+    assert size is not None
+    assert (size.rule, size.units) == ("fractional", Decimal("1.666666"))

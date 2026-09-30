@@ -3,14 +3,19 @@
 Pure: Decimal in, Decimal out, no database. The entry session is the next Cboe Canada session
 after the signal (the XTSE calendar as the proxy), and the signal expires at its close.
 
-The size risks `risk_pct` of equity between the CDR close and the CDR stop (the US stop's
-distance, applied to the CDR close), capped at equity / max_positions and at the cash not
-already promised to pending signals. Whole units are preferred:
-- floor: the whole units below the target, when at least 1 and at least 75% of the target;
-- ceil: else the whole units above it, when they risk at most 2.5% of equity and fit the caps;
+The CDR close is the CDR reference: the US signal close x the CDR/US ratio of the last date
+the CDR traded (the scan's; the same basis as the equity mark), so a stale zero-volume close
+never sizes an order. The size risks `risk_pct` of equity between the CDR close and the CDR
+stop (the US stop's distance, applied to the CDR close), capped at equity / max_positions and
+at the cash not already promised to pending signals. Whole units are preferred:
+- floor: the whole units below the target that fit the cap at the limit price, when at least 1
+  and at least 75% of the target;
+- ceil: else the whole units above it, when they risk at most 2.5% of equity and fit the cap
+  at the limit price;
 - fractional: else the target itself, as a market order for a dollar amount.
-Whole units are a limit order at the CDR close + 1%; a fractional order is placed only when
-the price is at or below that same level.
+Whole units are a limit order at the CDR close + 1%, so the cap is checked at that price; a
+fractional order is placed only when the price is at or below that same level. A pending
+signal holds units x the limit of the cash (`committed`).
 """
 
 from dataclasses import dataclass
@@ -56,6 +61,21 @@ class CdrSize:
     def cost(self) -> Decimal:
         return self.units * self.cdr_close
 
+    @property
+    def committed(self) -> Decimal:
+        """The cash the pending signal holds: units x the limit."""
+        return committed_cash(self.units, self.cdr_close)
+
+
+def limit_price(cdr_close: Decimal) -> Decimal:
+    """The limit (and the fractional price bound): the CDR close + 1%, rounded down to the cent."""
+    return (cdr_close * LIMIT_FACTOR).quantize(CENT, rounding=ROUND_DOWN)
+
+
+def committed_cash(units: Decimal, cdr_close: Decimal) -> Decimal:
+    """The cash a pending signal holds: its units at the limit price."""
+    return units * limit_price(cdr_close)
+
 
 def _day(day: date) -> str:
     return f"{day:%a} {day.day:02d} {day:%b}"
@@ -90,7 +110,7 @@ def size_cdr(
     target = min(risk_pct * equity / per_unit, cap / cdr_close)
     if target <= 0:
         return None
-    limit = (cdr_close * LIMIT_FACTOR).quantize(CENT, rounding=ROUND_DOWN)
+    limit = limit_price(cdr_close)
 
     def order(rule: SizeRule, units: Decimal) -> CdrSize:
         return CdrSize(
@@ -98,11 +118,14 @@ def size_cdr(
             cdr_close=cdr_close, cdr_stop=cdr_stop, stop_pct=stop_pct, limit=limit,
         )
 
-    whole = target.to_integral_value(rounding=ROUND_FLOOR)
+    whole = min(
+        target.to_integral_value(rounding=ROUND_FLOOR),
+        (cap / limit).to_integral_value(rounding=ROUND_FLOOR),  # whole units fit at the limit
+    )
     if whole >= 1 and whole >= WHOLE_SHARE * target:
         return order("floor", whole)
     up = target.to_integral_value(rounding=ROUND_CEILING)
-    if up * per_unit <= CEIL_RISK * equity and up * cdr_close <= cap:
+    if up * per_unit <= CEIL_RISK * equity and up * limit <= cap:
         return order("ceil", up)
     units = target.quantize(UNIT_STEP, rounding=ROUND_DOWN)
     return order("fractional", units) if units > 0 else None

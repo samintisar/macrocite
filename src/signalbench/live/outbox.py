@@ -7,7 +7,6 @@ sent, so a failure part way leaves the rest for the next scan and nothing is sen
 """
 
 from datetime import date, datetime
-from decimal import ROUND_DOWN
 
 from sqlmodel import Session, col, select
 
@@ -38,7 +37,7 @@ from signalbench.live.messages import (
     split_stop_message,
 )
 from signalbench.live.messenger import Buttons, Messenger
-from signalbench.live.sizing import CENT, LIMIT_FACTOR, entry_window
+from signalbench.live.sizing import entry_window, limit_price
 from signalbench.market.calendar import Sessions
 
 
@@ -108,7 +107,7 @@ def entry_text(
         cdr_close=signal.cdr_signal_close, cdr_stop=signal.cdr_stop, stop_pct=signal.stop_pct,
         units=signal.suggested_units,
         order_type="limit" if signal.order_type == "limit" else "market",
-        limit=(signal.cdr_signal_close * LIMIT_FACTOR).quantize(CENT, rounding=ROUND_DOWN),
+        limit=limit_price(signal.cdr_signal_close),
         risk=signal.risk_amount_cad, why=signal.explanation,
         note=entry_window(signal.as_of, nyse, cboe).note,
     )
