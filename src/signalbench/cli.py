@@ -1,6 +1,10 @@
+import logging
+import subprocess  # schtasks, for the next scheduled scan in /status
+import sys
 import uuid
 from collections.abc import Callable
-from datetime import UTC, date, datetime
+from contextlib import nullcontext
+from datetime import UTC, date, datetime, time
 from decimal import Decimal, InvalidOperation
 from enum import Enum
 from pathlib import Path
@@ -85,10 +89,16 @@ from signalbench.jev.store import (
     resolved_builds,
 )
 from signalbench.live.book import LedgerError, SplitKind
+from signalbench.live.bot import BotBrain
+from signalbench.live.heartbeat import write_heartbeat
 from signalbench.live.ledger import Ledger
+from signalbench.live.messenger import ConsoleMessenger, TelegramMessenger
+from signalbench.live.scan import LIVE_SCAN_LOCK, ScanOutcome, dry_run_session, run_scan
 from signalbench.live.start import LIVE_CONFIG, start_live
+from signalbench.live.status import scan_stale_message, scan_status_lines
 from signalbench.live.tax import tax_csv, tax_text
-from signalbench.market.calendar import HISTORY_START, NyseSessions
+from signalbench.live.telegram_bot import build_application
+from signalbench.market.calendar import HISTORY_START, CboeCanadaSessions, NyseSessions
 from signalbench.market.legal_close import LegalCloses
 from signalbench.paper.lock import advisory_lock
 from signalbench.paper.run import run_paper
@@ -108,7 +118,8 @@ JEV_REPORTS_DIR = REPO_ROOT / "reports" / "jev"
 PAPER_V1_PATH = REPO_ROOT / "data" / "paper_v1.yaml"
 PAPER_REPORTS_DIR = REPO_ROOT / "reports" / "paper"
 LIVE_CONFIG_PATH = REPO_ROOT / LIVE_CONFIG
-STALE_EXIT = 3  # `paper status --stale-after-days`: no ok paper run for too long
+STALE_EXIT = 3  # `paper status` and `scan status --stale-after-days`: no ok run for too long
+SCAN_TASK = "SignalBench live scan"  # the Task Scheduler task (scripts/windows/register-tasks.ps1)
 JEV_CONCURRENCY = 4
 NEW_YORK = ZoneInfo("America/New_York")
 
@@ -921,3 +932,161 @@ def ledger_void_action(
         typer.echo(str(error), err=True)
         raise typer.Exit(1) from None
     typer.echo(f"corporate action {action_id} voided: {reason}")
+
+
+scan_app = typer.Typer(help="The evening scan of the live strategy (spec 05).")
+app.add_typer(scan_app, name="scan")
+bot_app = typer.Typer(help="The Telegram bot (spec 05).")
+app.add_typer(bot_app, name="bot")
+
+
+def _telegram() -> tuple[str, int]:
+    """The bot token and the owner's chat id from the environment (.env). Never printed."""
+    token, chat = settings.telegram_bot_token, settings.telegram_chat_id
+    if not token or chat is None:
+        typer.echo(
+            "ERROR: TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must be set (the main checkout's .env)",
+            err=True,
+        )
+        raise typer.Exit(1)
+    return token, chat
+
+
+def _next_scan_run() -> str | None:
+    """The next run time Task Scheduler shows for the scan task, or None (not Windows, or the
+    task is not registered)."""
+    if sys.platform != "win32":
+        return None
+    try:
+        result = subprocess.run(
+            ["schtasks", "/Query", "/TN", SCAN_TASK, "/FO", "LIST"],
+            capture_output=True, text=True, check=False, timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    for line in result.stdout.splitlines() if result.returncode == 0 else []:
+        key, _, value = line.partition(":")
+        if key.strip() == "Next Run Time":
+            return f"{value.strip()} (local time)"
+    return None
+
+
+def _print_scan(outcome: ScanOutcome) -> None:
+    counts = ", ".join(f"{key} {value}" for key, value in sorted(outcome.counts.items()))
+    typer.echo(f"scan {outcome.run_id}: {outcome.status} for {outcome.as_of} ({counts or 'none'})")
+
+
+@scan_app.callback(invoke_without_command=True)
+def scan(
+    ctx: typer.Context,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Print every message; write and send nothing.")
+    ] = False,
+    as_of: Annotated[
+        datetime | None,
+        typer.Option("--as-of", formats=["%Y-%m-%d"], help="With --dry-run: the session to scan."),
+    ] = None,
+    force: Annotated[
+        bool, typer.Option("--force", help="Rescan a session that was already scanned.")
+    ] = False,
+) -> None:
+    """The evening scan: ingest, catch up missed sessions, decide, size, and send (spec 05)."""
+    if ctx.invoked_subcommand is not None:
+        return
+    if as_of is not None and not dry_run:
+        typer.echo("--as-of needs --dry-run", err=True)
+        raise typer.Exit(2)
+    if dry_run:
+        _dry_run(as_of)
+        return
+    token, chat = _telegram()
+    messenger = TelegramMessenger(token, chat)
+    try:
+        with get_session() as session:
+            outcome = run_scan(
+                session, lock=advisory_lock(engine, LIVE_SCAN_LOCK), repo=REPO_ROOT,
+                universe=load_universe(UNIVERSE_PATH), nyse=NyseSessions(),
+                cboe=CboeCanadaSessions(), clock=_now, ingest=_ingest_prices,
+                ingest_earnings=_ingest_paper_earnings, splits=fetch_yfinance_splits,
+                messenger=messenger, echo=typer.echo, force=force,
+            )
+    except Exception as error:  # noqa: BLE001  # e.g. the database is down: no run row to mark
+        typer.echo(f"ERROR: {type(error).__name__}: {_first_line(error)}", err=True)
+        raise typer.Exit(1) from None
+    finally:
+        messenger.close()
+    if outcome.status == "failed":
+        raise typer.Exit(1)  # run_scan printed the ERROR line
+    if outcome.status != "locked":
+        _print_scan(outcome)
+
+
+def _dry_run(as_of: datetime | None) -> None:
+    """The scan as it would run at 18:00 New York on the session, inside a transaction that is
+    rolled back: stored prices, calendar, and splits only (nothing is fetched), every message
+    printed, nothing written or sent."""
+    nyse = NyseSessions()
+    day = last_complete_session(nyse, _now()) if as_of is None else as_of.date()
+    try:
+        with dry_run_session(engine) as session:
+            outcome = run_scan(
+                session, lock=nullcontext(True), repo=REPO_ROOT,
+                universe=load_universe(UNIVERSE_PATH), nyse=nyse, cboe=CboeCanadaSessions(),
+                clock=lambda: datetime.combine(day, time(18, 0), tzinfo=NEW_YORK),
+                ingest=lambda _session: [], ingest_earnings=lambda _session, _since: [],
+                splits=lambda _symbol, _since: [], messenger=ConsoleMessenger(typer.echo),
+                echo=typer.echo, as_of=day, force=True,
+            )
+    except Exception as error:  # noqa: BLE001  # one line, not a traceback
+        typer.echo(f"ERROR: {type(error).__name__}: {_first_line(error)}", err=True)
+        raise typer.Exit(1) from None
+    _print_scan(outcome)
+    typer.echo("(dry run: nothing was written or sent)")
+    if outcome.status == "failed":
+        raise typer.Exit(1)
+
+
+@scan_app.command("status")
+def scan_status(
+    stale_after_days: Annotated[
+        int | None,
+        typer.Option(
+            "--stale-after-days", min=0,
+            help="Exit 3 when no scan has succeeded for more than this many days (0: always, "
+            "to check the script's toast).",
+        ),
+    ] = None,
+) -> None:
+    """The last scan, the next one, the live config and code, and the pause state."""
+    try:
+        with get_session() as session:
+            lines = scan_status_lines(session, _next_scan_run)
+            stale = (
+                None if stale_after_days is None
+                else scan_stale_message(session, _now(), stale_after_days)
+            )
+    except Exception as error:  # noqa: BLE001  # one line for the scan log, not a traceback
+        typer.echo(f"ERROR: {type(error).__name__}: {_first_line(error)}", err=True)
+        raise typer.Exit(1) from None
+    for line in lines:
+        typer.echo(line)
+    if stale is not None:
+        typer.echo(stale, err=True)
+        raise typer.Exit(STALE_EXIT)
+
+
+@bot_app.command("run")
+def bot_run() -> None:
+    """Poll Telegram for the owner's commands and button presses until stopped."""
+    token, chat = _telegram()
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.getLogger("httpx").setLevel(logging.WARNING)  # its request lines show the token
+
+    def beat() -> None:
+        with get_session() as session:
+            write_heartbeat(session, datetime.now(UTC))
+
+    brain = BotBrain(chat_id=chat, sessions=get_session, calendar=NyseSessions(), clock=_now,
+                     next_run=_next_scan_run)
+    typer.echo("bot: polling Telegram; only TELEGRAM_CHAT_ID is answered")
+    build_application(token, brain, beat).run_polling(allowed_updates=["message", "callback_query"])
