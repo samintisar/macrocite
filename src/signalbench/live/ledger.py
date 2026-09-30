@@ -15,6 +15,7 @@ from sqlmodel import col, select
 from signalbench.db.models import EquitySnapshot, LiveRiskState, TickerKind, utcnow
 from signalbench.live.book import ZERO, Episode, LedgerError, cad, q4
 from signalbench.live.levels import LedgerLevels, StopLevels
+from signalbench.live.tax import TaxReport, build_tax_report
 from signalbench.strategy.portfolio import PendingEntry, PortfolioState, Position
 
 
@@ -195,3 +196,10 @@ class Ledger(LedgerLevels):
             paused=risk.paused,
             paused_since=risk.paused_at if risk.paused else None,
         )
+
+    # --- The tax report --------------------------------------------------------------------
+
+    def tax_report(self, year: int) -> TaxReport:
+        """The year's dispositions, superficial losses, and CDR splits (spec 04). A loss within
+        30 days of today is provisional. Not tax advice."""
+        return build_tax_report(self.books(), year)
