@@ -5457,8 +5457,8 @@ Expected: `0012_paper_trading (head)` among the output lines. If it shows `0011_
 
 - [ ] **Step 2: Migrate**
 
-Run: `uv run alembic upgrade head && uv run alembic current`
-Expected: `Running upgrade 0012_paper_trading -> 0013_live_ledger, Spec 04 live ledger` (after `Running upgrade 0011_jev_readings -> 0012_paper_trading, Spec 07 forward paper trading` in the 0011 case), then `0013_live_ledger (head)`.
+Run: `uv run alembic upgrade 0013_live_ledger && uv run alembic current`
+Expected: `Running upgrade 0012_paper_trading -> 0013_live_ledger, Spec 04 live ledger` (after `Running upgrade 0011_jev_readings -> 0012_paper_trading, Spec 07 forward paper trading` in the 0011 case), then `0013_live_ledger`. (The target is named, not `head`: spec 05's `0014`–`0016` are in the tree now and are run by spec 05's Task 14.)
 
 ### Task 15: ⛔ A read-only check of the empty ledger
 

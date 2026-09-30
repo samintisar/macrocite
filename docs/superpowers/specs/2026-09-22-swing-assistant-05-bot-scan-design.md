@@ -14,38 +14,39 @@
 
 | # | Step | Critical? |
 | --- | --- | --- |
-| 1 | Database check: connectivity, the `live_config` row exists, and the config file's sha256 matches it. Refuse uncommitted changes to tracked files under `src/`, `data/`, `alembic/`, `pyproject.toml`, or `uv.lock` | yes |
+| 1 | Database check: connectivity, the `live_config` row exists, and the config file's sha256 matches it. Refuse uncommitted changes to tracked files under `src/`, `data/`, `alembic/`, `pyproject.toml`, or `uv.lock`, and refuse a HEAD that is neither `live_config.start_git_sha` nor tagged `live-v*` (a deliberate update is a new tag; `--allow-any-commit` for development and dry runs elsewhere) | yes |
 | 2 | `ingest prices` (spec 01, with spec 07's fix: fetch before write, and a rescale fetches and writes the whole history in one commit) and the liquidity flags. The target needs a bar for QQQ and for every symbol held or pending; any other universe name without one is not tradable tonight | yes |
 | 3 | Earnings-calendar ingest (`ingest earnings`: the SEC 2.02 sync plus the Finnhub calendar for the next 30 days, queried from the last successful scan's `as_of` so that catch-up sessions keep their dates) | no. On failure, warn and use the stored dates |
-| 4 | Split check for held positions (the CDR of every position, and the US symbol of managed ones) and `sent` signals (spec 04, Splits): record new splits, write `split` stop rows, run the scale check | no. A failed lookup or scale check holds that symbol's decisions for the night, with a ⚠️ line |
+| 4 | Split check for held positions (the CDR of every position, and the US symbol of managed ones) and `sent` signals (spec 04, Splits): record new splits (yfinance ratios rounded to 6 decimals), write `split` stop rows, run the scale check | no. A failed lookup is a ⚠️ warning only. A failed scale check holds that symbol's decisions for the night, with a ⚠️ line; each held session of a managed position is recorded (`scan_holds`) and reviewed for exits and raises, marked late, by the first scan after the hold clears |
 | 5 | Catch-up for each missed session before the target, in order: equity snapshot, pause state, then `decide()` for exits and stop raises only. Entries are dropped as stale. Exits and stop raises are sent marked **late**, and raises are recorded so that later sessions use them | yes |
 | 6 | Tonight: equity snapshot, pause check, then `decide()` with the `PortfolioState` built from the ledger (spec 04: real positions and cash, with sent, unexpired signals holding slots) | yes |
 | 7 | Live CDR sizing of each entry (below) | yes |
 | 8 | The template "Why" line for each entry (below) | yes |
-| 9 | Write `trade_signals`, `exit_alerts`, and `stop_updates`, then send entries, exit alerts, and stop-raise messages | yes |
+| 9 | Send exit alerts, then stop raises, as soon as steps 5–6 have written them (before sizing, so a later failure cannot hold them back); then write `trade_signals` and send split notices and entries | yes |
 | 10 | Expire old signals; run the scale-up check when due | yes |
 | 11 | Evening summary | yes |
 
 - Every `decide()` call uses the live config with `with_setups(("breakout",))` and `NullReadingsView` (spec 04).
-- A critical failure stops the scan, marks it failed, and sends `⚠️ Scan failed at step N (<name>): <error>` **and** a Windows toast (below). The next scheduled run retries. If Telegram itself is unreachable, the toast still shows.
+- A critical failure stops the scan, marks it failed, tries once more to send any unsent exit alerts and raises, and sends `⚠️ Scan failed at step N (<name>): <error>` **and** a Windows toast (below). The next scheduled run retries (two retries a day are scheduled, below). If Telegram itself is unreachable, the toast still shows. The bot token is replaced by `***` in any error text stored, logged, or shown.
 - **Idempotent:** a successful `as_of` isn't rescanned without `--force`.
   - Signals are unique on (`as_of`, `us_symbol`, `setup`) and trail stop rows on (`signal_id`, `session`), so a forced rescan never re-sends.
-  - A row written without a `telegram_message_id` (the send failed) is sent by the next run.
-  - A run whose target was already scanned exits 0 and sends nothing.
+  - A row written without a `telegram_message_id` (the send failed) is sent by the next run: exits, raises, split notices, then entries.
+  - A run whose target was already scanned exits 0 and sends only rows still unsent.
+  - A retry of a target whose run failed counts that run's signals toward slots and committed cash, so it cannot add signals or over-commit.
 - **Single instance:** a Postgres advisory lock. A second concurrent scan exits immediately.
 - `--dry-run --as-of DATE` prints every message to the console, then writes nothing and sends nothing.
 
 ## Live CDR sizing
 
 For each `EntryOrder`:
-- `cdr_close` = the CDR's latest close. If it's missing or the CDR is inactive, skip with `no_cdr_price`.
+- `cdr_close` = the CDR reference: `us_signal_close × (CDR close ÷ US close)` on the most recent date the CDR traded (volume > 0), the equity mark's basis (spec 04), so a stale zero-volume close never sizes an order. If the CDR never traded or is inactive, skip with `no_cdr_price`. The message's close, limit, and stop use it.
 - `stop_pct = (us_signal_close − us_stop) / us_signal_close`, and `cdr_stop = cdr_close × (1 − stop_pct)`.
 - `risk_amount_cad = risk_pct × equity`. `risk_pct` is the config's 0.02. There is no ramp, because the C$100 start is the ramp.
-- `units_target = risk_amount_cad / (cdr_close − cdr_stop)`. Cap it so the value ≤ equity/3 (`max_positions`) and ≤ uncommitted cash.
+- `units_target = risk_amount_cad / (cdr_close − cdr_stop)`. Cap it so the value ≤ equity/3 (`max_positions`) and ≤ uncommitted cash. A pending signal commits `suggested_units × limit` of the cash.
 
 **Whole-unit rule:**
-- `w = floor(units_target)`. If `w ≥ 1` and `w ≥ 0.75 × units_target`, use `w` whole units with a **limit** order at `cdr_close × 1.01`.
-- Otherwise try `c = ceil(units_target)`. Use it if `c × (cdr_close − cdr_stop) ≤ 0.025 × equity` and `c × cdr_close` fits the caps.
+- `w = floor(units_target)`, reduced until `w × limit ≤ cap`. If `w ≥ 1` and `w ≥ 0.75 × units_target`, use `w` whole units with a **limit** order at `cdr_close × 1.01` (the limit).
+- Otherwise try `c = ceil(units_target)`. Use it if `c × (cdr_close − cdr_stop) ≤ 0.025 × equity` and `c × limit` fits the caps.
 - Otherwise use a **fractional market** order for `units_target` (dollar amount shown), with "only place it if the price is ≤ C$X" (1% rule).
 
 **Entry session** is the next Cboe Canada session, using the `XTSE` calendar as the proxy. If Cboe Canada is closed while NYSE is open, the message says so, and the signal expires at the close of the next Cboe Canada session instead.
@@ -70,7 +71,9 @@ Why: Closed at a 20-session high (US$181.52) on 2.3× its 50-session average vol
 [✅ I bought] [⏭ Skip]
 ```
 - R is the risk planned at the signal (signal − stop, C$2.30 above), not fill − stop (spec 04).
-- ✅ offers [Use suggested] or asks for a reply like `1 38.52` (units and price; the date defaults to today, and a third token can override it). That goes to `Ledger.record_fill`, which sends a confirmation.
+- ✅ never assumes a fill. For a whole-unit (limit) order it pre-fills the suggested units and asks only for the average fill price from Wealthsimple's confirmation (`38.52`; `UNITS PRICE` overrides the units). A fractional order needs both (`0.868055 38.52`). The date defaults to the signal's entry session; a date outside (`as_of`, the expiry session] is refused unless the reply ends in `force`. That goes to `Ledger.record_fill`, which sends a confirmation.
+- A price more than 10% from the signal's CDR reference, or more than 2× the suggested units, is shown back with [✅ Confirm] [Cancel] before anything is written.
+- An entry sent after its session opened (a late run) is marked `(late — check the price before placing)` and keeps its buttons.
 - ⏭ asks for a reason: [Disagree] [No time] [Price moved >1%] [Spread too wide] [Other].
 - A second tap on a handled signal replies "already logged".
 
@@ -89,7 +92,7 @@ Sell at the open.
 [✅ Sold] [Ignore]
 ```
 - The earnings variant reads `— earnings on <date>, sell before them`.
-- ✅ asks for units (default all) and a price. Ignore records `ignored`, which counts as a miss in the scale-up check.
+- ✅ asks for units (or `all`) and a price. A price alone is never silently "all": the bot asks "Sell ALL N units @ C$X?" with [✅ Confirm] [Cancel]. A price more than 10% from the latest CDR mark asks the same way. Ignore records `ignored`, which counts as a miss in the scale-up check.
 - Late exits carry `(late — should have been sent after <date>)`.
 
 **Evening summary:**
@@ -113,16 +116,16 @@ Sell at the open.
 | `/signals` | Today's open signals |
 | `/portfolio` | Positions with their current stops, cash, equity, drawdown |
 | `/pnl` | Realized and unrealized P&L, all-time and this month; closed managed trades: count, win rate, and live mean R vs the backtest's 0.505 (both R on planned risk: spec 04, spec 02) |
-| `/buy SYMBOL QTY PRICE [DATE]` | Manual or unsignalled buy |
+| `/buy SYMBOL QTY PRICE [DATE] [force]` | Manual or unsignalled buy (`force`: beyond the cash on hand) |
 | `/sell SYMBOL QTY\|all PRICE [DATE]` | Sell; linked to an open exit alert for that symbol if one exists |
 | `/void FILL_ID REASON` | Void a fill |
-| `/deposit AMOUNT`, `/withdraw AMOUNT` | Cash movements |
+| `/deposit AMOUNT`, `/withdraw AMOUNT [force]` | Cash movements. A withdrawal that takes cash below 0 needs `force` |
 | `/resume` | Only while paused. Shows the review and a [Confirm] button |
 | `/status` | Last scan result and time, next scheduled run, live config path and its sha256 (first 8 characters), code version (the last scan's git sha), pause state |
 | `/tax YEAR` | ACB report summary (full CSV via the CLI) |
 | `/help` | This list |
 
-Symbols are CDR symbols. The bot resolves US symbols to their CDR when they're unambiguous.
+Symbols are CDR symbols. The bot resolves US symbols to their CDR when they're unambiguous. `/buy` and `/sell` at a price more than 10% from the latest CDR mark ask [✅ Confirm] [Cancel] first. Every write stores the Telegram `update_id` in the same transaction (`bot_updates`), so an update redelivered after a crash is not recorded twice.
 
 ## Telegram and processes
 
@@ -142,7 +145,7 @@ Symbols are CDR symbols. The bot resolves US symbols to their CDR when they're u
   - **Bot heartbeat:** the bot writes a heartbeat time (e.g. a single-row `bot_heartbeat` table, created with `scan_runs`) at least every 10 minutes while polling. The evening scan warns in its summary and shows a toast when the last heartbeat is more than 1 hour old, so a bot that is down without exiting is noticed.
 - **Windows Task Scheduler**, registered by `scripts/windows/register-tasks.ps1`, with docs in the README:
   - `live_bot.ps1`: at logon, restart every 1 minute on failure, no time limit.
-  - `live_scan.ps1`: daily at 17:00 America/New_York, converted to the PC's local time by the script, plus at logon with a 5-minute delay for catch-up.
+  - `live_scan.ps1`: daily at 17:00 America/New_York, converted to the PC's local time by the script, retried daily 2 hours later and at about 07:30 New York (before the open, converted the same way), plus at logon with a 5-minute delay for catch-up. A retry of a scanned target only sends rows left unsent.
     - The conversion uses the earliest local time that is 17:00 New York or later on every day of the next 12 months, and the script prints it.
     - On this PC (British Columbia, which stops changing clocks in November 2026) that is 15:00 local: 18:00 New York in summer and 17:00 in winter.
     - A run before the session is complete would target the previous session and lose that night's entries.
@@ -214,3 +217,15 @@ Jev, Claude or any LLM explanation, other strategies or setups, automatic order 
   - **Dry run:** `scan --dry-run --as-of DATE` runs every step as of 18:00 New York on DATE, inside one database transaction that is rolled back. It fetches nothing, prints every message, and needs no lock.
   - **Bot:** after ✅, the bot waits in memory for one reply, `UNITS PRICE [DATE] [force]`. A restart forgets it, so tap again. [Use suggested] records the suggested units at the signal's CDR close. `/sell ... all` sells every unit held. `/status` reads the next run from Task Scheduler. The heartbeat is written every 5 minutes after a successful `getMe`. The httpx logger is kept at WARNING, because its INFO lines contain the bot token.
   - **Scripts:** the shared PowerShell code moved to `scripts/lib/SignalBench.ps1`, which `paper_nightly.ps1` now uses too. `live_bot.ps1` restarts the bot 60 seconds after an error exit. `live_scan.ps1 -CheckOnly -StaleAfterDays 0` shows the stale toast without scanning. `scripts/windows/register-tasks.ps1` prints the commands and runs them only with `-Register`. Docker's Postgres uses `restart: unless-stopped`.
+- 2026-09-30: review fixes before real money (owner-approved):
+  - **Fills:** [Use suggested] is gone (it recorded a made-up fill at the signal close). ✅ asks for the actual average fill price of a whole-unit order (units pre-filled), or units and price for a fractional one; the date defaults to the entry session and must be in (`as_of`, expiry session] unless `force`.
+  - **Sanity checks:** a price more than 10% from the reference (the signal's CDR reference for a buy, the latest CDR mark for a sale or a manual buy), a signal-linked buy over 2× the suggested units, and a price alone after ✅ Sold ask [✅ Confirm] [Cancel] first.
+  - **Exits first:** exit alerts, then raises, are sent right after steps 5–6, before sizing; the outbox order is exits, raises, split notices, entries; a failed run tries them once more; two daily retries (+2 hours, 07:30 New York) and a run for a scanned target sends rows left unsent; a retry counts the failed run's signals toward slots and cash.
+  - **Sizing:** whole units must fit the cap at the limit price, and a pending signal commits units × limit.
+  - **CDR reference:** `us_signal_close × ` the last traded CDR/US ratio (never a stale zero-volume close); a CDR that never traded is `no_cdr_price`.
+  - **Split holds:** only a failed scale check holds a symbol; a failed lookup is a warning; yfinance ratios are rounded to 6 decimals; a held session is reviewed, marked late, once the hold clears (`scan_holds`, migration `0015`). Catch-up exits and raises skip positions closed since.
+  - **Token:** the bot token is replaced by `***` in `scan_runs.error`, the scan's and the bot's output and logs, and the scripts' log and toasts.
+  - **Dedupe:** the bot stores each recorded update's `update_id` (`bot_updates`, migration `0016`), so a redelivered command or reply is recorded once.
+  - **Withdrawals:** `/withdraw` refuses to take cash below 0 unless `force`; the peak moves with cash movements (spec 04), so a withdrawal alone never pauses.
+  - **Pinned code:** step 1 also refuses a HEAD that is neither `live_config.start_git_sha` nor a `live-v*` tag (`--allow-any-commit` for development).
+  - **Late runs:** entries sent after their session opened are marked "late — check the price before placing", with their buttons.

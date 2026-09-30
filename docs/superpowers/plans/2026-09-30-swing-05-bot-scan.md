@@ -5975,7 +5975,7 @@ Expected: `0013_live_ledger` if spec 04's Task 14 ran, else `0012_paper_trading`
 - [ ] **Step 2: Migrate**
 
 Run: `uv run alembic upgrade head && uv run alembic current`
-Expected: a `Running upgrade` line per pending migration, ending with `Running upgrade 0013_live_ledger -> 0014_scan_runs, Spec 05 evening scan runs and the bot heartbeat`, then `0014_scan_runs (head)`. From `0011`, `0012` also creates the four empty paper tables, which is harmless: nothing writes them.
+Expected: a `Running upgrade` line per pending migration, ending with `Running upgrade 0013_live_ledger -> 0014_scan_runs, Spec 05 evening scan runs and the bot heartbeat`, `Running upgrade 0014_scan_runs -> 0015_scan_holds, Spec 05 held sessions: the scan reviews them once the hold clears`, and `Running upgrade 0015_scan_holds -> 0016_bot_updates, Spec 05 bot: the Telegram updates it recorded, so a redelivered one is not recorded twice`, then `0016_bot_updates (head)` (the last two are the 2026-09-30 review fixes). From `0011`, `0012` also creates the four empty paper tables, which is harmless: nothing writes them.
 
 ### Task 15: ⛔ The `live-v1` tag, the worktree, and `live start`
 
@@ -6052,6 +6052,8 @@ Expected: one line per ticker and a `liquidity:` line, exit 0 (a few failed tick
 Pick `<session>`, the last complete NYSE session (for example yesterday's date on a weekday evening, or today's after 16:15 New York). `PYTHONUTF8=1` lets Python print the messages' emoji to a pipe: Git Bash's default is cp1252, which has no 🟢 (the scheduled scripts set it themselves).
 
 Run: `PYTHONUTF8=1 uv run --frozen --env-file 'C:/Users/samin/Documents/GitHub/macrocite/.env' signalbench scan --dry-run --as-of <session>`
+The worktree is at `live-v1`, so step 1's pinned-code check passes. From the main checkout (any other commit), add `--allow-any-commit`: without it the scan refuses code that is neither the `live start` commit nor a `live-v*` tag.
+
 Expected: `--- message N ---` blocks: any 🟢 entries, then the 📊 summary, then `scan <id>: ok for <session> (…)` and `(dry run: nothing was written or sent)` (the rolled-back row still used an id from Postgres's sequence). Before `/deposit 100` the ledger holds C$0, so every Breakout that fired is skipped as `no_cash` in the summary's `skipped:` list and no 🟢 message is printed; the summary shows `Positions: none`, `Cash C$0.00`, the QQQ regime line, and a ⚠️ that the bot has never checked in. Show the output to the owner. To see entry messages as they will look, rerun this step after Task 19's `/deposit 100`.
 
 - [ ] **Step 3: Nothing was written**
@@ -6076,7 +6078,7 @@ The owner sends `/help` and then `/status` from the phone. Expected: the command
 - [ ] **Step 2: Show the owner the registration commands**
 
 Run (in the worktree, Windows PowerShell): `powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\windows\register-tasks.ps1`
-Expected: `Scan time: 15:00 local, …(British Columbia Standard Time).`, the commands for the two tasks with this worktree and `C:\Users\samin\Documents\GitHub\macrocite\.env` in them, and `Nothing registered. Rerun with -Register to run the commands above.` If the time is not 15:00, Windows' time-zone data differs from the spec's: ask the owner, and pass `-At HH:mm` for the time the owner chooses.
+Expected: `Scan time: 15:00 local, …(British Columbia Standard Time).`, `Retries: 17:00 local (2 hours later) and 05:30 local (07:30 New York or later, before the open).`, the commands for the two tasks (the scan task has four triggers: 15:00, 17:00, 05:30, and at log-on) with this worktree and `C:\Users\samin\Documents\GitHub\macrocite\.env` in them, and `Nothing registered. Rerun with -Register to run the commands above.` If the time is not 15:00, Windows' time-zone data differs from the spec's: ask the owner, and pass `-At HH:mm` for the time the owner chooses.
 
 - [ ] **Step 3: Register, on the owner's go-ahead**
 
@@ -6087,7 +6089,7 @@ Get-ScheduledTask -TaskName 'SignalBench live *' | Get-ScheduledTaskInfo | Selec
 Start-ScheduledTask -TaskName 'SignalBench live bot'
 ```
 
-Expected: both tasks, the scan's `NextRunTime` at the next 15:00 local, `LastTaskResult` 267011 (never run); then the bot runs in the background, and `/status` from the phone shows the next scheduled scan. To remove them later: `Unregister-ScheduledTask -TaskName 'SignalBench live scan' -Confirm:$false` (and the same for the bot).
+Expected: both tasks, the scan's `NextRunTime` at the next of 15:00, 17:00, or 05:30 local, `LastTaskResult` 267011 (never run); then the bot runs in the background, and `/status` from the phone shows the next scheduled scan. To remove them later: `Unregister-ScheduledTask -TaskName 'SignalBench live scan' -Confirm:$false` (and the same for the bot).
 
 - [ ] **Step 4: The toasts, checked by hand once**
 
@@ -6107,7 +6109,7 @@ Expected: a toast titled **SignalBench scans are stale** (`STALE: the last ok sc
 
 - [ ] **Updating the code later: a deliberate checkout of a new tag**
 
-A fix is committed and tested in the main checkout (a new migration is applied there first, Task 14's way), tagged, and checked out in the worktree between two evening scans: `git tag live-v2`, `git -C C:\Users\samin\Documents\GitHub\macrocite-live checkout live-v2`, `uv sync --frozen --directory C:\Users\samin\Documents\GitHub\macrocite-live`, then restart the bot task (`Stop-ScheduledTask` and `Start-ScheduledTask -TaskName 'SignalBench live bot'`). The config must not change in the new tag: the scan refuses a config whose sha256 differs from `live_config`'s.
+A fix is committed and tested in the main checkout (a new migration is applied there first, Task 14's way), tagged, and checked out in the worktree between two evening scans. The tag is required: the scan refuses code that is neither the `live start` commit nor a `live-v*` tag. `git tag live-v2`, `git -C C:\Users\samin\Documents\GitHub\macrocite-live checkout live-v2`, `uv sync --frozen --directory C:\Users\samin\Documents\GitHub\macrocite-live`, then restart the bot task (`Stop-ScheduledTask` and `Start-ScheduledTask -TaskName 'SignalBench live bot'`). The config must not change in the new tag: the scan refuses a config whose sha256 differs from `live_config`'s.
 
 ### Task 19: ⛔ The first scheduled scan, `/portfolio` from the phone, and `/deposit 100`
 
@@ -6123,7 +6125,7 @@ The owner sends `/portfolio` (expected: `No open positions.` and `Cash C$0.00`),
 
 - [ ] **Step 3: The start lines**
 
-Append one line to the spec 05 changelog: `- <date>: started. Migrations to 0014 applied; live-v1 tagged (<sha>) and its worktree created; live start froze data/strategy_v2-none-cash.yaml (a9579593cc7b); Task Scheduler "SignalBench live scan" daily at <time> local and at log-on (5-minute delay), "SignalBench live bot" at log-on; the forced failure and the stale check showed their toasts; the first scheduled scan on <date> delivered its summary; /deposit 100 recorded on <date>.` Add a matching entry to `docs/research-log.md` in its style, marking the start of live trading of v2-none-cash with C$100 (not investment advice: the owner places every order by hand).
+Append one line to the spec 05 changelog: `- <date>: started. Migrations to 0016 applied; live-v1 tagged (<sha>) and its worktree created; live start froze data/strategy_v2-none-cash.yaml (a9579593cc7b); Task Scheduler "SignalBench live scan" daily at <time> local, retried at <time + 2 h> and <morning time>, and at log-on (5-minute delay), "SignalBench live bot" at log-on; the forced failure and the stale check showed their toasts; the first scheduled scan on <date> delivered its summary; /deposit 100 recorded on <date>.` Add a matching entry to `docs/research-log.md` in its style, marking the start of live trading of v2-none-cash with C$100 (not investment advice: the owner places every order by hand).
 
 ```bash
 git add docs/superpowers/specs/2026-09-22-swing-assistant-05-bot-scan-design.md docs/research-log.md

@@ -82,15 +82,15 @@ All money is CAD, stored as `Numeric`, and computed with `Decimal`. US-equivalen
 
 **Equity** = cash + Σ open quantity × CDR mark.
 - The CDR mark is the latest US close × (CDR close ÷ US close) on the most recent date the CDR had volume > 0. If the CDR has never traded, the latest CDR close is used. This avoids stale prices on the many zero-volume days.
-- Equity is written nightly to `equity_snapshots`. **Peak** = max equity since `risk_state.peak_reset_on`.
+- Equity is written nightly to `equity_snapshots`. **Peak** = max equity since `risk_state.peak_reset_on`, each earlier snapshot adjusted by the cash movements after its date: deposits are added to it and withdrawals taken from it. Moving cash in or out is never a gain or a drawdown, so a withdrawal alone never pauses.
 
-**Pause:** set when equity < 0.85 × peak. It is cleared only by `/resume`, which sets `peak_reset_on = today`.
+**Pause:** set when equity < 0.85 × peak (the peak adjusted for cash movements). It is cleared only by `/resume`, which sets `peak_reset_on = today`.
 
 **`PortfolioState` for `decide()`** is built from the above:
 - **Positions:** every open position, managed and manual.
   - A managed position is passed as `Position(id = signal id, symbol = US symbol, setup = breakout, sector, units = open CDR quantity, entry_price = entry_us, entry_date = entry session, stop = current stop, target = None, time_limit = None, sessions_held, highest_close)`.
   - A manual position is passed with `stop = 0` so that it holds a slot and counts toward its sector. Any exit or stop update `decide()` returns for it is discarded.
-- **Pending:** sent, unexpired signals, each with `planned_cost = suggested_units × cdr_signal_close`. They hold slots.
+- **Pending:** sent, unexpired signals, each with `planned_cost = suggested_units × limit` (the limit is `cdr_signal_close × 1.01`, rounded down to the cent: the most the order can spend). They hold slots. A scan retrying a target counts that target's own signals too.
 - **Cash, equity, peak, and pause:** from the ledger.
 
 ## Splits
@@ -115,9 +115,9 @@ Wealthsimple shows split-adjusted holdings. The tool never rescales the owner's 
   - `signalbench ledger split CDR RATIO EX_DATE` records a split that yfinance missed (`source = owner`).
   - `signalbench ledger void-action ID REASON` voids a wrong row. The effects are recomputed, and any `split` stop rows written from it are superseded by a new `split` row that undoes them.
 - **Scale check:** before any exit or stop decision on a position or pending signal, the scan compares each signal price with the stored close of the date it came from:
-  - It compares the stored raw close (`close`: split-adjusted, not dividend-adjusted) with `us_signal_close` ÷ the recorded US splits, and does the same for the CDR with `cdr_signal_close`.
+  - It compares the stored raw close (`close`: split-adjusted, not dividend-adjusted) with `us_signal_close` ÷ the recorded US splits, and the CDR mark of the signal's `as_of` (the basis of its CDR reference, spec 05) with `cdr_signal_close` ÷ the recorded CDR splits.
   - A gap above 3% (spec 07's `MARK_TOLERANCE`) means an unrecorded split or bad data. Dividends never move the raw close.
-  - That position or signal then gets no decision that night, and the scan sends `⚠️ NVDA: prices moved in a way no recorded split explains; check it by hand`. A failed split lookup has the same effect on the symbols it covers.
+  - That position or signal then gets no decision that night, and the scan sends `⚠️ NVDA: prices moved in a way no recorded split explains; check it by hand`. The held session is reviewed for exits and raises, marked late, by the first scan after the check passes (spec 05). A failed split lookup is only a warning: the scale check still guards the symbol.
   - The rest of the scan goes on.
 - **Dividends:** nothing is adjusted. The stop is a price level compared with each night's close. A later dividend lowers older adjusted closes a little, which can only make a recomputed highest close, and so a trail candidate, slightly lower. The ratchet means the stop never falls.
 
@@ -181,7 +181,7 @@ class Ledger:
 - quantity > 0 with at most 6 decimals, and price > 0
 - trade_date ≤ today and not before the first cash movement
 - a sell can't exceed the open quantity (no shorts), counted in post-split units
-- a buy can't exceed available cash (no margin). The owner can override with `force=True`, because Wealthsimple is the source of truth. An override is logged.
+- a buy can't exceed available cash (no margin), and a withdrawal can't take the running cash below 0 from its date on. The owner can override either with `force=True`, because Wealthsimple is the source of truth. An override is logged.
 - a `trail` stop update must be above the current stop, and only for an open managed position
 - a split ratio must be > 0, and a `cdr_split` only for a CDR with an open position or a `sent` signal on its ex-date
 
@@ -233,3 +233,8 @@ class Ledger:
   - **Money:** prices, fees, and stops are stored at 4 decimals and quantities at 6; more decimals are refused, not rounded. Equity snapshots are rounded to 4 decimals before the peak and pause use them; the tax report rounds to the cent. A position with no stored CDR price is valued at its ACB.
   - **Fills:** on one trade date, fills replay in the order recorded, after a split with that ex-date. The no-margin check is the running cash from the buy on. A void that would leave a later sale oversold is refused (record the corrected fill first). A buy may link to a `sent` or `expired` signal (then `taken`), not to a skipped or withdrawn one.
   - **`live start`** also refuses uncommitted tracked code, like `paper start`, so `start_git_sha` names the code that ran.
+- 2026-09-30: review fixes before real money (owner-approved; spec 05 has the scan and bot side):
+  - **Peak:** each earlier snapshot is adjusted by the cash movements after it (+ deposits, − withdrawals), so a withdrawal alone never looks like a drawdown or pauses; the pause review no longer lists withdrawals.
+  - **Withdrawals:** `record_cash` refuses a withdrawal that takes the running cash below 0 from its date on, unless `force` (logged).
+  - **Pending cash:** a pending signal's `planned_cost` is `suggested_units × limit`, not × the close.
+  - **Scale check:** the CDR side compares the CDR mark of the signal's `as_of` (the basis of the new CDR reference), so a stale zero-volume close is not taken for a split; a failed split lookup no longer holds a symbol.
