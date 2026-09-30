@@ -125,7 +125,7 @@ def test_catch_up_after_two_missed_evenings(session: Session, tmp_path: Path) ->
     before = len(world.messenger.sent)
     outcome = world.scan(B + 5)
     assert outcome.counts == {"exits": 1, "raises": 1, "signals": 1, "sent": 4}
-    aapl, stop_exit, raised, summary = (m.text for m in world.messenger.sent[before:])
+    stop_exit, raised, aapl, summary = (m.text for m in world.messenger.sent[before:])
     # Entries come only from the target: AAPL on D+5, not XOM's stale breakout of D+3.
     assert aapl.startswith("🟢 BUY AAPL (CDR ZAAP) — Breakout")
     signals = session.exec(select(TradeSignal).order_by(col(TradeSignal.id))).all()

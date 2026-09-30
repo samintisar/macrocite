@@ -9,10 +9,11 @@ from pathlib import Path
 import pytest
 from sqlmodel import Session, col, select
 
-from paper_helpers import evening
+from paper_helpers import evening, git
 from scan_helpers import (
     DAYS,
     LIVE,
+    NVDA,
     UNIVERSE,
     B,
     Holiday,
@@ -22,6 +23,8 @@ from scan_helpers import (
     savepoint_engine,
 )
 from signalbench.db.models import (
+    CorporateAction,
+    ExitAlert,
     LiveConfig,
     Price,
     ScanRun,
@@ -31,7 +34,7 @@ from signalbench.db.models import (
 )
 from signalbench.ingest.prices import Split
 from signalbench.live.messenger import ConsoleMessenger, FakeMessenger
-from signalbench.live.scan import ABANDONED, dry_run_session, run_scan
+from signalbench.live.scan import ABANDONED, _Scan, dry_run_session, run_scan
 from strategy_helpers import WeekdaySessions
 
 ENTRY = (
@@ -362,3 +365,122 @@ def test_a_retry_counts_the_failed_runs_signals_toward_slots_and_committed_cash(
     entry, summary = world.messenger.sent
     assert entry.text.startswith("🟢 BUY NVDA")
     assert "skipped: already_sent 1, no_cash 1" in summary.text
+
+
+def test_exit_alerts_go_out_before_sizing_so_a_later_failure_keeps_them(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world.scan(B)
+    _bought(world)
+    for index in range(B + 1, B + 4):
+        world.scan(index)
+    before = len(world.messenger.sent)
+
+    def broken(*_args: object) -> list[object]:
+        raise RuntimeError("sizing broke")
+
+    monkeypatch.setattr(_Scan, "size", broken)
+    outcome = world.scan(B + 4)
+    assert (outcome.status, _runs(world.session)[-1].failed_step) == ("failed", 7)
+    alert, failure = world.messenger.texts()[before:]
+    assert alert.startswith("🔴 SELL NVDA (CDR ZNVD) — stop hit")
+    assert failure == "⚠️ Scan failed at step 7 (sizing): RuntimeError: sizing broke"
+    monkeypatch.undo()
+    assert world.scan(B + 4, hour=20).status == "ok"  # the retry does not send it again
+    assert [t for t in world.messenger.texts() if t.startswith("🔴")] == [alert]
+
+
+def test_a_run_for_a_scanned_target_still_sends_rows_left_unsent(world: World) -> None:
+    world.scan(B)
+    world.ledger(B).record_split(kind="cdr_split", symbol="ZNVD", ex_date=DAYS[B + 1],
+                                 ratio=Decimal(2), source="owner")  # by hand, after the scan
+    again = world.scan(B, hour=20)
+    assert again.status == "nothing"
+    assert world.messenger.texts()[-1].startswith("ℹ️ ZNVD split 2-for-1 (ex-date 2026-10-06)")
+    assert world.scan(B, hour=21).counts == {}  # nothing left to send
+
+
+def test_a_late_run_marks_its_entries_late_and_keeps_their_buttons(world: World) -> None:
+    world.scan(B + 1, hour=10)  # the first run for B is after B+1's 09:30 open
+    entry = world.messenger.sent[0]
+    assert entry.text.splitlines()[0] == (
+        "🟢 BUY NVDA (CDR ZNVD) — Breakout · NVDA (late — check the price before placing)"
+    )
+    assert entry.text.splitlines()[1:] == ENTRY.splitlines()[1:]
+    assert [b.data for row in entry.buttons for b in row] == ["b:1", "s:1"]
+
+
+def test_the_scan_runs_only_the_live_start_commit_or_a_live_tag(world: World) -> None:
+    (world.repo / "src" / "app.py").write_text("VERSION = 2\n", encoding="utf-8")
+    git(world.repo, "commit", "-q", "-am", "an update")
+    refused = world.scan(B)
+    assert refused.status == "failed"
+    head = git(world.repo, "rev-parse", "HEAD")
+    assert world.messenger.texts()[-1] == (
+        f"⚠️ Scan failed at step 1 (database check): HEAD {head[:12]} is neither the live start "
+        "commit nor a live-v* tag; check out the live tag (an update is a new live-v* tag), or "
+        "pass --allow-any-commit for development"
+    )
+    assert world.scan(B, allow_any_commit=True).status == "ok"
+    git(world.repo, "tag", "live-v2")
+    assert world.scan(B, force=True, hour=20).status == "ok"
+
+
+def test_a_failed_split_lookup_is_a_warning_not_a_hold(world: World) -> None:
+    world.scan(B)
+    _bought(world)
+    for index in range(B + 1, B + 3):
+        world.scan(index)
+    world.split_error = ConnectionError("yfinance down")
+    world.scan(B + 3)
+    run = _runs(world.session)[-1]
+    assert run.warnings == [
+        f"NVDA: the split lookup for {symbol} failed (ConnectionError: yfinance down); the "
+        "scale check still guards it"
+        for symbol in ("NVDA", "ZNVD.NE")
+    ]
+    assert run.counts["raises"] == 1  # 104 - 6 = 98: the stop is still managed
+
+
+def test_a_one_for_three_split_ratio_is_rounded_to_six_decimals(world: World) -> None:
+    world.scan(B)
+    _bought(world)
+    world.scan(B + 1)
+    rescale(world.session, "NVDA", 1 / 3)  # a 1-for-3 reverse split on B+2
+    world.splits = {"NVDA": [Split(ex_date=DAYS[B + 2], ratio=1 / 3)]}
+    outcome = world.scan(B + 2)
+    assert (outcome.counts["splits"], _runs(world.session)[-1].warnings) == (1, [])
+    action = world.session.exec(select(CorporateAction)).one()
+    assert action.ratio == Decimal("0.333333")
+
+
+def test_a_held_session_whose_close_hit_the_stop_still_exits_once_the_hold_clears(
+    session: Session, tmp_path: Path
+) -> None:
+    world = make_world(session, tmp_path, closes={"NVDA": {**NVDA, B + 5: 104.0}})
+    world.scan(B)
+    _bought(world)
+    for index in range(B + 1, B + 4):
+        world.scan(index)  # the stop is raised to 98 at B+3's close
+    # B+4: a 2-for-1 split that yfinance does not list yet. NVDA closes at 97.50 (48.75 after
+    # the split), below the stop, but the scale check holds it.
+    rescale(world.session, "NVDA", 2.0)
+    held = world.scan(B + 4)
+    assert "exits" not in held.counts
+    assert session.exec(select(ExitAlert)).all() == []
+    # B+5: the split is listed, the check passes, and NVDA is back above the stop (52 > 49).
+    # The held session B+4 is reviewed first: its close hit the stop.
+    world.splits = {"NVDA": [Split(ex_date=DAYS[B + 4], ratio=2.0)]}
+    before = len(world.messenger.sent)
+    outcome = world.scan(B + 5)
+    assert outcome.counts["exits"] == 1
+    alert = session.exec(select(ExitAlert)).one()
+    assert (alert.as_of, alert.late, alert.reason) == (DAYS[B + 4], True, "stop")
+    texts = world.messenger.texts()[before:]
+    assert texts[0].startswith("🔴 SELL NVDA (CDR ZNVD) — stop hit (US close US$48.75 ≤ stop "
+                               "US$49.00")
+    assert (
+        "⚠️ NVDA: the held session 2026-10-09 was reviewed now that its prices check out "
+        "(exits and stop raises only, sent marked late)"
+    ) in texts[-1].splitlines()
+    assert world.scan(B + 6).counts.get("exits") is None  # reviewed once

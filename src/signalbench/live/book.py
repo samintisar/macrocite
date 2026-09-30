@@ -48,6 +48,7 @@ SplitSource = Literal["yfinance", "owner"]
 OrderType = Literal["limit", "market"]
 
 NEW_YORK = ZoneInfo("America/New_York")
+MARKET_OPEN = time(9, 30)  # New York: an entry sent after its session's open is late
 MARKET_CLOSE = time(16, 0)  # a signal expires at the close of its entry session
 QUANTITY_STEP = Decimal("0.000001")  # units: 6 decimals, as stored
 PRICE_STEP = Decimal("0.0001")  # prices, fees, and stops: 4 decimals, as stored

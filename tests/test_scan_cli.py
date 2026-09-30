@@ -11,7 +11,7 @@ import pytest
 from sqlmodel import Session, select
 from typer.testing import CliRunner
 
-from paper_helpers import evening
+from paper_helpers import evening, git
 from scan_helpers import DAYS, UNIVERSE, B, World, make_world, savepoint_engine
 from signalbench import cli
 from signalbench.cli import app
@@ -166,3 +166,17 @@ def test_bot_run_polls_with_one_handler_and_keeps_the_token_out_of_the_log(
     assert logging.getLogger("httpx").level == logging.WARNING
     monkeypatch.setattr(cli.settings, "telegram_bot_token", None)
     assert runner.invoke(app, ["bot", "run"]).exit_code == 1
+
+
+def test_scan_refuses_an_unpinned_commit_unless_allowed(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _wire(monkeypatch, world, evening(DAYS[B]))
+    (world.repo / "src" / "app.py").write_text("VERSION = 2\n", encoding="utf-8")
+    git(world.repo, "commit", "-q", "-am", "an update")
+    refused = runner.invoke(app, ["scan"])
+    assert refused.exit_code == 1
+    assert "is neither the live start commit nor a live-v* tag" in refused.stdout
+    allowed = runner.invoke(app, ["scan", "--allow-any-commit"])
+    assert allowed.exit_code == 0, allowed.stderr
+    assert allowed.stdout.splitlines()[-1] == "scan 2: ok for 2026-10-05 (sent 2, signals 1)"

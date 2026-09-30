@@ -12,7 +12,7 @@ from paper_helpers import evening
 from signalbench.db.models import ExitAlert, StopUpdateRow, TradeSignal
 from signalbench.live.ledger import Ledger
 from signalbench.live.messenger import Buttons, FakeMessenger
-from signalbench.live.outbox import send_unsent
+from signalbench.live.outbox import send_exits_and_raises, send_unsent
 from signalbench.live.summary import (
     BacktestR,
     Tonight,
@@ -70,7 +70,7 @@ def test_unsent_rows_go_out_once_in_order_with_their_buttons(
     signal_id, alert_id = _trade(ledger)
     messenger = FakeMessenger()
     assert _send(session, ledger, messenger, D0) == 3
-    entry, exit_, raised = messenger.sent
+    exit_, raised, entry = messenger.sent  # exits first, then raises, then entries
     assert entry.text == (
         "🟢 BUY NVDA (CDR ZNVD) — Breakout · NVDA\n"
         "Signal C$40.00 · Stop C$37.60 (−6.0%) · Trailing stop, no target, no time limit\n"
@@ -111,8 +111,8 @@ def test_a_failed_send_leaves_the_rest_for_the_next_scan(ledger: Ledger, session
     with pytest.raises(ConnectionError):
         _send(session, ledger, flaky, D0)
     later = FakeMessenger()
-    assert _send(session, ledger, later, D0) == 2  # the exit alert and the raise
-    assert [m.text.split()[0] for m in later.sent] == ["🔴", "⬆️"]
+    assert _send(session, ledger, later, D0) == 2  # the raise and the entry
+    assert [m.text.split()[0] for m in later.sent] == ["⬆️", "🟢"]
 
 
 def test_an_entry_sent_after_its_expiry_says_not_to_place_it(
@@ -154,7 +154,8 @@ def test_split_notices_for_a_us_split_and_a_cdr_split(ledger: Ledger, session: S
                         source="yfinance")
     messenger = FakeMessenger()
     _send(session, ledger, messenger, D0)
-    us, cdr = messenger.texts()[:2]
+    assert [text.split()[0] for text in messenger.texts()] == ["🔴", "⬆️", "ℹ️", "ℹ️", "🟢"]
+    us, cdr = messenger.texts()[2:4]
     assert us == (
         "ℹ️ NVDA split 2-for-1 (ex-date 2026-06-05): stop US$192.00 → US$96.00 · no action"
     )
@@ -163,7 +164,7 @@ def test_split_notices_for_a_us_split_and_a_cdr_split(ledger: Ledger, session: S
         "(the total ACB is unchanged) · check that Wealthsimple shows 2 units · no action"
     )
     [row] = session.exec(select(StopUpdateRow).where(StopUpdateRow.reason == "split")).all()
-    assert (row.signal_id, row.telegram_message_id) == (signal_id, messenger.sent[0].message_id)
+    assert (row.signal_id, row.telegram_message_id) == (signal_id, messenger.sent[2].message_id)
 
 
 def test_the_portfolio_and_the_evening_summary(ledger: Ledger, session: Session) -> None:
@@ -240,3 +241,13 @@ def test_pnl_and_the_pause_review_compare_live_r_with_the_backtest(
         ),
         "/resume to continue (resets peak)",
     ]
+
+
+def test_exits_and_raises_can_go_out_on_their_own_before_the_entries(
+    ledger: Ledger, session: Session
+) -> None:
+    _trade(ledger)
+    messenger = FakeMessenger()
+    assert send_exits_and_raises(session, ledger, messenger) == 2
+    assert [m.text.split()[0] for m in messenger.sent] == ["🔴", "⬆️"]
+    assert _send(session, ledger, messenger, D0) == 1  # then only the entry is left

@@ -80,6 +80,7 @@ class EntryText:
     risk: Decimal
     why: str
     note: str | None  # the entry moved by a Cboe Canada holiday
+    late: bool = False  # sent after the entry session opened
 
 
 def entry_message(e: EntryText) -> str:
@@ -95,8 +96,9 @@ def entry_message(e: EntryText) -> str:
             f"MARKET (fractional): only place it if the price is ≤ {cad(e.limit)}"
         )
     spread = (SPREAD_LIMIT * 100).quantize(TENTH)
+    late = " (late — check the price before placing)" if e.late else ""
     lines = [
-        f"🟢 BUY {e.us_symbol} (CDR {e.cdr_symbol}) — Breakout · {e.company}",
+        f"🟢 BUY {e.us_symbol} (CDR {e.cdr_symbol}) — Breakout · {e.company}{late}",
         (
             f"Signal {cad(e.cdr_close)} · Stop {stop} ({pct(-e.stop_pct)}) · Trailing stop, "
             "no target, no time limit"

@@ -3,21 +3,28 @@
 Eleven steps, recorded in the run's `scan_runs` row. A critical step that fails stops the
 scan, marks the row failed with the step, and sends `⚠️ Scan failed at step N (<name>): ...`;
 the next scheduled run retries. Steps 3 (earnings calendar) and 4 (splits) are not critical:
-their failures are warnings in the summary, and a split problem holds only its symbol.
+their failures are warnings in the summary. Only a failed scale check holds a symbol, and a
+held session of a managed position is reviewed, marked late, by the first scan after the hold
+clears (`scan_holds`), so a stop hit on a held night still gets its exit.
 
 The target is the latest complete NYSE session (16:15 New York). Sessions missed since the last
 successful scan are caught up first, in order, for exits and stop raises only (sent marked
-late); entries come only from the target. A target already scanned is not scanned again without
-`force`, and every row is unique (a signal per session and symbol, a raise per position and
-session), so a forced rescan never sends a row twice. One scan runs at a time (`lock`).
+late); entries come only from the target. Exit alerts, then stop raises, are sent as soon as
+tonight's review has written them (step 9's first part), before sizing, so a later failure
+cannot hold them back; a failed scan also tries to send them before its warning. A target
+already scanned is not scanned again without `force`, but its run still sends any row left
+unsent. Every row is unique (a signal per session and symbol, a raise per position and
+session), so a retry or a forced rescan never sends a row twice. One scan runs at a time
+(`lock`). The code must be the live start commit or a `live-v*` tag (`allow_any_commit` for
+development).
 """
 
 from collections import Counter
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
-from datetime import date, datetime, time, timedelta
-from decimal import Decimal
+from datetime import date, datetime, timedelta
+from decimal import ROUND_HALF_UP, Decimal
 from functools import partial
 from pathlib import Path
 from typing import Literal, TypeVar
@@ -30,6 +37,7 @@ from signalbench.backtest.runner import last_complete_session
 from signalbench.db.models import (
     CorporateAction,
     Price,
+    ScanHold,
     ScanRun,
     StopUpdateRow,
     Ticker,
@@ -39,6 +47,7 @@ from signalbench.db.models import (
 from signalbench.ingest.cdr import CdrEntry
 from signalbench.live.book import (
     MARKET_CLOSE,
+    MARKET_OPEN,
     NEW_YORK,
     ZERO,
     LedgerError,
@@ -49,11 +58,11 @@ from signalbench.live.heartbeat import heartbeat_problem
 from signalbench.live.ledger import Ledger
 from signalbench.live.messages import failure_message
 from signalbench.live.messenger import Messenger
-from signalbench.live.outbox import send_unsent
+from signalbench.live.outbox import send_exits_and_raises, send_unsent
 from signalbench.live.review import SessionReview, live_market, review_session
 from signalbench.live.scaleup import ScaleUpResult
 from signalbench.live.sizing import CdrSize, committed_cash, entry_window, size_cdr
-from signalbench.live.start import LiveRefusedError, verify_live_config
+from signalbench.live.start import LiveRefusedError, pin_problem, verify_live_config
 from signalbench.live.summary import (
     BacktestR,
     Tonight,
@@ -85,8 +94,8 @@ STEPS = {
 LIVE_SCAN_LOCK = 2026_0930_05  # an arbitrary bigint that names the scan's advisory lock
 ABANDONED_AFTER = timedelta(hours=2)  # a `running` row this old was killed or crashed
 ABANDONED = "abandoned (killed or crashed)"
-MARKET_OPEN = time(9, 30)  # New York: a run after the next session's open is a late run
 ScanStatus = Literal["locked", "ok", "nothing", "failed"]
+RATIO_STEP = Decimal("0.000001")  # corporate_actions.ratio is Numeric(12, 6)
 T = TypeVar("T")
 
 
@@ -114,6 +123,11 @@ class Sized:
     size: CdrSize
     cdr: Ticker
     why: str = ""
+
+
+def split_ratio(ratio: float) -> Decimal:
+    """A yfinance split ratio on the stored 6-decimal scale (1/3 is 0.333333)."""
+    return Decimal(repr(ratio)).quantize(RATIO_STEP, rounding=ROUND_HALF_UP)
 
 
 def _first_line(error: BaseException) -> str:
@@ -168,12 +182,13 @@ def run_scan(
     echo: Callable[[str], None],
     as_of: date | None = None,
     force: bool = False,
+    allow_any_commit: bool = False,
 ) -> ScanOutcome:
     """The evening scan. `lock` yields False when another scan holds it: nothing is done.
     `ingest` refreshes prices and the liquidity flags and returns what failed; `ingest_earnings`
     refreshes the earnings calendar from a date; `splits` lists a symbol's splits after a date.
-    `as_of` overrides the target (`--dry-run --as-of`); `force` rescans a scanned target.
-    `clock` must return timezone-aware times."""
+    `as_of` overrides the target (`--dry-run --as-of`); `force` rescans a scanned target;
+    `allow_any_commit` skips the pinned-commit check. `clock` must return timezone-aware times."""
     with lock as held:
         if not held:
             echo("Another scan holds the lock; nothing to do.")
@@ -186,12 +201,14 @@ def run_scan(
         session.commit()
         session.refresh(run)
         scan = _Scan(session, run, repo, universe, nyse, cboe, clock, messenger, echo)
+        scan.allow_any_commit = allow_any_commit
         try:
             return scan.run(ingest, ingest_earnings, splits, force)
         except StepError as failure:
             session.rollback()
             text = failure_message(failure.step, STEPS[failure.step], failure.message)
             scan.finish("failed", failure.step, failure.message)
+            scan.send_exits_quietly()
             try:
                 messenger.send(text)
             except Exception as error:  # noqa: BLE001  # Telegram down: the script's toast shows
@@ -244,6 +261,7 @@ class _Scan:
         self.pause_texts: list[str] = []
         self.caught_up: list[date] = []
         self.backtest: BacktestR | None = None
+        self.allow_any_commit = False
 
     # --- Bookkeeping -----------------------------------------------------------------------
 
@@ -287,7 +305,9 @@ class _Scan:
             select(func.max(ScanRun.as_of)).where(ScanRun.status == "ok")
         ).one()
         if last_ok is not None and last_ok >= self.target and not force:
-            self.echo(f"{self.target} was already scanned; nothing to send.")
+            sent = self.step(9, self.send_left_over)
+            left = f"sent {sent} rows left unsent" if sent else "nothing to send"
+            self.echo(f"{self.target} was already scanned; {left}.")
             self.check_heartbeat()
             self.finish("ok")
             return ScanOutcome("nothing", self.run_row.id, self.target, None, self.counts())
@@ -300,12 +320,15 @@ class _Scan:
         market = self.step(
             5, lambda: live_market(self.session, self.universe, config, self.nyse, self.target)
         )
+        for day, symbols in self.step(5, lambda: self.owed(sessions[0])):
+            self.step(5, partial(self.rereview, day, market, config, symbols))
         for day in sessions[:-1]:
             self.step(5, partial(self.review, day, market, config, True))
             self.caught_up.append(day)
         tonight = self.step(
             6, lambda: self.review(self.target, market, config, self.late_run(), same_day=True)
         )
+        self.step(9, self.send_exits)
         sized = self.step(7, lambda: self.size(tonight, config))
         explained = self.step(8, lambda: [self.explain(s, market, config) for s in sized])
         self.step(9, lambda: self.send(explained))
@@ -327,6 +350,10 @@ class _Scan:
         self.session.commit()
         if version.dirty:
             raise StepError(1, uncommitted_code(version))
+        if not self.allow_any_commit:
+            problem = pin_problem(self.repo, version.sha, row.start_git_sha)
+            if problem is not None:
+                raise StepError(1, problem)
         self.backtest = backtest_r(self.session, row.config_sha256)
         return config
 
@@ -402,10 +429,15 @@ class _Scan:
 
     def splits(self, fetch: SplitFetcher) -> None:
         """Step 4, not critical: record new splits of held and pending names, then the scale
-        check. A failed lookup, a split that cannot be recorded, or prices no recorded split
-        explains hold that symbol's decisions tonight, with a warning."""
+        check. A failed lookup or a split that cannot be recorded is a warning: the scale check
+        still guards the symbol. Only prices no recorded split explains (or a scale check that
+        could not run) hold a symbol's decisions tonight, with a warning."""
         try:
             self._record_splits(fetch)
+        except Exception as error:  # noqa: BLE001  # the scale check below still guards
+            self.session.rollback()
+            self.warn(f"split lookup FAILED ({_first_line(error)}); the scale check still runs")
+        try:
             self._scale_check()
         except Exception as error:  # noqa: BLE001  # hold everything held rather than stop
             self.session.rollback()
@@ -459,11 +491,10 @@ class _Scan:
         for (price_symbol, kind, symbol), (since, us_symbol) in sorted(self._lookups().items()):
             try:
                 found = fetch(price_symbol, since)
-            except Exception as error:  # noqa: BLE001  # a lookup that failed is not "no split"
-                self.hold.add(us_symbol)
+            except Exception as error:  # noqa: BLE001  # the scale check still guards it
                 self.warn(
                     f"{us_symbol}: the split lookup for {price_symbol} failed "
-                    f"({_first_line(error)}); no decisions for it tonight"
+                    f"({_first_line(error)}); the scale check still guards it"
                 )
                 continue
             for split in sorted(found, key=lambda s: s.ex_date):
@@ -472,10 +503,9 @@ class _Scan:
                 try:
                     self.ledger.record_split(
                         kind=kind, symbol=symbol, ex_date=split.ex_date,
-                        ratio=Decimal(repr(split.ratio)), source="yfinance",
+                        ratio=split_ratio(split.ratio), source="yfinance",
                     )
-                except LedgerError as error:
-                    self.hold.add(us_symbol)
+                except LedgerError as error:  # the scale check holds it if its prices moved
                     self.warn(f"{us_symbol}: the {split.ex_date} split was not recorded ({error})")
                     continue
                 self.tally["splits"] += 1
@@ -511,13 +541,25 @@ class _Scan:
         result = review_session(
             self.ledger, market, config, day, hold=self.hold, same_day=same_day
         )
+        self._record(result, day, late)
+        self._track_holds(result)
+        return result
+
+    def _record(self, result: SessionReview, day: date, late: bool) -> None:
+        """The exit alerts and raises of a review, for positions still open (a catch-up
+        session may call for one the owner has sold since)."""
+        still_open = {e.signal_id for e in self.ledger.open_episodes() if e.signal_id is not None}
         for call in result.exits:
+            if call.signal_id not in still_open:
+                continue
             if self.ledger.open_exit_alert(call.signal_id) is None:
                 self.ledger.record_exit_alert(
                     signal_id=call.signal_id, as_of=day, reason=call.reason, late=late
                 )
                 self.tally["exits"] += 1
         for up in result.raises:
+            if up.signal_id not in still_open:
+                continue
             taken = self.session.exec(
                 select(StopUpdateRow.id).where(
                     StopUpdateRow.signal_id == up.signal_id, StopUpdateRow.session == day,
@@ -529,7 +571,59 @@ class _Scan:
                     signal_id=up.signal_id, session=day, new_us_stop=up.new_us_stop, late=late
                 )
                 self.tally["raises"] += 1
-        return result
+
+    def _hold_row(self, symbol: str, day: date) -> ScanHold | None:
+        return self.session.exec(
+            select(ScanHold).where(ScanHold.us_symbol == symbol, ScanHold.session == day)
+        ).first()
+
+    def _track_holds(self, result: SessionReview) -> None:
+        """A managed position held tonight is owed a review of this session; one reviewed
+        now pays what it owed for it."""
+        for position in result.state.positions:
+            if not position.id.isdigit():  # manual: nothing to review
+                continue
+            row = self._hold_row(position.symbol, result.as_of)
+            if position.symbol in self.hold:
+                if row is None:
+                    self.session.add(ScanHold(us_symbol=position.symbol, session=result.as_of))
+            elif row is not None and not row.reviewed:
+                row.reviewed = True
+                self.session.add(row)
+        self.session.commit()
+
+    def owed(self, first: date) -> list[tuple[date, frozenset[str]]]:
+        """Step 5: the sessions before `first` that were held for symbols no longer held, in
+        order, with those symbols."""
+        rows = self.session.exec(
+            select(ScanHold)
+            .where(col(ScanHold.reviewed).is_(False), col(ScanHold.session) < first)
+            .order_by(col(ScanHold.session), col(ScanHold.us_symbol))
+        ).all()
+        owed: dict[date, set[str]] = {}
+        for row in rows:
+            if row.us_symbol not in self.hold:
+                owed.setdefault(row.session, set()).add(row.us_symbol)
+        return [(day, frozenset(symbols)) for day, symbols in sorted(owed.items())]
+
+    def rereview(
+        self, day: date, market: MarketView, config: StrategyConfig, symbols: frozenset[str]
+    ) -> None:
+        """Step 5: a session that was held for `symbols`, reviewed for them alone now that
+        their prices check out: exits and raises only, sent marked late."""
+        others = {p.us_symbol for p in self.ledger.positions(day)} - symbols
+        result = review_session(self.ledger, market, config, day, hold=self.hold | others)
+        self._record(result, day, late=True)
+        for symbol in sorted(symbols):
+            row = self._hold_row(symbol, day)
+            assert row is not None
+            row.reviewed = True
+            self.session.add(row)
+            self.warn(
+                f"{symbol}: the held session {day} was reviewed now that its prices check out "
+                "(exits and stop raises only, sent marked late)"
+            )
+        self.session.commit()
 
     def size(self, tonight: SessionReview, config: StrategyConfig) -> list[Sized]:
         """Step 7: each entry on the CDR, in rank order, from the cash no pending signal holds
@@ -587,6 +681,32 @@ class _Scan:
         assert snapshot is not None
         return Sized(sized.entry, sized.size, sized.cdr, why_line(snapshot, config.breakout))
 
+    def send_exits(self) -> None:
+        """Step 9, first part: the exit alerts, then the stop raises, before any entry."""
+        self._count_sent(send_exits_and_raises(self.session, self.ledger, self.messenger))
+
+    def send_exits_quietly(self) -> None:
+        """After a failed step: try to send the exit alerts and raises before the warning. A
+        failure here changes nothing; the next run sends them."""
+        try:
+            self.send_exits()
+        except Exception:  # noqa: BLE001  # the failure message says what failed
+            self.session.rollback()
+
+    def send_left_over(self) -> int:
+        """Step 9 of a run whose target was already scanned: any row still unsent (e.g. a
+        split recorded by hand since). Returns how many were sent."""
+        before = self.tally["sent"]
+        self._count_sent(
+            send_unsent(self.session, self.ledger, self.messenger, nyse=self.nyse,
+                        cboe=self.cboe, now=self.now)
+        )
+        return self.tally["sent"] - before
+
+    def _count_sent(self, sent: int) -> None:
+        if sent:
+            self.tally["sent"] += sent
+
     def send(self, explained: list[Sized]) -> None:
         """Step 9: write tonight's signals, then send every unsent row and any pause review."""
         window = entry_window(self.target, self.nyse, self.cboe)
@@ -600,9 +720,9 @@ class _Scan:
                 expires_at=window.expires_at,
             )
             self.tally["signals"] += 1
-        self.tally["sent"] += send_unsent(
-            self.session, self.ledger, self.messenger, nyse=self.nyse, cboe=self.cboe,
-            now=self.now,
+        self._count_sent(
+            send_unsent(self.session, self.ledger, self.messenger, nyse=self.nyse,
+                        cboe=self.cboe, now=self.now)
         )
         for text in self.pause_texts:
             self.messenger.send(text)

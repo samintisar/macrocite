@@ -3,9 +3,11 @@
 `start_live()` writes the single `live_config` row once, after the backtest's guard: the file is
 data/strategy_<version>.yaml, committed and unchanged, with the committed spread survey's
 cost_per_side, and the code is committed too (its HEAD is recorded). `verify_live_config()` is
-the evening scan's check (spec 05, step 1): the row exists and the file's sha256 still matches.
+the evening scan's check (spec 05, step 1): the row exists and the file's sha256 still matches;
+`pin_problem()` is its check that the code is the one `live start` ran or a `live-v*` tag.
 """
 
+import subprocess
 from datetime import date
 from pathlib import Path
 
@@ -21,6 +23,7 @@ from signalbench.strategy.config import StrategyConfig, load_strategy_config
 from signalbench.strategy.spread import load_spread_survey
 
 LIVE_CONFIG = "data/strategy_v2-none-cash.yaml"  # owner decision, overview changelog 2026-09-29
+LIVE_TAGS = "live-v*"  # a deliberate update of the live code is a new tag (spec 05)
 
 
 class LiveRefusedError(ValueError):
@@ -80,3 +83,21 @@ def verify_live_config(session: Session, repo: Path) -> tuple[LiveConfig, Strate
             f"{row.config_sha256[:12]}. The live config is frozen (spec 04)."
         )
     return row, config.with_setups(("breakout",))
+
+
+def pin_problem(repo: Path, head: str, start_git_sha: str) -> str | None:
+    """Why HEAD may not trade (it is neither the commit `live start` ran nor tagged
+    `live-v*`), or None."""
+    if head == start_git_sha:
+        return None
+    tags = subprocess.run(
+        ["git", "-C", str(repo), "tag", "--points-at", head, "--list", LIVE_TAGS],
+        capture_output=True, text=True, check=False,
+    )
+    if tags.returncode == 0 and tags.stdout.strip():
+        return None
+    return (
+        f"HEAD {head[:12]} is neither the live start commit nor a {LIVE_TAGS} tag; check out the "
+        f"live tag (an update is a new {LIVE_TAGS} tag), or pass --allow-any-commit for "
+        "development"
+    )

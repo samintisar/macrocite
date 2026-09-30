@@ -1,9 +1,11 @@
 """Send what the scan wrote (spec 05, step 9).
 
 Every message-bearing row keeps the id of its Telegram message, and a row without one has not
-been sent yet: split notices (`split` stop rows and CDR splits), entry signals, exit alerts,
-and trailing-stop raises. They go out oldest first, each id saved as soon as its message is
-sent, so a failure part way leaves the rest for the next scan and nothing is sent twice.
+been sent yet: exit alerts, trailing-stop raises, split notices (`split` stop rows and CDR
+splits), and entry signals. They go out in that order, oldest first within each kind, each id
+saved as soon as its message is sent, so a failure part way leaves the rest for the next scan
+and nothing is sent twice. Exits come first because they matter most: the scan sends them and
+the raises on their own (`send_exits_and_raises`) before it sizes tonight's entries.
 """
 
 from datetime import date, datetime
@@ -20,7 +22,7 @@ from signalbench.db.models import (
     TradeSignal,
 )
 from signalbench.ingest.earnings import paper_earnings_dates
-from signalbench.live.book import NEW_YORK, ZERO
+from signalbench.live.book import MARKET_OPEN, NEW_YORK, ZERO
 from signalbench.live.ledger import Ledger
 from signalbench.live.messages import (
     CdrSplitText,
@@ -102,14 +104,15 @@ def entry_text(
     if signal.status == "expired" or signal.expires_at <= now:
         expired = signal.expires_at.astimezone(NEW_YORK)
         return f"{late} and expired at {expired:%Y-%m-%d %H:%M} New York time: do not place it.", ()
+    window = entry_window(signal.as_of, nyse, cboe)
     entry = EntryText(
         us_symbol=signal.us_symbol, cdr_symbol=cdr.symbol, company=cdr.company_name,
         cdr_close=signal.cdr_signal_close, cdr_stop=signal.cdr_stop, stop_pct=signal.stop_pct,
         units=signal.suggested_units,
         order_type="limit" if signal.order_type == "limit" else "market",
         limit=limit_price(signal.cdr_signal_close),
-        risk=signal.risk_amount_cad, why=signal.explanation,
-        note=entry_window(signal.as_of, nyse, cboe).note,
+        risk=signal.risk_amount_cad, why=signal.explanation, note=window.note,
+        late=now >= datetime.combine(window.session, MARKET_OPEN, tzinfo=NEW_YORK),
     )
     assert signal.id is not None
     return entry_message(entry), entry_buttons(signal.id)
@@ -173,6 +176,45 @@ def _unsent_stop_rows(session: Session, reason: str) -> list[StopUpdateRow]:
     )
 
 
+class _Sender:
+    """Sends a row's message and saves its id at once, counting what was sent."""
+
+    def __init__(self, session: Session, messenger: Messenger) -> None:
+        self.session = session
+        self.messenger = messenger
+        self.sent = 0
+
+    def __call__(
+        self, row: StopUpdateRow | CorporateAction | TradeSignal | ExitAlert, text: str,
+        buttons: Buttons = (),
+    ) -> None:
+        row.telegram_message_id = self.messenger.send(text, buttons)
+        self.session.add(row)
+        self.session.commit()
+        self.sent += 1
+
+
+def _send_exits_and_raises(session: Session, ledger: Ledger, mark: _Sender) -> None:
+    alerts = session.exec(
+        select(ExitAlert)
+        .where(col(ExitAlert.telegram_message_id).is_(None))
+        .order_by(col(ExitAlert.id))
+    ).all()
+    for alert in alerts:
+        assert alert.id is not None
+        mark(alert, exit_text(session, ledger, alert), exit_buttons(alert.id))
+    for row in _unsent_stop_rows(session, "trail"):
+        mark(row, raise_text(session, row))
+
+
+def send_exits_and_raises(session: Session, ledger: Ledger, messenger: Messenger) -> int:
+    """Send every unsent exit alert, then every unsent stop raise. Returns how many messages
+    were sent; a send that raises stops here, and what is left is sent by the next scan."""
+    mark = _Sender(session, messenger)
+    _send_exits_and_raises(session, ledger, mark)
+    return mark.sent
+
+
 def send_unsent(
     session: Session,
     ledger: Ledger,
@@ -182,19 +224,11 @@ def send_unsent(
     cboe: Sessions,
     now: datetime,
 ) -> int:
-    """Send every unsent row: split notices, then entries, exit alerts, and stop raises.
-    Returns how many messages were sent. A send that raises stops here; what is left is sent
-    by the next scan."""
-    sent = 0
-
-    def mark(row: StopUpdateRow | CorporateAction | TradeSignal | ExitAlert, text: str,
-             buttons: Buttons = ()) -> None:
-        nonlocal sent
-        row.telegram_message_id = messenger.send(text, buttons)
-        session.add(row)
-        session.commit()
-        sent += 1
-
+    """Send every unsent row: exit alerts, stop raises, split notices, then entries. Returns
+    how many messages were sent. A send that raises stops here; what is left is sent by the
+    next scan."""
+    mark = _Sender(session, messenger)
+    _send_exits_and_raises(session, ledger, mark)
     for row in _unsent_stop_rows(session, "split"):
         mark(row, split_row_text(session, row))
     actions = session.exec(
@@ -215,14 +249,4 @@ def send_unsent(
     for signal in signals:
         text, buttons = entry_text(session, signal, nyse, cboe, now)
         mark(signal, text, buttons)
-    alerts = session.exec(
-        select(ExitAlert)
-        .where(col(ExitAlert.telegram_message_id).is_(None))
-        .order_by(col(ExitAlert.id))
-    ).all()
-    for alert in alerts:
-        assert alert.id is not None
-        mark(alert, exit_text(session, ledger, alert), exit_buttons(alert.id))
-    for row in _unsent_stop_rows(session, "trail"):
-        mark(row, raise_text(session, row))
-    return sent
+    return mark.sent

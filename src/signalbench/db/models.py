@@ -508,6 +508,23 @@ class ScanRun(SQLModel, table=True):
     config_sha256: str | None = None  # the live config's, once step 1 has checked it
 
 
+class ScanHold(SQLModel, table=True):
+    """A session whose exits and stop raises the scan held back for a managed position's US
+    symbol, because its scale check failed (spec 05, step 4). The first scan after the hold
+    clears reviews it, marked late, and sets `reviewed`."""
+
+    __tablename__ = "scan_holds"
+    __table_args__ = (
+        UniqueConstraint("us_symbol", "session", name="uq_scan_holds_symbol_session"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    us_symbol: str
+    session: date  # the held session
+    reviewed: bool = False
+    created_at: datetime = _created_at()
+
+
 class BotHeartbeat(SQLModel, table=True):
     """The bot's last sign of life (spec 05): one row, rewritten at least every 10 minutes."""
 

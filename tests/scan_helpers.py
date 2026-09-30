@@ -77,6 +77,7 @@ class World:
     repo: Path
     messenger: FakeMessenger = field(default_factory=FakeMessenger)
     splits: dict[str, list[Split]] = field(default_factory=dict)
+    split_error: Exception | None = None  # every split lookup fails with it
     earnings_error: Exception | None = None
     bot_down: bool = False
     cboe: Sessions = field(default_factory=WeekdaySessions)
@@ -93,11 +94,17 @@ class World:
         force: bool = False,
         held: bool = True,
         hour: int = 18,
+        allow_any_commit: bool = False,
     ) -> ScanOutcome:
         def earnings(_session: Session, _since: date) -> list[str]:
             if self.earnings_error is not None:
                 raise self.earnings_error
             return []
+
+        def splits(symbol: str, _since: date) -> list[Split]:
+            if self.split_error is not None:
+                raise self.split_error
+            return self.splits.get(symbol, [])
 
         if not self.bot_down:  # the bot checked in five minutes ago
             write_heartbeat(self.session, evening(DAYS[index], hour) - timedelta(minutes=5))
@@ -105,9 +112,9 @@ class World:
             self.session, lock=nullcontext(held), repo=self.repo, universe=UNIVERSE,
             nyse=WeekdaySessions(), cboe=self.cboe,
             clock=lambda: evening(DAYS[index], hour), ingest=lambda _session: [],
-            ingest_earnings=earnings, splits=lambda symbol, _since: self.splits.get(symbol, []),
+            ingest_earnings=earnings, splits=splits,
             messenger=self.messenger if messenger is None else messenger,
-            echo=self.echoed.append, force=force,
+            echo=self.echoed.append, force=force, allow_any_commit=allow_any_commit,
         )
 
 

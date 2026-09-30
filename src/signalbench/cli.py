@@ -989,6 +989,13 @@ def scan(
     force: Annotated[
         bool, typer.Option("--force", help="Rescan a session that was already scanned.")
     ] = False,
+    allow_any_commit: Annotated[
+        bool,
+        typer.Option(
+            "--allow-any-commit",
+            help="Run code other than the live start commit or a live-v* tag (development).",
+        ),
+    ] = False,
 ) -> None:
     """The evening scan: ingest, catch up missed sessions, decide, size, and send (spec 05)."""
     if ctx.invoked_subcommand is not None:
@@ -997,7 +1004,7 @@ def scan(
         typer.echo("--as-of needs --dry-run", err=True)
         raise typer.Exit(2)
     if dry_run:
-        _dry_run(as_of)
+        _dry_run(as_of, allow_any_commit)
         return
     token, chat = _telegram()
     messenger = TelegramMessenger(token, chat)
@@ -1009,6 +1016,7 @@ def scan(
                 cboe=CboeCanadaSessions(), clock=_now, ingest=_ingest_prices,
                 ingest_earnings=_ingest_paper_earnings, splits=fetch_yfinance_splits,
                 messenger=messenger, echo=typer.echo, force=force,
+                allow_any_commit=allow_any_commit,
             )
     except Exception as error:  # noqa: BLE001  # e.g. the database is down: no run row to mark
         typer.echo(f"ERROR: {type(error).__name__}: {_first_line(error)}", err=True)
@@ -1021,7 +1029,7 @@ def scan(
         _print_scan(outcome)
 
 
-def _dry_run(as_of: datetime | None) -> None:
+def _dry_run(as_of: datetime | None, allow_any_commit: bool) -> None:
     """The scan as it would run at 18:00 New York on the session, inside a transaction that is
     rolled back: stored prices, calendar, and splits only (nothing is fetched), every message
     printed, nothing written or sent."""
@@ -1035,7 +1043,7 @@ def _dry_run(as_of: datetime | None) -> None:
                 clock=lambda: datetime.combine(day, time(18, 0), tzinfo=NEW_YORK),
                 ingest=lambda _session: [], ingest_earnings=lambda _session, _since: [],
                 splits=lambda _symbol, _since: [], messenger=ConsoleMessenger(typer.echo),
-                echo=typer.echo, as_of=day, force=True,
+                echo=typer.echo, as_of=day, force=True, allow_any_commit=allow_any_commit,
             )
     except Exception as error:  # noqa: BLE001  # one line, not a traceback
         typer.echo(f"ERROR: {type(error).__name__}: {_first_line(error)}", err=True)
