@@ -11,6 +11,7 @@ from sqlmodel import Session
 
 from paper_helpers import evening
 from signalbench.db.models import Price, Ticker, TickerKind, TradeSignal
+from signalbench.ingest.cdr import CdrEntry
 from signalbench.live.acb import SplitEvent, Trade
 from signalbench.live.ledger import Ledger
 from strategy_helpers import WeekdaySessions
@@ -116,3 +117,18 @@ def add_prices(
                   volume=volume if volumes is None else volumes[index])
         )
     session.commit()
+
+
+def add_benchmark(session: Session, days: Sequence[date], closes: Sequence[float]) -> Ticker:
+    """QQQ, the regime symbol every live market loads."""
+    qqq = Ticker(symbol="QQQ", company_name="Invesco QQQ Trust", kind=TickerKind.benchmark,
+                 price_symbol="QQQ")
+    session.add(qqq)
+    session.commit()
+    add_prices(session, qqq, days, closes)
+    return qqq
+
+
+def universe(*pairs: tuple[str, str, str]) -> list[CdrEntry]:
+    """(US symbol, CDR symbol, sector) as the universe file lists them."""
+    return [CdrEntry(us, cdr, f"{cdr}.NE", us, sector) for us, cdr, sector in pairs]
