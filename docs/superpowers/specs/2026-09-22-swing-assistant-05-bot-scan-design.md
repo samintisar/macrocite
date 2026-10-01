@@ -230,3 +230,4 @@ Jev, Claude or any LLM explanation, other strategies or setups, automatic order 
   - **Pinned code:** step 1 also refuses a HEAD that is neither `live_config.start_git_sha` nor a `live-v*` tag (`--allow-any-commit` for development).
   - **Late runs:** entries sent after their session opened are marked "late — check the price before placing", with their buttons.
 - 2026-09-30: paper trading removed (plan `2026-09-30-remove-paper-trading.md`): `paper_nightly.ps1` is gone; the scan's advisory lock is `signalbench/db/lock.py`, and its earnings-calendar ingest is `_ingest_calendar_earnings`.
+- 2026-10-01: database connections time out after 10 seconds (`signalbench/db/session.py`). After a reboot the bot started while Docker's port was up and Postgres was not; its first heartbeat write hung forever on the connect, so it stopped polling and never checked in. Shipped as `live-v2`; the live config is unchanged.
