@@ -149,7 +149,7 @@ Symbols are CDR symbols. The bot resolves US symbols to their CDR when they're u
     - The conversion uses the earliest local time that is 17:00 New York or later on every day of the next 12 months, and the script prints it.
     - On this PC (British Columbia, which stops changing clocks in November 2026) that is 15:00 local: 18:00 New York in summer and 17:00 in winter.
     - A run before the session is complete would target the previous session and lose that night's entries.
-  - The Docker Postgres container uses `restart: unless-stopped`.
+  - The Docker Postgres container uses `restart: always`, so it comes back whenever Docker starts.
   - Registering the tasks is a lasting change on the owner's PC: the script prints the exact commands, and they run only with the owner's go-ahead.
 - `.env` gains `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`, which the owner adds. `FINNHUB_API_KEY` already exists (spec 01). No LLM keys are needed.
 
@@ -231,3 +231,4 @@ Jev, Claude or any LLM explanation, other strategies or setups, automatic order 
   - **Late runs:** entries sent after their session opened are marked "late — check the price before placing", with their buttons.
 - 2026-09-30: paper trading removed (plan `2026-09-30-remove-paper-trading.md`): `paper_nightly.ps1` is gone; the scan's advisory lock is `signalbench/db/lock.py`, and its earnings-calendar ingest is `_ingest_calendar_earnings`.
 - 2026-10-01: database connections time out after 10 seconds (`signalbench/db/session.py`). After a reboot the bot started while Docker's port was up and Postgres was not; its first heartbeat write hung forever on the connect, so it stopped polling and never checked in. Shipped as `live-v2`; the live config is unchanged.
+- 2026-10-03: the Postgres container uses `restart: always`. With `unless-stopped` it did not come back after the owner shut the PC down (Docker Desktop restarted, the container stayed exited), so the scans failed until it was started by hand.
