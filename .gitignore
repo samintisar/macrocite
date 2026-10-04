@@ -43,12 +43,11 @@ coverage.xml
 docs/personal/**
 !docs/personal/README.md
 
-# Serena local state (memories and project.yml stay tracked)
-.serena/cache/
-.serena/project.local.yml
+# Local AI-tool config (Serena, Cursor); holds machine-specific paths
+.serena/
+.cursor/
 
-# Cursor / editor local files (keep .cursor/rules)
-.cursor/mcp.json
+# Editor local files
 .idea/
 .vscode/
 *.swp

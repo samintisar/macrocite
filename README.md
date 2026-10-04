@@ -186,4 +186,4 @@ Specs 02–05 in [`docs/superpowers/specs/`](docs/superpowers/specs/):
 
 ## License
 
-No license has been selected for this repository yet. Until one is added, all rights are reserved by the copyright holder.
+[MIT](LICENSE).
