@@ -305,4 +305,4 @@ Open ideas, none tested yet: slower momentum rotation, fewer constraints on Brea
 
 ## License
 
-No license has been selected for this repository yet. Until one is added, all rights are reserved by the copyright holder.
+[MIT](LICENSE).
