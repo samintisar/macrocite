@@ -2,6 +2,7 @@
 no real database, Telegram, or network."""
 
 import logging
+import re
 from contextlib import nullcontext
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -21,6 +22,8 @@ from signalbench.live.messenger import FakeMessenger
 from strategy_helpers import WeekdaySessions
 
 runner = CliRunner()
+# Rich forces colour on GitHub Actions, which splits "--dry-run" with escape codes.
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 
 class ClosableFake(FakeMessenger):
@@ -58,7 +61,7 @@ def world(session: Session, tmp_path: Path) -> World:
 
 def test_help_lists_scan_status_and_bot_run() -> None:
     assert "status" in runner.invoke(app, ["scan", "--help"]).stdout
-    assert "--dry-run" in runner.invoke(app, ["scan", "--help"]).stdout
+    assert "--dry-run" in ANSI.sub("", runner.invoke(app, ["scan", "--help"]).stdout)
     assert "run" in runner.invoke(app, ["bot", "--help"]).stdout
 
 
