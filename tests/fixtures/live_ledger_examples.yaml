@@ -1,0 +1,91 @@
+# Hand-checked ledger examples (spec 04, Testing), read by tests/test_live_acb.py and
+# tests/test_live_ledger.py. Every expected number was worked out by hand; the arithmetic is in
+# the comments. Money is CAD. `units` and `acb` are the holding after each event. A disposition's
+# `gain` is before the superficial-loss adjustment and `denied` is the part added to ACB.
+# Not tax advice.
+
+acb:  # the spec's worked example: buy 3 @ 30, buy 2 @ 33, sell 4 @ 35, buy 1 @ 31, sell 2 @ 29
+  deposit: {date: 2026-01-05, amount: '300.00'}
+  events:
+    - {date: 2026-01-05, side: buy, quantity: '3', price: '30.00', units: '3', acb: '90.00'}
+    # 90 + 2 x 33 = 156.00 for 5 units: 31.20 a unit
+    - {date: 2026-01-12, side: buy, quantity: '2', price: '33.00', units: '5', acb: '156.00'}
+    # ACB sold 156 x 4/5 = 124.80; gain 4 x 35 - 124.80 = 15.20; left 156 - 124.80 = 31.20
+    - {date: 2026-02-02, side: sell, quantity: '4', price: '35.00', units: '1', acb: '31.20'}
+    # 31.20 + 31 = 62.20 for 2 units: 31.10 a unit
+    - {date: 2026-02-09, side: buy, quantity: '1', price: '31.00', units: '2', acb: '62.20'}
+    # ACB sold 62.20; gain 2 x 29 - 62.20 = -4.20, a loss
+    - {date: 2026-02-16, side: sell, quantity: '2', price: '29.00', units: '0', acb: '0'}
+  dispositions:
+    - {date: 2026-02-02, proceeds: '140.00', acb: '124.80', gain: '15.20', denied: '0'}
+    # The window is 2026-01-17 to 2026-03-18. 1 unit was bought in it (the re-buy on 02-09), but
+    # 0 are held at the end of 03-18: min(2, 1, 0) = 0, so none of the loss is superficial.
+    - {date: 2026-02-16, proceeds: '58.00', acb: '62.20', gain: '-4.20', denied: '0'}
+  cash: '311.00'  # 300 - 90 - 66 + 140 - 31 + 58
+
+acb_rebuy:  # the same five fills, then 1 more unit bought @ 28 ten days after the loss
+  deposit: {date: 2026-01-05, amount: '300.00'}
+  events:
+    - {date: 2026-01-05, side: buy, quantity: '3', price: '30.00', units: '3', acb: '90.00'}
+    - {date: 2026-01-12, side: buy, quantity: '2', price: '33.00', units: '5', acb: '156.00'}
+    - {date: 2026-02-02, side: sell, quantity: '4', price: '35.00', units: '1', acb: '31.20'}
+    - {date: 2026-02-09, side: buy, quantity: '1', price: '31.00', units: '2', acb: '62.20'}
+    # Bought in the window: 1 (02-09) + 1 (02-26) = 2; held at the end of 03-18: 1.
+    # denied = 4.20 x min(2, 2, 1) / 2 = 2.10, added to the ACB: 0 units, ACB 2.10
+    - {date: 2026-02-16, side: sell, quantity: '2', price: '29.00', units: '0', acb: '2.10'}
+    # 2.10 + 28 = 30.10 for the 1 unit held
+    - {date: 2026-02-26, side: buy, quantity: '1', price: '28.00', units: '1', acb: '30.10'}
+  dispositions:
+    - {date: 2026-02-02, proceeds: '140.00', acb: '124.80', gain: '15.20', denied: '0'}
+    # allowed loss: -4.20 + 2.10 = -2.10
+    - {date: 2026-02-16, proceeds: '58.00', acb: '62.20', gain: '-4.20', denied: '2.10'}
+  cash: '283.00'  # 311 - 28
+
+cdr_split:  # buy 3 @ 30, a 2-for-1 CDR split, then sell 4 @ 16
+  deposit: {date: 2026-03-02, amount: '100.00'}
+  events:
+    - {date: 2026-03-02, side: buy, quantity: '3', price: '30.00', units: '3', acb: '90.00'}
+    # 3 x 2 = 6 units; the total ACB stays 90.00, so 30.00 a unit becomes 15.00
+    - {date: 2026-03-09, split: '2', units: '6', acb: '90.00'}
+    # ACB sold 90 x 4/6 = 60.00; gain 4 x 16 - 60 = 4.00; left 2 units, 30.00 (15.00 a unit)
+    - {date: 2026-03-16, side: sell, quantity: '4', price: '16.00', units: '2', acb: '30.00'}
+  dispositions:
+    - {date: 2026-03-16, proceeds: '64.00', acb: '60.00', gain: '4.00', denied: '0'}
+  splits:
+    - {date: 2026-03-09, ratio: '2', before: '30.00', after: '15.00'}
+  cash: '74.00'  # 100 - 90 + 64; the split moves no cash
+
+fractional:  # fractional units and fees
+  deposit: {date: 2026-04-01, amount: '50.00'}
+  events:
+    - {date: 2026-04-01, side: buy, quantity: '0.5', price: '40.00', units: '0.5', acb: '20.00'}
+    # 20 + 0.25 x 44 + 0.10 fee = 31.10
+    - {date: 2026-04-02, side: buy, quantity: '0.25', price: '44.00', fee: '0.10', units: '0.75', acb: '31.10'}
+    # ACB sold 31.10 x 0.3/0.75 = 12.44; gain 0.3 x 45 - 0.05 - 12.44 = 1.01; left 18.66
+    - {date: 2026-04-06, side: sell, quantity: '0.3', price: '45.00', fee: '0.05', units: '0.45', acb: '18.66'}
+  dispositions:
+    - {date: 2026-04-06, proceeds: '13.50', acb: '12.44', gain: '1.01', denied: '0'}
+  cash: '32.35'  # 50 - 20 - 11.10 + 13.45
+
+
+rebuild:  # spec 04 gate: positions and cash rebuilt from fills and corporate actions alone
+  cash:
+    - {date: 2026-05-01, amount: '500.00'}
+    - {date: 2026-06-15, amount: '-50.00'}
+  fills:  # in the order recorded; `void` voids the fill after it is recorded
+    - {date: 2026-05-04, symbol: ZAAA, side: buy, quantity: '4', price: '25.00'}
+    - {date: 2026-05-04, symbol: ZBBB, side: buy, quantity: '10', price: '12.00'}
+    - {date: 2026-05-05, symbol: ZBBB, side: buy, quantity: '10', price: '12.50', void: wrong fill}
+    - {date: 2026-05-05, symbol: ZBBB, side: buy, quantity: '2.5', price: '12.40'}
+    - {date: 2026-05-20, symbol: ZAAA, side: sell, quantity: '1', price: '27.00'}
+  splits:
+    - {date: 2026-06-01, symbol: ZBBB, ratio: '3'}
+  after_splits:
+    - {date: 2026-06-10, symbol: ZBBB, side: sell, quantity: '7.5', price: '4.30'}
+  expect:
+    # 500 - 100 - 120 - 31.00 + 27.00 + 32.25 - 50 (the voided 125.00 counts nowhere)
+    cash: '258.25'
+    positions:
+      ZAAA: {units: '3', acb: '75.00'}  # 100 x 3/4
+      # 120 + 31 = 151.00 for 12.5 units; x3 = 37.5 units; sold 151 x 7.5/37.5 = 30.20
+      ZBBB: {units: '30', acb: '120.80'}

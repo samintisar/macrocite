@@ -68,7 +68,11 @@ def sync_sec_earnings_events(session: Session) -> int:
 
 
 def ingest_finnhub_calendar_for_ticker(
-    session: Session, finnhub: FinnhubClient, ticker: Ticker, today: date
+    session: Session,
+    finnhub: FinnhubClient,
+    ticker: Ticker,
+    today: date,
+    since: date | None = None,
 ) -> int:
     """Replace the ticker's upcoming Finnhub events with its next 30 days of calendar.
 
@@ -77,12 +81,18 @@ def ingest_finnhub_calendar_for_ticker(
     the queried ticker. Stored rows change only after the query succeeds. A past Finnhub date
     is kept only if an SEC Item 2.02 event within CLUSTER_DAYS confirms it; otherwise it was
     a wrong estimate.
+
+    `since` (the live scan's catch-up: the first session it has not scanned) starts
+    the query there instead of today, and stored dates from then on are replaced by its
+    answer rather than dropped as unconfirmed, so a date that passed during missed nights is
+    still there for their catch-up.
     """
+    start = today if since is None else min(since, today)
     end = today + timedelta(days=CALENDAR_DAYS_AHEAD)
     payload = finnhub.get(
         "/calendar/earnings",
         {
-            "from": today.isoformat(),
+            "from": start.isoformat(),
             "to": end.isoformat(),
             "symbol": finnhub_symbol(ticker.symbol),
         },
@@ -104,7 +114,7 @@ def ingest_finnhub_calendar_for_ticker(
         )
     ).all():
         confirmed = any(abs((stored.event_date - day).days) <= CLUSTER_DAYS for day in sec_dates)
-        if stored.event_date >= today or not confirmed:
+        if stored.event_date >= start or not confirmed:
             session.delete(stored)
     session.flush()
     for event_date in sorted(event_dates):
@@ -142,6 +152,19 @@ def sec_earnings_dates(session: Session, ticker_id: uuid.UUID) -> list[date]:
         select(col(EarningsEvent.event_date)).where(
             EarningsEvent.ticker_id == ticker_id,
             EarningsEvent.source == SEC_EARNINGS_SOURCE,
+        )
+    ).all()
+    return sorted(set(dates))
+
+
+def calendar_earnings_dates(session: Session, ticker_id: uuid.UUID) -> list[date]:
+    """Every SEC Item 2.02 date plus every stored Finnhub calendar date, upcoming ones included:
+    the live scan's earnings dates. Forward, a date is known from the calendar weeks before its
+    8-K is filed. Unclustered, like sec_earnings_dates()."""
+    dates = session.exec(
+        select(col(EarningsEvent.event_date)).where(
+            EarningsEvent.ticker_id == ticker_id,
+            col(EarningsEvent.source).in_([SEC_EARNINGS_SOURCE, FINNHUB_EARNINGS_SOURCE]),
         )
     ).all()
     return sorted(set(dates))

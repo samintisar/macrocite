@@ -8,7 +8,7 @@ from signalbench.backtest.fingerprint import (
 )
 from signalbench.backtest.metrics import RunMetrics, Trade, compute_metrics, run_metrics
 from signalbench.backtest.simulator import simulate
-from signalbench.strategy.readings import NullReadingsView
+from signalbench.strategy.readings import DocumentReading, NullReadingsView
 from strategy_helpers import (
     load_test_config,
     make_bar,
@@ -87,3 +87,18 @@ def test_two_simulations_give_identical_metrics_and_fingerprints() -> None:
     first, second = run(), run()
     assert first[0].trades >= 1  # the fixture trades, so the comparison means something
     assert first == second
+
+
+def test_data_fingerprint_covers_jev_readings_only_when_given() -> None:
+    bars = [("AAA", [make_bar(date(2024, 1, 2), 10.0)])]
+    one = DocumentReading(date(2024, 1, 3), 0.1, 0.2, 0.7, 0.05, "earnings", "doc-1")
+    two = DocumentReading(date(2024, 1, 4), 0.8, 0.1, 0.1, 0.05, "legal", "doc-2")
+    without = data_fingerprint(bars, [])
+    assert data_fingerprint(bars, [], None) == without  # Jev-off fingerprints are unchanged
+    base = data_fingerprint(bars, [], [("AAA", one), ("AAA", two)])
+    assert base != without
+    assert base != data_fingerprint(bars, [], [])  # no readings is not the same as Jev off
+    assert base == data_fingerprint(bars, [], [("AAA", two), ("AAA", one)])  # order free
+    moved = DocumentReading(date(2024, 1, 3), 0.1, 0.2, 0.7, 0.06, "earnings", "doc-1")
+    assert base != data_fingerprint(bars, [], [("AAA", moved), ("AAA", two)])
+    assert base != data_fingerprint(bars, [], [("BBB", one), ("AAA", two)])

@@ -5,10 +5,14 @@ from pathlib import Path
 from pytest import approx
 
 from signalbench.backtest.benchmarks import BenchmarkStats
-from signalbench.backtest.metrics import run_metrics
+from signalbench.backtest.metrics import TradeStats, VehicleStats, run_metrics
 from signalbench.backtest.passbar import evaluate_pass_bar, passes
 from signalbench.backtest.report import (
     CAVEATS,
+    JEV_CAVEATS,
+    QQQ_CAVEATS,
+    cash_vehicle_payload,
+    jev_payload,
     metrics_payload,
     pass_bar_payload,
     render_report,
@@ -122,3 +126,119 @@ def test_positions_open_at_the_end_are_listed_apart_from_the_trades() -> None:
 def test_no_open_positions_says_none() -> None:
     text = render_report(_run())
     assert "## Positions open at the end\n\nNone." in text
+
+
+def _with_jev(run: BacktestRun, *, theta: float | None, information_only: bool) -> BacktestRun:
+    run.metrics["jev"] = jev_payload(
+        model_requested="typesafe/jev-1.13",
+        question_set="q1",
+        readings=42,
+        builds={"typesafe/jev-1.13-20260917": 42},
+        theta_block=theta,
+        information_only=information_only,
+        out_of_sample=TradeStats(trades=2, win_rate=0.5, mean_r=0.25, median_r=0.25, average_hold=4.0),
+    )
+    return run
+
+
+def test_sentiment_report_shows_status_period_readings_and_out_of_sample_trades() -> None:
+    run = _with_jev(_run(setup="sentiment"), theta=None, information_only=True)
+    text = render_report(run)
+    assert text.startswith("# Backtest: sentiment (Jev off)\n")
+    assert "**Sentiment status:** information only (fewer than 30 trades)" in text
+    assert "no Sentiment entries are sent" in text
+    assert "halves split at the calendar midpoint" in text
+    assert "| Readings used | 42 |" in text
+    assert "| Resolved builds | typesafe/jev-1.13-20260917 (42) |" in text
+    assert "## Trades signalled on or after 2026-09-15 (out of sample for Jev)" in text
+    assert "Trades 2 · win rate 50.0% · mean R 0.250" in text
+    for caveat in (*CAVEATS, *JEV_CAVEATS):
+        assert f"- {caveat}" in text
+    failed = render_report(_with_jev(_run(setup="sentiment"), theta=None, information_only=False))
+    assert "**Sentiment status:** FAIL" in failed
+
+
+def test_filtered_report_is_information_only() -> None:
+    run = _run(setup="breakout")
+    run.jev_mode = "filter"
+    text = render_report(_with_jev(run, theta=0.7, information_only=True))
+    assert text.startswith("# Backtest: breakout (Jev filter)\n")
+    assert "**Result:** FAIL (information only)" in text
+    assert "**Information only — cannot change the v1 result.**" in text
+    assert "| Filter theta_block | 0.7 |" in text
+    assert "Sentiment status" not in text
+
+
+def test_filtered_report_pass_stays_information_only() -> None:
+    run = _run(setup="breakout")
+    run.jev_mode = "filter"
+    run.passed = True
+    text = render_report(_with_jev(run, theta=0.7, information_only=True))
+    assert "**Result:** PASS (information only)" in text
+    assert "**Result:** PASS\n" not in text
+
+
+def test_sentiment_report_pass_says_may_go_live() -> None:
+    run = _with_jev(_run(setup="sentiment"), theta=None, information_only=True)
+    run.passed = True
+    text = render_report(run)
+    assert "**Sentiment status:** PASS: the Sentiment setup may go live (spec 03)" in text
+
+
+def test_jev_off_reports_have_no_jev_section() -> None:
+    text = render_report(_run())
+    assert "## Jev readings" not in text
+    for caveat in JEV_CAVEATS:
+        assert caveat not in text
+
+
+def test_other_versions_put_the_version_in_the_report_name() -> None:
+    path = report_path(Path("reports/backtests"), date(2026, 9, 29), "breakout", "off", "v2-t60-qqq")
+    assert path == Path("reports/backtests/2026-09-29-v2-t60-qqq-breakout-off.md")
+    v1 = report_path(Path("reports/backtests"), date(2026, 9, 29), "breakout", "off", "v1")
+    assert v1 == Path("reports/backtests/2026-09-29-breakout-off.md")
+
+
+def _with_qqq(run: BacktestRun) -> BacktestRun:
+    stats = VehicleStats(
+        symbol="QQQ", cost_per_side=0.002, share_vehicle=0.312, share_stocks=0.68,
+        share_cash=0.008, switches=812, buys=400, sells=412, switch_cost=12.345,
+    )
+    sensitivity = BenchmarkStats("QQQ switching at 0.05%", 24.736, 0.247, 1.1034, 0.333)
+    run.metrics["cash_vehicle"] = cash_vehicle_payload(stats, sensitivity, 0.0005)
+    return run
+
+
+def test_a_qqq_report_shows_shares_switches_sensitivity_and_caveats() -> None:
+    run = _with_qqq(_run(setup="breakout", version="v2-t30-qqq"))
+    assert json.loads(json.dumps(run.metrics)) == run.metrics
+    assert run.metrics["cash_vehicle"]["sensitivity"] == {
+        "cost_per_side": 0.0005, "total_return": 24.736, "cagr": 0.247, "sharpe": 1.1034,
+        "max_drawdown": 0.333,
+    }
+    text = render_report(run)
+    assert "**POST-HOC** (v2-t30-qqq): cannot overturn a v1 result on its own." in text
+    assert "A PASS only means the variant did not fail on the past; nothing goes live from it." in text
+    assert "## Idle cash in QQQ" in text
+    assert "| Switching cost per side | 0.20% |" in text
+    assert "| Average share of equity in QQQ | 31.2% |" in text
+    assert "| Average share of equity in stocks | 68.0% |" in text
+    assert "| Average share of equity in cash | 0.8% |" in text
+    assert "| QQQ switches (buys / sells) | 812 (400 / 412) |" in text
+    assert "| Total switching cost (equity units) | 12.35 |" in text
+    assert "Exposure above counts sessions holding a stock" in text
+    assert (
+        "**Sensitivity (information only): QQQ switching at 0.05%** — total return 2473.6%, "
+        "CAGR 24.7%, Sharpe 1.10, max drawdown 33.3%. Only the 0.20% run is stored and judged."
+    ) in text
+    for caveat in (*CAVEATS, *QQQ_CAVEATS):
+        assert f"- {caveat}" in text
+    assert text.index("## Idle cash in QQQ") < text.index("## Skips by reason")
+
+
+def test_reports_without_a_cash_vehicle_have_no_qqq_section() -> None:
+    text = render_report(_run(setup="breakout", version="v2-none-cash"))
+    assert "**POST-HOC** (v2-none-cash)" in text
+    assert "Idle cash in" not in text and "Sensitivity" not in text
+    for caveat in QQQ_CAVEATS:
+        assert caveat not in text

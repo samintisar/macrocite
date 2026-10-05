@@ -17,7 +17,7 @@ class Position:
     entry_date: date
     stop: float
     target: float | None
-    time_limit: int
+    time_limit: int | None  # sessions; None: no time limit (spec 06, Breakout only)
     sessions_held: int  # the entry session counts as 1
     highest_close: float  # highest close since entry, entry session included
 
@@ -34,10 +34,10 @@ class PendingEntry:
 
 @dataclass(frozen=True)
 class PortfolioState:
-    cash: float
+    cash: float  # with a cash vehicle (spec 06): cash + the vehicle at the close, net of its cost
     positions: tuple[Position, ...]
     pending: tuple[PendingEntry, ...]
-    equity: float  # cash + sum(units * close) at the as-of close
+    equity: float  # cash + sum(units * close) at the as-of close, + the cash vehicle (spec 06)
     peak: float
     paused: bool
     paused_since: date | None

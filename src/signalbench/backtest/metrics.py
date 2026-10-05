@@ -2,16 +2,17 @@ from __future__ import annotations
 
 import math
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from statistics import fmean, median, stdev
+from typing import cast
 
 import numpy as np
 
-from signalbench.backtest.simulator import SimulationResult, TradeRecord
-from signalbench.strategy.config import BacktestParams
+from signalbench.backtest.simulator import EquityPoint, SimulationResult, TradeRecord
+from signalbench.strategy.config import BacktestParams, CashVehicle
 
 
 @dataclass(frozen=True)
@@ -251,4 +252,41 @@ def run_metrics(result: SimulationResult, params: BacktestParams) -> RunMetrics:
         skips_by_reason=dict(sorted(skips.items())),
         open_positions_at_end=len(result.open_positions),
         recent=recent,
+    )
+
+
+@dataclass(frozen=True)
+class VehicleStats:
+    """How a run used its cash vehicle (spec 06). Shares are averages over the run's sessions
+    of each part's share of equity at the close; they sum to 1."""
+
+    symbol: str
+    cost_per_side: float
+    share_vehicle: float
+    share_stocks: float
+    share_cash: float
+    switches: int  # buys + sells
+    buys: int
+    sells: int
+    switch_cost: float  # in the same units as equity (start equity 100)
+
+
+def vehicle_stats(result: SimulationResult, vehicle: CashVehicle) -> VehicleStats:
+    points = [point for point in result.equity_curve if point.equity > 0.0]
+
+    def share(part: Callable[[EquityPoint], float]) -> float:
+        return fmean(part(point) / point.equity for point in points) if points else 0.0
+
+    buys = [e for e in result.events if e["event"] == "vehicle_buy"]
+    sells = [e for e in result.events if e["event"] == "vehicle_sell"]
+    return VehicleStats(
+        symbol=vehicle.symbol,
+        cost_per_side=vehicle.cost_per_side,
+        share_vehicle=share(lambda p: p.vehicle_value),
+        share_stocks=share(lambda p: p.equity - p.cash - p.vehicle_value),
+        share_cash=share(lambda p: p.cash),
+        switches=len(buys) + len(sells),
+        buys=len(buys),
+        sells=len(sells),
+        switch_cost=math.fsum(cast(float, e["cost"]) for e in buys + sells),
     )

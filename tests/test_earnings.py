@@ -204,3 +204,27 @@ def test_finnhub_calendar_drops_past_dates_that_sec_does_not_confirm(session: Se
         ("NVDA", date(2026, 8, 26)),
         ("NVDA", date(2026, 11, 19)),
     ]
+
+
+def test_a_catch_up_since_keeps_and_refreshes_past_calendar_dates(session: Session) -> None:
+    """The scan's catch-up queries from the first session it has not scanned: calendar dates from
+    then on are refreshed from the query, not deleted as unconfirmed; older ones still are."""
+    mu = _ticker(session, "MU")
+    for day in (date(2026, 9, 1), date(2026, 9, 17), date(2026, 9, 18)):  # none confirmed by SEC
+        session.add(EarningsEvent(ticker_id=mu.id, event_date=day, source=FINNHUB_EARNINGS_SOURCE))
+    session.commit()
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return _rows(("MU", "2026-09-17"), ("MU", "2026-12-17"))
+
+    finnhub = FinnhubClient("k", httpx.Client(transport=httpx.MockTransport(handler)), limiter=FAST)
+    since = date(2026, 9, 15)
+    assert ingest_finnhub_calendar_for_ticker(session, finnhub, mu, TODAY, since=since) == 2
+    assert [(r.url.params["from"], r.url.params["to"]) for r in seen] == [
+        ("2026-09-15", "2026-10-22"),
+    ]
+    assert _events(session, FINNHUB_EARNINGS_SOURCE) == [
+        ("MU", date(2026, 9, 17)), ("MU", date(2026, 12, 17)),
+    ]

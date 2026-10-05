@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 from pytest import approx
 
 from signalbench.strategy.setups import breakout, first_signal, pullback, sentiment
@@ -36,6 +38,17 @@ def test_breakout_fires_on_new_high_with_volume() -> None:
     assert signal is not None
     assert signal.stop == approx(105.0 - 2 * 2.5)
     assert (signal.target_r, signal.time_limit) == (None, 30)
+
+
+def test_breakout_with_no_time_limit_signals_none() -> None:
+    open_ended = replace(CONFIG, breakout=replace(CONFIG.breakout, time_limit=None))
+    snap = make_snapshot(
+        close=105.0, sma=UPTREND, prior_max_close=104.0, volume=1_500_000.0,
+        prior_mean_volume=1_000_000.0, atr=2.5,
+    )
+    signal = breakout(snap, open_ended)
+    assert signal is not None
+    assert (signal.target_r, signal.time_limit) == (None, None)
 
 
 def test_breakout_rejects_equal_high_or_thin_volume() -> None:

@@ -1,0 +1,38 @@
+# Jev filter decision (spec 03, pre-registered rule), written once by
+# `signalbench jev fit-filter --write`. Do not edit: a different decision needs a new
+# question set. `signalbench backtest run --jev filter` reads mode and theta_block.
+question_set: q1
+model_requested: typesafe/jev-1.13
+mode: information_only
+theta_fit: 0.7
+theta_block: null
+reason: blocked mean R 0.227 is not below kept mean R -0.007 in the confirmation window
+fit_window:
+  start: 2016-01-01
+  end: 2022-12-31
+confirm_window:
+  start: 2023-01-01
+  end: 2026-09-24
+fit:
+  theta: 0.7
+  trades: 589
+  blocked: 13
+  kept: 576
+  mean_r_blocked: 0.13942
+  mean_r_kept: -0.015657
+confirm:
+  theta: 0.7
+  trades: 361
+  blocked: 80
+  kept: 281
+  mean_r_blocked: 0.226885
+  mean_r_kept: -0.006869
+source_runs:
+  pullback: e692b1c5-3e24-4306-aeba-4a189771ed38
+  breakout: 60245151-8be8-4914-9bca-4d9447ad06d7
+strategy_config_sha256: 98037e0b93e9695182524476c5a66ef773ee6455ee8e2e5c7c6ad83cab2b839e
+readings: 85314
+builds:
+  typesafe/jev-1.13-20260917: 85314
+decided_on: 2026-09-28
+report: reports/jev/2026-09-28-filter-decision.md

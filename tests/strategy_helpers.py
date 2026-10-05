@@ -2,8 +2,9 @@
 
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from signalbench.market.bars import AdjustedBar
 from signalbench.strategy.config import SetupName, StrategyConfig, load_strategy_config
@@ -11,6 +12,7 @@ from signalbench.strategy.market_view import MarketView, Snapshot, SymbolInput
 from signalbench.strategy.portfolio import PortfolioState, Position
 
 FIXTURE_CONFIG = Path(__file__).parent / "fixtures" / "strategy_test.yaml"
+NEW_YORK = ZoneInfo("America/New_York")
 VOLUME = 1_000_000
 
 
@@ -185,3 +187,10 @@ class WeekdaySessions:
 
     def is_session(self, day: date) -> bool:
         return day.weekday() < 5
+
+    def session_closes(self, start: date, end: date) -> list[tuple[date, datetime]]:
+        """Every fixture session closes at 16:00 New York time."""
+        return [
+            (day, datetime.combine(day, time(16, 0), tzinfo=NEW_YORK))
+            for day in self.sessions_between(start, end)
+        ]

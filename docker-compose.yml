@@ -1,6 +1,7 @@
 services:
   postgres:
     image: postgres:16
+    restart: always  # spec 05: back whenever Docker starts, reboots included (unless-stopped was not)
     environment:
       POSTGRES_USER: signalbench
       POSTGRES_PASSWORD: signalbench

@@ -6,10 +6,11 @@ from pathlib import Path
 from typing import Any
 
 from signalbench.backtest.benchmarks import BenchmarkStats
-from signalbench.backtest.metrics import RunMetrics
+from signalbench.backtest.metrics import RunMetrics, TradeStats, VehicleStats
 from signalbench.backtest.passbar import Criterion
 from signalbench.backtest.simulator import SimulationResult
 from signalbench.db.models import BacktestRun
+from signalbench.jev.questions import JEV_RELEASE
 from signalbench.strategy.config import BacktestParams
 
 CAVEATS = (
@@ -20,6 +21,29 @@ CAVEATS = (
     "US prices stand in for CDR prices. CDR spreads enter only through the cost per side.",
     "Realized SEC Item 2.02 dates stand in for earnings dates known in advance.",
     "Liquidity is checked on US traded value only, because CDR history is short.",
+)
+JEV_CAVEATS = (
+    (
+        "Jev's training cutoff is unpublished, so results before 2026-09-15 may be optimistic. "
+        "Trades signalled on or after 2026-09-15 are the only fully out-of-sample ones."
+    ),
+    "Finnhub news covers only about the last year; earlier readings come from 8-K filings only.",
+)
+QQQ_CAVEATS = (
+    "Post-hoc: the ideas came from looking at v1's results on the same data.",
+    (
+        "QQQ's 2012–2026 run was exceptional; holding more QQQ helps less or hurts if the next "
+        "decade differs."
+    ),
+    (
+        "Taxes are not modeled. In a non-registered account each QQQ switch is a disposition, "
+        "and selling at a loss and rebuying within 30 days can be a superficial loss. "
+        "Fractional units of the ETF are assumed."
+    ),
+    (
+        "QQQ's adjusted prices stand in for the fund actually used, a CAD-listed, CAD-hedged "
+        "Nasdaq-100 ETF, the same way US prices stand in for the hedged CDRs."
+    ),
 )
 PASS_BAR_ROWS = (
     ("trades", "Trades", ">="),
@@ -50,6 +74,45 @@ def metrics_payload(
     return payload
 
 
+def jev_payload(
+    *,
+    model_requested: str,
+    question_set: str,
+    readings: int,
+    builds: dict[str, int],
+    theta_block: float | None,
+    information_only: bool,
+    out_of_sample: TradeStats,
+) -> dict[str, Any]:
+    """Spec 03 facts stored under metrics["jev"] for Sentiment and --jev filter runs."""
+    return {
+        "model_requested": model_requested,
+        "question_set": question_set,
+        "readings": readings,
+        "builds": dict(sorted(builds.items())),
+        "theta_block": theta_block,
+        "information_only": information_only,
+        "out_of_sample_since": JEV_RELEASE.isoformat(),
+        "out_of_sample": asdict(out_of_sample),
+    }
+
+
+def cash_vehicle_payload(
+    stats: VehicleStats, sensitivity: BenchmarkStats, sensitivity_cost: float
+) -> dict[str, Any]:
+    """Spec 06 facts stored under metrics["cash_vehicle"] for runs with a cash vehicle. The
+    sensitivity run (the same config at `sensitivity_cost` per switch) is information only."""
+    payload: dict[str, Any] = asdict(stats)
+    payload["sensitivity"] = {
+        "cost_per_side": sensitivity_cost,
+        "total_return": sensitivity.total_return,
+        "cagr": sensitivity.cagr,
+        "sharpe": sensitivity.sharpe,
+        "max_drawdown": sensitivity.max_drawdown,
+    }
+    return payload
+
+
 def pass_bar_payload(bar: dict[str, Criterion]) -> dict[str, Any]:
     return {name: asdict(criterion) for name, criterion in bar.items()}
 
@@ -62,8 +125,13 @@ def trade_log_payload(result: SimulationResult) -> dict[str, Any]:
     }
 
 
-def report_path(directory: Path, run_date: date, setup: str, jev_mode: str) -> Path:
-    return directory / f"{run_date.isoformat()}-{setup}-{jev_mode}.md"
+def report_path(
+    directory: Path, run_date: date, setup: str, jev_mode: str, version: str = "v1"
+) -> Path:
+    """<date>-<setup>-<jev>.md for v1; other versions add theirs (spec 06), so variants run on
+    the same day get their own files: <date>-<version>-<setup>-<jev>.md."""
+    name = f"{setup}-{jev_mode}" if version == "v1" else f"{version}-{setup}-{jev_mode}"
+    return directory / f"{run_date.isoformat()}-{name}.md"
 
 
 def result_label(run: BacktestRun) -> str:
@@ -77,18 +145,40 @@ def _pct(value: float) -> str:
     return f"{value * 100:.1f}%"
 
 
+def _cost(value: float) -> str:
+    return f"{value * 100:.2f}%"
+
+
 def _header(run: BacktestRun) -> list[str]:
+    result = result_label(run)
+    if run.jev_mode == "filter":
+        result += " (information only)"
     lines = [
         f"# Backtest: {run.setup} (Jev {run.jev_mode})",
         "",
-        f"**Strategy:** {run.strategy_version} · **Result:** {result_label(run)}",
+        f"**Strategy:** {run.strategy_version} · **Result:** {result}",
         "",
     ]
     if run.setup == "combined":
         lines += ["**Information only:** a combined run does not change pass or fail.", ""]
+    jev: dict[str, Any] | None = run.metrics.get("jev")
+    if jev is not None and run.jev_mode == "filter":
+        lines += [
+            (
+                "**Information only — cannot change the v1 result.** The spec 02 Jev-off v1 "
+                f"result stands; this run applies the Jev filter at theta {jev['theta_block']} "
+                "from `data/jev_filter_v1.yaml` (spec 03)."
+            ),
+            "",
+        ]
+    if jev is not None and run.setup == "sentiment":
+        lines += [f"**Sentiment status:** {_sentiment_status(run, jev)}", "", _period(run), ""]
     if run.strategy_version != "v1":
         lines += [
-            f"**POST-HOC** ({run.strategy_version}): cannot overturn a v1 result on its own.",
+            (
+                f"**POST-HOC** ({run.strategy_version}): cannot overturn a v1 result on its own. "
+                "A PASS only means the variant did not fail on the past; nothing goes live from it."
+            ),
             "",
         ]
     return [
@@ -101,6 +191,52 @@ def _header(run: BacktestRun) -> list[str]:
         f"| config_sha256 | `{run.config_sha256}` |",
         f"| git_sha | `{run.git_sha}` |",
         f"| data_fingerprint | `{run.data_fingerprint}` |",
+    ]
+
+
+def _sentiment_status(run: BacktestRun, jev: dict[str, Any]) -> str:
+    if run.passed:
+        return "PASS: the Sentiment setup may go live (spec 03)"
+    if jev["information_only"]:
+        return (
+            "information only (fewer than 30 trades): live messages may mention positive "
+            "documents, but no Sentiment entries are sent (spec 03)"
+        )
+    return "FAIL: no Sentiment entries are sent (spec 03)"
+
+
+def _period(run: BacktestRun) -> str:
+    return (
+        f"**Period (spec 03):** {run.start_date.isoformat()} to {run.end_date.isoformat()}; the "
+        f"halves split at the calendar midpoint (H1 entries to {run.metrics['h1_end']}, H2 "
+        f"from {run.metrics['h2_start']})."
+    )
+
+
+def _jev(m: dict[str, Any]) -> list[str]:
+    jev: dict[str, Any] | None = m.get("jev")
+    if jev is None:
+        return []
+    builds = ", ".join(f"{build} ({count})" for build, count in jev["builds"].items())
+    theta = "off" if jev["theta_block"] is None else jev["theta_block"]
+    oos = jev["out_of_sample"]
+    return [
+        "## Jev readings",
+        "",
+        "| Field | Value |",
+        "| --- | --- |",
+        f"| Model requested | {jev['model_requested']} |",
+        f"| Question set | {jev['question_set']} |",
+        f"| Readings used | {jev['readings']} |",
+        f"| Resolved builds | {builds or 'none'} |",
+        f"| Filter theta_block | {theta} |",
+        "",
+        f"## Trades signalled on or after {jev['out_of_sample_since']} (out of sample for Jev)",
+        "",
+        (
+            f"Trades {oos['trades']} · win rate {_pct(oos['win_rate'])} · "
+            f"mean R {oos['mean_r']:.3f} · median R {oos['median_r']:.3f}"
+        ),
     ]
 
 
@@ -176,6 +312,42 @@ def _benchmarks(m: dict[str, Any]) -> list[str]:
     ]
 
 
+def _cash_vehicle(m: dict[str, Any]) -> list[str]:
+    vehicle: dict[str, Any] | None = m.get("cash_vehicle")
+    if vehicle is None:
+        return []
+    symbol = vehicle["symbol"]
+    sensitivity = vehicle["sensitivity"]
+    return [
+        f"## Idle cash in {symbol}",
+        "",
+        "| Field | Value |",
+        "| --- | --- |",
+        f"| Switching cost per side | {_cost(vehicle['cost_per_side'])} |",
+        f"| Average share of equity in {symbol} | {_pct(vehicle['share_vehicle'])} |",
+        f"| Average share of equity in stocks | {_pct(vehicle['share_stocks'])} |",
+        f"| Average share of equity in cash | {_pct(vehicle['share_cash'])} |",
+        (
+            f"| {symbol} switches (buys / sells) | {vehicle['switches']} "
+            f"({vehicle['buys']} / {vehicle['sells']}) |"
+        ),
+        f"| Total switching cost (equity units) | {vehicle['switch_cost']:.2f} |",
+        "",
+        (
+            f"Exposure above counts sessions holding a stock; {symbol} is not counted. Total "
+            f"return, Sharpe, and drawdown are of total equity, {symbol} included."
+        ),
+        "",
+        (
+            f"**Sensitivity (information only): {symbol} switching at "
+            f"{_cost(sensitivity['cost_per_side'])}** — total return "
+            f"{_pct(sensitivity['total_return'])}, CAGR {_pct(sensitivity['cagr'])}, Sharpe "
+            f"{sensitivity['sharpe']:.2f}, max drawdown {_pct(sensitivity['max_drawdown'])}. "
+            f"Only the {_cost(vehicle['cost_per_side'])} run is stored and judged."
+        ),
+    ]
+
+
 def _skips_and_caveats(m: dict[str, Any]) -> list[str]:
     skips: dict[str, int] = m["skips_by_reason"]
     rows = [f"| {reason} | {count} |" for reason, count in skips.items()] or ["| none | 0 |"]
@@ -189,6 +361,8 @@ def _skips_and_caveats(m: dict[str, Any]) -> list[str]:
         "## Caveats",
         "",
         *[f"- {caveat}" for caveat in CAVEATS],
+        *([f"- {caveat}" for caveat in JEV_CAVEATS] if "jev" in m else []),
+        *([f"- {caveat}" for caveat in QQQ_CAVEATS] if "cash_vehicle" in m else []),
     ]
 
 
@@ -236,9 +410,11 @@ def render_report(run: BacktestRun) -> str:
         _header(run),
         _pass_bar(run),
         _metrics(run.metrics),
+        _jev(run.metrics),
         _benchmarks(run.metrics),
+        _cash_vehicle(run.metrics),
         _skips_and_caveats(run.metrics),
         _trades(run),
         _open_at_end(run),
     ]
-    return "\n\n".join("\n".join(section) for section in sections) + "\n"
+    return "\n\n".join("\n".join(section) for section in sections if section) + "\n"

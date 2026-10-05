@@ -8,9 +8,11 @@ Start at the [overview spec](specs/2026-09-22-swing-assistant-00-overview.md). S
 | --- | --- | --- |
 | 01 | [Data foundation](specs/2026-09-22-swing-assistant-01-data-foundation-design.md) · plan: [2026-09-22-swing-01-data-foundation.md](plans/2026-09-22-swing-01-data-foundation.md) | CI green; real ingest counts recorded; CDR price symbol verified |
 | 02 | [Strategy and backtest](specs/2026-09-22-swing-assistant-02-strategy-backtest-design.md) · plan: [2026-09-24-swing-02-strategy-backtest.md](plans/2026-09-24-swing-02-strategy-backtest.md) | Pre-registered v1 pass-bar reports committed; go/no-go recorded |
-| 03 | [Jev reader](specs/2026-09-22-swing-assistant-03-jev-reader-design.md) | Filter decision, Sentiment report, calibration report committed |
-| 04 | [Ledger](specs/2026-09-22-swing-assistant-04-ledger-design.md) | Hand-checked ACB fixture passes |
-| 05 | [Bot and evening scan](specs/2026-09-22-swing-assistant-05-bot-scan-design.md) | Real scheduled scan delivered to Telegram |
+| 03 | [Jev reader](specs/2026-09-22-swing-assistant-03-jev-reader-design.md) · plan: [2026-09-24-swing-03-jev-reader.md](plans/2026-09-24-swing-03-jev-reader.md) | Filter decision, Sentiment report, calibration report committed |
+| 04 | [Ledger](specs/2026-09-22-swing-assistant-04-ledger-design.md) (v2-none-cash only) · plan: [2026-09-30-swing-04-ledger.md](plans/2026-09-30-swing-04-ledger.md) | Hand-checked ACB and CDR-split fixtures pass |
+| 05 | [Bot and evening scan](specs/2026-09-22-swing-assistant-05-bot-scan-design.md) (v2-none-cash only) · plan: [2026-09-30-swing-05-bot-scan.md](plans/2026-09-30-swing-05-bot-scan.md) | Real scheduled scan delivered to Telegram; `/deposit 100` recorded; then the first real trade |
+| 06 | [Breakout v2: idle cash in QQQ and holding time](specs/2026-09-28-swing-assistant-06-breakout-v2-design.md) · plan: [2026-09-28-swing-06-breakout-v2.md](plans/2026-09-28-swing-06-breakout-v2.md) | Six post-hoc variant reports committed and logged; `v2-t30-cash` reproduces v1 Breakout |
+| 07 | [Forward paper trading](specs/2026-09-29-swing-assistant-07-paper-trading-design.md) · plan: [2026-09-29-swing-07-paper-trading.md](plans/2026-09-29-swing-07-paper-trading.md) | Built, not started: the owner dropped paper trading on 2026-09-29 and chose v2-none-cash to trade directly |
 
 ## History: original phases (2026-08-19)
 

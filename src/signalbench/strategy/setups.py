@@ -12,7 +12,7 @@ class Signal:
     close: float
     stop: float
     target_r: float | None
-    time_limit: int
+    time_limit: int | None  # None: no time limit (spec 06, Breakout only)
 
 
 def pullback(snap: Snapshot, config: StrategyConfig) -> Signal | None:

@@ -3,13 +3,15 @@
 **Parent:** [Overview](2026-09-22-swing-assistant-00-overview.md) · **Depends on:** spec 01 (documents with `text`, `acceptance_at`) and spec 02 (`ReadingsView` port, simulator, pass bar).
 **Goal:** Have Jev read every stored 8-K and news item once. Decide by a pre-registered rule whether Jev's negative reading is allowed to block entries. Backtest the Sentiment setup. Publish a calibration report.
 
-## Jev facts this design relies on (docs checked 2026-09-22)
+## Jev facts this design relies on (docs checked 2026-09-22; API checked live 2026-09-24)
 
-- Called through OpenRouter: `POST https://openrouter.ai/api/v1/alpha/decisions`, `Authorization: Bearer $OPENROUTER_API_KEY`, body `{model, state, questions}`. Model `typesafe/jev-1.13`. The response `model` carries the dated build, e.g. `typesafe/jev-1.13-20260917`.
+- Called through OpenRouter: `POST https://openrouter.ai/api/alpha/decisions` (not `/api/v1/…`), `Authorization: Bearer $OPENROUTER_API_KEY`, `Content-Type: application/json`, body `{model, state, questions}` (`session_id` and `user` are optional and not sent). Model `typesafe/jev-1.13`. The response `model` carries the dated build, e.g. `typesafe/jev-1.13-20260917`.
 - Answer shapes: `choice` returns `choice`, `probabilities` (sums to 1), `confidence`. `noul` returns the probability of yes.
 - `confidence` = `(3 × max probability − 1) / 2` for 3 options. TypeSafe does **not** claim it is calibrated. **This design never uses `confidence`**; it uses `probabilities` and the `noul` value.
 - Documented weak spots: arithmetic, dates, long irrelevant context, prompt injection in the state. So we send cleaned, trimmed text with no dates and ask no numeric questions.
 - Limits: 64K tokens per request, 32K of it for the state. Spec 01 caps `text` at about 24K tokens.
+- Errors: 400, 401, 402 (insufficient credits), 403, 404, 413 (too large), 429, 500, 502, 503, 524, 529. Retry 429 and 5xx with exponential backoff; never retry the other 4xx. 401 and 402 stop the whole backfill with a clear message. 413 skips that document and records why.
+- Price: $0.042 per 1M input tokens; output tokens are free. The full backfill (about 5,100 8-Ks averaging ~19K characters, and about 80,000 news items after the daily cap) is estimated at $3–4.
 
 ## Question set `q1`
 
@@ -54,7 +56,7 @@ The question set is versioned (`q1`). Changing any wording creates `q2`, and doc
 
 ## Storage
 
-**Table `jev_readings`** (migration `0010`):
+**Table `jev_readings`** (migration `0011`; `0010` is spec 02's `backtest_runs`):
 - `id`, `document_id` (FK, cascade)
 - `model_requested`, `model_resolved`, `question_set`
 - `p_negative`, `p_neutral`, `p_positive`, `event_type`, `p_routine`, plus the full `answers` JSON
@@ -89,8 +91,8 @@ A document with no reading counts as neither positive nor negative. Live signals
 1. Take the jev-off trade logs of the Pullback and Breakout v1 runs (spec 02), including a setup that failed its pass bar. For each trade, record the max `p_negative` among the symbol's documents with legal close in the 10 sessions up to the signal date.
 2. **Fit window**, signals 2016-01-01 → 2022-12-31. For θ in {0.5, 0.6, 0.7, 0.8, 0.9}, count θ as eligible if at least 10 trades have max `p_negative ≥ θ`. Choose the eligible θ with the largest (mean R of kept trades − mean R of blocked trades). If no θ is eligible, the filter is **information-only**.
 3. **Confirm window**, signals 2023-01-01 → end, with the chosen θ. The filter is **ON** only if at least 10 trades are blocked **and** the blocked mean R < the kept mean R. Otherwise it is information-only.
-4. If ON, rerun each passing setup with `--jev filter` for the record. Pass/fail stays with the jev-off v1 result. The filtered run is reported alongside it.
-5. Write θ and the ON/information-only outcome to `data/strategy_v1.yaml` under `jev:` in a commit that references the report.
+4. Spec 02's v1 result stands: Pullback and Breakout both failed their pass bar (overview, 2026-09-24), and a filtered run can never overturn that. If the filter is ON, run Pullback and Breakout with `--jev filter` for information only; each report says "information only — cannot change the v1 result". If the filter is information-only, `--jev filter` runs are refused.
+5. Write the question set, the model requested, θ, the ON/information-only outcome, both windows, the counts and mean Rs, and the report path to a new committed file, `data/jev_filter_v1.yaml`, in a commit that references the report. `data/strategy_v1.yaml` is never edited: its `config_sha256` is recorded in the stored v1 runs, and the pre-registration guard refuses a changed v1.
 
 Known limit: Finnhub news only covers about the last year, so the fit window is effectively filings-only.
 
@@ -141,3 +143,14 @@ signalbench jev calibration
 ## Changelog
 
 - 2026-09-22: created.
+- 2026-09-24: API facts checked live: the endpoint is `https://openrouter.ai/api/alpha/decisions`; the error codes and retry rules above; $0.042 per 1M input tokens, output free. `jev_readings` is migration `0011`. The filter decision is written to `data/jev_filter_v1.yaml` instead of `data/strategy_v1.yaml`, which must not change. Step 4 now follows the spec 02 go/no-go (both v1 setups failed): a filtered run is information only, and `--jev filter` is refused while the filter is information-only. Plan: `2026-09-24-swing-03-jev-reader.md`.
+- 2026-09-24: implementation choices (plan `2026-09-24-swing-03-jev-reader.md`):
+  - Readings are per (document, ticker): `jev_readings` adds `ticker_id` and `response_id` and is unique on (`document_id`, `ticker_id`, `model_requested`, `question_set`), because 17.6% of universe documents name two or more universe tickers and the state names one company. Only the 40 universe tickers' documents are read.
+  - Failed documents are not stored; each prints a `skip` line and is retried on the next run. 401, 402, and 404 stop the backfill; 20 failures in a row stop it too. A state over 100,000 characters is skipped before any call.
+  - The budget guard stops submitting once the summed cost reaches `--max-cost-usd` (on `jev backfill`); at most 3 calls in flight still finish. A budget stop exits 0.
+  - Legal close uses real NYSE close times, so a document after a 13:00 early close waits for the next session.
+  - Filter: the latest stored v1 Jev-off run of each setup, pooled; an eligible θ also needs one kept trade; ties go to the lower θ. `data/jev_filter_v1.yaml` records `theta_fit` and `theta_block` (null unless ON) and is written once. `--jev filter` uses block and catalyst ranking, as live will; `--setup sentiment --jev filter` is refused.
+  - Sentiment runs use the committed v1 config with only `start`, `h1_end`, and `h2_start` overridden. Runs that read Jev store `metrics.jev` (readings, builds, `information_only`, and the out-of-sample stats by signal date) and add a readings entry to `data_fingerprint`.
+  - A filtered run's result is printed and reported as `PASS (information only)` or `FAIL (information only)`. `NyseSessions.sessions_between` clamps a start before the calendar's first session (2010-01-01 is a holiday).
+- 2026-09-28: filing states now carry no tables or dates, per the "no dates / no arithmetic" rule: the spec 01 cleaner drops numeric tables and replaces calendar dates with `[date]`. 50 filings, including all 43 JPM earnings 8-Ks, had failed with `max_tokens_exceeded` because their tables pushed the state past Jev's 32K-token limit. All filing text was refetched and every filing re-read after the change; the first filings pass is superseded.
+- 2026-09-28: gate record. jev test: build `typesafe/jev-1.13-20260917`, latency 297 ms, 787 input tokens, cost $0.000033 (positive 1.000 on the made-up 8-K). Backfill: 5,110 of 5,115 filings read after tables and dates were removed ($0.98; 5 still skipped as `max_tokens_exceeded`: 3 JPM, 1 AMD, 1 APO; the first filings pass, $1.28, was superseded), 80,208 news items read ($2.48, none skipped; 28,295 over the 20-per-day cap on 1,363 symbol-days); total spent $4.74; one build. Filter: information only (theta_fit 0.7; blocked mean R 0.227 is not below kept mean R -0.007 on 361 confirmation trades; in the fit window blocked trades beat kept ones at every theta). Sentiment: FAIL (409 trades, mean R 0.098 vs > 0.100, halves 0.114 / 0.082, Sharpe 0.58 vs QQQ 0.95; out of sample: 0 trades). Calibration: 82,367 labeled; ECE positive 0.309, negative 0.332; argmax accuracy 34.1% vs a 35.6% baseline; the observed up and down rates are flat across every probability decile.

@@ -11,6 +11,7 @@ import yaml
 SetupName = Literal["pullback", "breakout", "sentiment"]
 SETUP_NAMES: tuple[SetupName, ...] = get_args(SetupName)
 COST_PER_SIDE_FLOOR = 0.002
+VEHICLE_COST_LIMIT = 0.05  # a cash vehicle's cost per side must be below 5%
 
 
 @dataclass(frozen=True)
@@ -32,7 +33,7 @@ class BreakoutParams:
     volume_mult: float
     stop_atr_mult: float
     trail_atr_mult: float
-    time_limit: int
+    time_limit: int | None  # None: exit only on the trailing stop, earnings, or the run's end
 
 
 @dataclass(frozen=True)
@@ -41,6 +42,14 @@ class SentimentParams:
     stop_atr_mult: float
     target_r: float
     time_limit: int
+
+
+@dataclass(frozen=True)
+class CashVehicle:
+    """Where idle cash waits between trades (spec 06), traded at the open like a stock."""
+
+    symbol: str
+    cost_per_side: float
 
 
 @dataclass(frozen=True)
@@ -78,6 +87,7 @@ class StrategyConfig:
     breakout: BreakoutParams
     sentiment: SentimentParams
     backtest: BacktestParams
+    cash_vehicle: CashVehicle | None = None  # None: idle cash stays cash (v1)
 
     def with_setups(self, setups: tuple[SetupName, ...]) -> "StrategyConfig":
         """A copy that only fires `setups`, kept in `setup_priority` order."""
@@ -123,11 +133,21 @@ class _Section:
     def section(self, key: str) -> "_Section":
         return _Section(self._get(key), f"{self._where}.{key}")
 
+    def has(self, key: str) -> bool:
+        return key in self._raw
+
     def integer(self, key: str, minimum: int = 1) -> int:
         value = self._get(key)
         if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
             raise ConfigError(f"{self._where}.{key}: expected an integer >= {minimum}")
         return value
+
+    def integer_or_null(self, key: str, minimum: int = 1) -> int | None:
+        """Like integer(), but an explicit null is allowed. The key must still be written."""
+        if self._raw.get(key, 0) is None:
+            self._used.add(key)
+            return None
+        return self.integer(key, minimum)
 
     def number(self, key: str, minimum: float = 0.0) -> float:
         value = self._get(key)
@@ -172,6 +192,7 @@ def parse_strategy_config(raw: object, where: str = "config") -> StrategyConfig:
     back = top.section("backtest")
     bar = back.section("pass_bar")
     priority = top.setups("setup_priority")
+    vehicle = _cash_vehicle(top, where) if top.has("cash_vehicle") else None
     config = StrategyConfig(
         version=top.text("version"),
         start_equity=top.number("start_equity", minimum=1.0),
@@ -208,7 +229,7 @@ def parse_strategy_config(raw: object, where: str = "config") -> StrategyConfig:
             volume_mult=brk.number("volume_mult"),
             stop_atr_mult=brk.number("stop_atr_mult"),
             trail_atr_mult=brk.number("trail_atr_mult"),
-            time_limit=brk.integer("time_limit"),
+            time_limit=brk.integer_or_null("time_limit"),
         ),
         sentiment=SentimentParams(
             trend_sma=sent.integer("trend_sma"),
@@ -224,15 +245,35 @@ def parse_strategy_config(raw: object, where: str = "config") -> StrategyConfig:
             min_trades=bar.integer("min_trades"),
             min_mean_r=bar.number("min_mean_r"),
         ),
+        cash_vehicle=vehicle,
     )
     for section in (top, regime, indicators, liquidity, earnings, setups, pull, brk, sent, back, bar):
         section.done()
+    if vehicle is not None and vehicle.symbol != config.regime_symbol:
+        raise ConfigError(
+            f"{where}.cash_vehicle.symbol: must be the regime symbol {config.regime_symbol!r} "
+            f"(the only series besides the universe that a run loads), got {vehicle.symbol!r}"
+        )
     if config.backtest.h2_start != config.backtest.h1_end + timedelta(days=1):
         raise ConfigError(
             f"{where}.backtest: h2_start must be the day after h1_end (contiguous halves), "
             f"got h1_end {config.backtest.h1_end} and h2_start {config.backtest.h2_start}"
         )
     return config
+
+
+def _cash_vehicle(top: _Section, where: str) -> CashVehicle:
+    section = top.section("cash_vehicle")
+    vehicle = CashVehicle(
+        symbol=section.text("symbol"), cost_per_side=section.number("cost_per_side")
+    )
+    section.done()
+    if not 0.0 <= vehicle.cost_per_side < VEHICLE_COST_LIMIT:  # also refuses NaN
+        raise ConfigError(
+            f"{where}.cash_vehicle.cost_per_side: expected a number in "
+            f"[0, {VEHICLE_COST_LIMIT}), got {vehicle.cost_per_side}"
+        )
+    return vehicle
 
 
 def config_sha256(raw: bytes) -> str:

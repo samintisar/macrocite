@@ -57,3 +57,12 @@ def test_trailing_stop_ratchets_up_only() -> None:
 
 def test_only_breakout_trails() -> None:
     assert trailed_stop(replace(POSITION, highest_close=200.0), make_snapshot(), CONFIG) is None
+
+
+def test_a_position_with_no_time_limit_never_exits_for_time() -> None:
+    open_ended = replace(
+        POSITION, setup="breakout", target=None, time_limit=None, sessions_held=10_000
+    )
+    assert exit_reason(open_ended, make_snapshot(), earnings_soon=False) is None
+    assert exit_reason(open_ended, make_snapshot(close=95.0), earnings_soon=False) == "stop"
+    assert exit_reason(open_ended, make_snapshot(), earnings_soon=True) == "earnings"

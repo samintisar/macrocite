@@ -9,7 +9,8 @@ from signalbench.strategy.portfolio import Position
 def exit_reason(position: Position, snap: Snapshot, earnings_soon: bool) -> ExitReason | None:
     """First match in spec order: stop, earnings, target, time. It fills at the next open.
 
-    `earnings_soon` is whether an earnings event falls on D+1 or D+2.
+    `earnings_soon` is whether an earnings event falls on D+1 or D+2. A position with no time
+    limit (spec 06) never exits for time.
     """
     if snap.close <= position.stop:
         return "stop"
@@ -17,7 +18,7 @@ def exit_reason(position: Position, snap: Snapshot, earnings_soon: bool) -> Exit
         return "earnings"
     if position.target is not None and snap.close >= position.target:
         return "target"
-    if position.sessions_held >= position.time_limit:
+    if position.time_limit is not None and position.sessions_held >= position.time_limit:
         return "time"
     return None
 

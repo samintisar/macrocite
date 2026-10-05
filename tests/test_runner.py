@@ -1,4 +1,5 @@
-from datetime import date, datetime
+from dataclasses import replace
+from datetime import UTC, date, datetime, time
 from decimal import Decimal
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -9,14 +10,27 @@ from sqlmodel import Session, select
 from signalbench.backtest.fingerprint import data_fingerprint
 from signalbench.backtest.preregistration import RunRefusedError
 from signalbench.backtest.runner import (
-    RequiresSpec03Error,
+    JevInputs,
+    UnsupportedRunError,
     load_market_inputs,
     run_backtest,
+    sentiment_params,
     setups_for_run,
 )
-from signalbench.db.models import BacktestRun, EarningsEvent, Price, Ticker, TickerKind
+from signalbench.db.models import (
+    BacktestRun,
+    DocType,
+    DocumentTicker,
+    EarningsEvent,
+    JevReading,
+    Price,
+    RawDocument,
+    Ticker,
+    TickerKind,
+)
 from signalbench.ingest.cdr import CdrEntry
 from signalbench.market.bars import AdjustedBar
+from signalbench.strategy.config import CashVehicle
 from strategy_helpers import (
     WeekdaySessions,
     load_test_config,
@@ -24,6 +38,7 @@ from strategy_helpers import (
     series,
     trend_bars,
     weekdays,
+    with_bar,
 )
 
 DAYS = weekdays(date(2011, 1, 3), 300)  # DAYS[260] is 2012-01-02
@@ -99,7 +114,7 @@ def test_run_is_stored_with_provenance_and_report(seeded: Session, tmp_path: Pat
     ]
     assert set(run.pass_bar) == {"trades", "mean_r", "mean_r_halves", "sharpe"}
     assert run.passed is False  # one trade is far below 30
-    assert path == tmp_path / "2026-09-24-pullback-off.md"
+    assert path == tmp_path / "2026-09-24-test-pullback-off.md"
     assert path.read_text(encoding="utf-8").startswith("# Backtest: pullback (Jev off)")
 
 
@@ -127,15 +142,24 @@ def test_second_report_on_the_same_day_gets_a_suffix(seeded: Session, tmp_path: 
     _, first = _run(seeded, tmp_path)
     second_run, second = _run(seeded, tmp_path)
     assert first != second
-    assert second.name == f"2026-09-24-pullback-off-{str(second_run.id)[:8]}.md"
+    assert second.name == f"2026-09-24-test-pullback-off-{str(second_run.id)[:8]}.md"
 
 
-def test_sentiment_and_jev_filter_need_spec_03() -> None:
-    with pytest.raises(RequiresSpec03Error, match="spec 03"):
-        setups_for_run("sentiment", "off")
-    with pytest.raises(RequiresSpec03Error, match="spec 03"):
-        setups_for_run("pullback", "filter")
+def test_setups_for_each_run() -> None:
+    assert setups_for_run("sentiment", "off") == ("sentiment",)
+    assert setups_for_run("pullback", "filter") == ("pullback",)
     assert setups_for_run("combined", "off") == ("pullback", "breakout")
+    with pytest.raises(UnsupportedRunError, match="--setup sentiment runs with --jev off"):
+        setups_for_run("sentiment", "filter")
+
+
+def test_sentiment_runs_from_2016_with_halves_split_at_the_calendar_midpoint() -> None:
+    params = sentiment_params(load_test_config().backtest, date(2026, 9, 24))
+    assert (params.start, params.h1_end, params.h2_start) == (
+        date(2016, 1, 1), date(2021, 5, 13), date(2021, 5, 14),
+    )
+    assert params.recent_since == date(2026, 9, 15)
+    assert (params.min_trades, params.min_mean_r) == (30, 0.10)  # the same pass bar
 
 
 def test_unseeded_universe_is_an_error(session: Session, tmp_path: Path) -> None:
@@ -234,3 +258,203 @@ def test_a_stale_benchmark_is_named_in_the_refusal(session: Session, tmp_path: P
 def test_a_naive_clock_is_rejected(seeded: Session, tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="timezone-aware"):
         _run(seeded, tmp_path, now=datetime(2026, 9, 24, 12, 0))  # noqa: DTZ001  # naive on purpose
+
+
+def _reading(
+    session: Session, symbol: str, published: datetime, *, p_negative: float, p_positive: float
+) -> None:
+    ticker = session.exec(select(Ticker).where(Ticker.symbol == symbol)).one()
+    document = RawDocument(
+        source="finnhub", external_id=f"{symbol}-{published.isoformat()}", doc_type=DocType.news,
+        raw_text="x", text="x", published_at=published,
+    )
+    session.add(document)
+    session.flush()
+    session.add(DocumentTicker(document_id=document.id, ticker_id=ticker.id))
+    session.add(
+        JevReading(
+            document_id=document.id, ticker_id=ticker.id, model_requested="typesafe/jev-1.13",
+            model_resolved="typesafe/jev-1.13-20260917", question_set="q1", response_id="r",
+            p_negative=p_negative, p_neutral=1.0 - p_negative - p_positive,
+            p_positive=p_positive, event_type="product", p_routine=0.1, answers={},
+            input_tokens=100, cost_usd=0.0, latency_ms=1,
+        )
+    )
+    session.commit()
+
+
+def _morning(day: date) -> datetime:
+    return datetime.combine(day, time(10, 0), tzinfo=NEW_YORK)  # legal close: that session
+
+
+SENTIMENT_DAYS = weekdays(date(2015, 1, 1), 300)  # SENTIMENT_DAYS[261] is Friday 2016-01-01
+TRIGGER = 270
+
+
+@pytest.fixture
+def sentiment_seeded(session: Session) -> Session:
+    _store(session, "AAA", TickerKind.us_stock, trend_bars(SENTIMENT_DAYS, 100.0, 1.5))
+    _store(session, "BBB", TickerKind.us_stock, trend_bars(SENTIMENT_DAYS, 100.0, 0.1))
+    _store(session, "QQQ", TickerKind.benchmark, trend_bars(SENTIMENT_DAYS, 300.0, 0.5))
+    return session
+
+
+def _jev_run(
+    session: Session, tmp_path: Path, setup: str, jev_mode: str, theta: float | None
+) -> tuple[BacktestRun, Path]:
+    return run_backtest(
+        session,
+        setup=setup,  # type: ignore[arg-type]
+        jev_mode=jev_mode,  # type: ignore[arg-type]
+        config=load_test_config(),
+        config_sha256="f" * 64,
+        universe=UNIVERSE,
+        calendar=WeekdaySessions(),
+        git_sha="abc123",
+        run_date=date(2026, 9, 24),
+        reports_dir=tmp_path,
+        now=LATER,
+        jev=JevInputs(theta_block=theta),
+    )
+
+
+def test_a_sentiment_run_trades_positive_readings_from_2016(
+    sentiment_seeded: Session, tmp_path: Path
+) -> None:
+    _reading(
+        sentiment_seeded, "AAA", _morning(SENTIMENT_DAYS[TRIGGER]), p_negative=0.05, p_positive=0.8
+    )
+    run, path = _jev_run(sentiment_seeded, tmp_path, "sentiment", "off", None)
+    assert (run.setup, run.jev_mode) == ("sentiment", "off")
+    assert run.start_date == date(2016, 1, 1)
+    first = run.trade_log["trades"][0]
+    assert (first["setup"], first["symbol"]) == ("sentiment", "AAA")
+    assert first["signal_date"] == SENTIMENT_DAYS[TRIGGER].isoformat()
+    midpoint = sentiment_params(load_test_config().backtest, SENTIMENT_DAYS[-1]).h1_end
+    assert run.metrics["h1_end"] == midpoint.isoformat()
+    jev = run.metrics["jev"]
+    assert (jev["readings"], jev["theta_block"], jev["information_only"]) == (1, None, True)
+    assert jev["builds"] == {"typesafe/jev-1.13-20260917": 1}
+    stored = {
+        "AAA": trend_bars(SENTIMENT_DAYS, 100.0, 1.5),
+        "BBB": trend_bars(SENTIMENT_DAYS, 100.0, 0.1),
+        "QQQ": trend_bars(SENTIMENT_DAYS, 300.0, 0.5),
+    }
+    assert run.data_fingerprint != data_fingerprint(stored.items(), [])  # readings are covered
+    assert path.name == "2026-09-24-test-sentiment-off.md"
+    assert "**Sentiment status:** information only" in path.read_text(encoding="utf-8")
+
+
+def test_a_sentiment_run_without_readings_is_refused(
+    sentiment_seeded: Session, tmp_path: Path
+) -> None:
+    with pytest.raises(RunRefusedError, match="No Jev readings"):
+        _jev_run(sentiment_seeded, tmp_path, "sentiment", "off", None)
+    assert sentiment_seeded.exec(select(BacktestRun)).all() == []
+
+
+def test_a_sentiment_run_is_refused_by_the_version_unchanged_guard(
+    sentiment_seeded: Session, tmp_path: Path
+) -> None:
+    """`check_version_unchanged` must run before the Sentiment date override (which replaces
+    `config.backtest` with 2016-onward params): a stored run of this version under a different
+    config_sha256 refuses the run, even for `--setup sentiment`."""
+    sentiment_seeded.add(
+        BacktestRun(
+            strategy_version=load_test_config().version, config_sha256="e" * 64, git_sha="abc123",
+            setup="pullback", jev_mode="off", start_date=date(2012, 1, 3), end_date=date(2026, 9, 23),
+            data_fingerprint="d" * 64, metrics={}, pass_bar={}, passed=False,
+            trade_log={"trades": [], "events": []},
+        )
+    )
+    sentiment_seeded.commit()
+    with pytest.raises(RunRefusedError, match="already has runs with config_sha256"):
+        _jev_run(sentiment_seeded, tmp_path, "sentiment", "off", None)
+
+
+def test_a_filtered_run_blocks_a_negative_reading(seeded: Session, tmp_path: Path) -> None:
+    _reading(seeded, "AAA", _morning(DAYS[DIP - 2]), p_negative=0.9, p_positive=0.02)
+    run, path = _jev_run(seeded, tmp_path, "pullback", "filter", 0.7)
+    assert run.jev_mode == "filter"
+    assert DAYS[DIP].isoformat() not in [t["signal_date"] for t in run.trade_log["trades"]]
+    blocked = [
+        e for e in run.trade_log["events"] if e["event"] == "skip" and e["reason"] == "blocked"
+    ]
+    assert blocked[0]["date"] == DAYS[DIP].isoformat()
+    assert run.metrics["jev"]["theta_block"] == 0.7
+    assert run.metrics["jev"]["information_only"] is True
+    assert path.name == "2026-09-24-test-pullback-filter.md"
+    assert "cannot change the v1 result" in path.read_text(encoding="utf-8")
+
+
+def test_filtered_run_builds_count_only_readings_it_used(
+    seeded: Session, tmp_path: Path
+) -> None:
+    """`metrics["jev"]["builds"]` must sum to `metrics["jev"]["readings"]`: a stored reading for
+    a ticker outside this run's universe must not inflate the resolved-build count."""
+    _reading(seeded, "AAA", _morning(DAYS[DIP - 2]), p_negative=0.9, p_positive=0.02)
+    seeded.add(Ticker(symbol="CCC", company_name="Ccc", kind=TickerKind.us_stock))
+    seeded.commit()
+    _reading(seeded, "CCC", _morning(DAYS[DIP - 2]), p_negative=0.9, p_positive=0.02)
+    run, _ = _jev_run(seeded, tmp_path, "pullback", "filter", 0.7)
+    jev = run.metrics["jev"]
+    assert jev["readings"] == 1
+    assert sum(jev["builds"].values()) == 1
+
+
+def test_a_filter_run_needs_theta(seeded: Session, tmp_path: Path) -> None:
+    _reading(seeded, "AAA", _morning(DAYS[DIP - 2]), p_negative=0.9, p_positive=0.02)
+    with pytest.raises(RunRefusedError, match="information-only"):
+        _jev_run(seeded, tmp_path, "pullback", "filter", None)
+
+
+def test_a_reading_after_the_run_is_not_used(seeded: Session, tmp_path: Path) -> None:
+    after = datetime.combine(DAYS[-1], time(16, 30), tzinfo=NEW_YORK).astimezone(UTC)
+    _reading(seeded, "AAA", after, p_negative=0.9, p_positive=0.02)
+    with pytest.raises(RunRefusedError, match="No Jev readings"):
+        _jev_run(seeded, tmp_path, "pullback", "filter", 0.7)
+
+
+def test_a_qqq_variant_stores_the_sleeve_and_the_sensitivity_of_an_unstored_second_run(
+    session: Session, tmp_path: Path
+) -> None:
+    # AAA breaks out on a 2x volume day (DAYS[262]) and exits for time 30 sessions later;
+    # QQQ holds the rest of the equity.
+    aaa = with_bar(trend_bars(DAYS, 50.0, 0.1), 262, volume=2_000_000)
+    _store(session, "AAA", TickerKind.us_stock, aaa)
+    _store(session, "BBB", TickerKind.us_stock, trend_bars(DAYS, 60.0, 0.05))
+    _store(session, "QQQ", TickerKind.benchmark, trend_bars(DAYS, 300.0, 0.5))
+    config = replace(
+        load_test_config(), version="v2-t30-qqq", cash_vehicle=CashVehicle("QQQ", 0.002)
+    )
+    run, path = run_backtest(
+        session, setup="breakout", jev_mode="off", config=config, config_sha256="f" * 64,
+        universe=UNIVERSE, calendar=WeekdaySessions(), git_sha="abc123",
+        run_date=date(2026, 9, 24), reports_dir=tmp_path, now=LATER,
+    )
+    assert len(session.exec(select(BacktestRun)).all()) == 1  # the 0.05% run is not stored
+    assert [(t["signal_date"], t["reason"]) for t in run.trade_log["trades"]] == [
+        (DAYS[262].isoformat(), "time")
+    ]
+    kinds = [e["event"] for e in run.trade_log["events"]]
+    assert kinds.count("vehicle_buy") == 2 and kinds.count("vehicle_sell") == 1
+    vehicle = run.metrics["cash_vehicle"]
+    assert (vehicle["symbol"], vehicle["cost_per_side"]) == ("QQQ", 0.002)
+    assert (vehicle["switches"], vehicle["buys"], vehicle["sells"]) == (3, 2, 1)
+    assert vehicle["share_vehicle"] + vehicle["share_stocks"] + vehicle["share_cash"] == (
+        pytest.approx(1.0)
+    )
+    assert vehicle["share_vehicle"] > 0.5
+    sensitivity = vehicle["sensitivity"]
+    assert sensitivity["cost_per_side"] == 0.0005
+    assert sensitivity["total_return"] > run.metrics["total_return"]  # cheaper switching
+    assert run.pass_bar["sharpe"]["value"] == run.metrics["sharpe"]  # total equity, QQQ in
+    stored = {
+        "AAA": aaa, "BBB": trend_bars(DAYS, 60.0, 0.05), "QQQ": trend_bars(DAYS, 300.0, 0.5)
+    }
+    assert run.data_fingerprint == data_fingerprint(stored.items(), [])  # QQQ was already in
+    assert path.name == "2026-09-24-v2-t30-qqq-breakout-off.md"
+    text = path.read_text(encoding="utf-8")
+    assert "**POST-HOC** (v2-t30-qqq)" in text
+    assert "## Idle cash in QQQ" in text
+    assert "**Sensitivity (information only): QQQ switching at 0.05%**" in text
