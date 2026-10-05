@@ -40,8 +40,8 @@
     Run the printed commands. Without it, nothing is registered.
 #>
 param(
-    [string]$Worktree = 'C:\Users\samin\Documents\GitHub\macrocite-live',
-    [string]$EnvFile = 'C:\Users\samin\Documents\GitHub\macrocite\.env',
+    [string]$Worktree = "$env:USERPROFILE\Documents\GitHub\macrocite-live",
+    [string]$EnvFile = "$env:USERPROFILE\Documents\GitHub\macrocite\.env",
     [datetime]$From = (Get-Date),
     [string]$At = '',
     [switch]$Register

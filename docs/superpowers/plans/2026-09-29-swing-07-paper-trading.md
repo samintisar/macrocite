@@ -3715,7 +3715,7 @@ and this line to the layout block, after the `backtest/` line:
 
 **Gated:** the owner said go.
 
-Run Tasks 12 and 13 from the main checkout (`C:\Users\samin\Documents\GitHub\macrocite`, which has `.env`), on this branch's head with the review fixes: migration `0012` there is the one the paper worktree will run (Task 14).
+Run Tasks 12 and 13 from the main checkout (`C:\Users\<you>\Documents\GitHub\macrocite`, which has `.env`), on this branch's head with the review fixes: migration `0012` there is the one the paper worktree will run (Task 14).
 
 - [ ] **Step 1: Database up, migration pending**
 
@@ -3769,8 +3769,8 @@ In the main checkout, on the Task 13 commit:
 
 ```powershell
 git tag paper-v1
-git worktree add C:\Users\samin\Documents\GitHub\macrocite-paper paper-v1
-cd C:\Users\samin\Documents\GitHub\macrocite-paper
+git worktree add C:\Users\<you>\Documents\GitHub\macrocite-paper paper-v1
+cd C:\Users\<you>\Documents\GitHub\macrocite-paper
 uv sync --frozen
 git status --short
 ```
@@ -3781,7 +3781,7 @@ Expected: the worktree is created on a detached HEAD at `paper-v1`, `uv sync` cr
 
 Run it in the evening, after the day's session (the start session is the first NYSE session after today's New York date).
 
-Run: `uv run --frozen --env-file C:\Users\samin\Documents\GitHub\macrocite\.env signalbench paper start`
+Run: `uv run --frozen --env-file C:\Users\<you>\Documents\GitHub\macrocite\.env signalbench paper start`
 Expected: seven lines, in the file's order, all with the same start session (the hashes are the committed files', CRLF read as LF; `v1-breakout`'s is the `config_sha256` in the header of `reports/backtests/2026-09-24-breakout-off.md`):
 
 ```text
@@ -3798,7 +3798,7 @@ Any other hash means a config changed since spec 06: **stop and report**. Runnin
 
 - [ ] **Step 4: Status**
 
-Run: `uv run --frozen --env-file C:\Users\samin\Documents\GitHub\macrocite\.env signalbench paper status`
+Run: `uv run --frozen --env-file C:\Users\<you>\Documents\GitHub\macrocite\.env signalbench paper status`
 Expected: `last ok run: none`, then seven lines `<name>: starts <next session>, not stepped yet | judgeable after 365 days and 30 more closed trades` (the day count may differ by one or two).
 
 ---
@@ -3807,7 +3807,7 @@ Expected: `last ok run: none`, then seven lines `<name>: starts <next session>, 
 
 **Gated:** Task 14 done, and the start session has closed (after 16:15 New York on it: 13:15 local until 1 November 2026, 14:15 after).
 
-Every command below runs in the worktree, `C:\Users\samin\Documents\GitHub\macrocite-paper`, with `--env-file C:\Users\samin\Documents\GitHub\macrocite\.env` as in Task 14 (shortened to `<env>` below; in Git Bash, quote the path: `--env-file 'C:/Users/samin/Documents/GitHub/macrocite/.env'`).
+Every command below runs in the worktree, `C:\Users\<you>\Documents\GitHub\macrocite-paper`, with `--env-file C:\Users\<you>\Documents\GitHub\macrocite\.env` as in Task 14 (shortened to `<env>` below; in Git Bash, quote the path: `--env-file 'C:/Users/<you>/Documents/GitHub/macrocite/.env'`).
 
 - [ ] **Step 1: Run it**
 
@@ -3863,7 +3863,7 @@ Expected: `twins match <n> events 1 sessions`. `TWINS DIFFER` is a bug in the ru
 
 - [ ] **Step 5: Show the owner the first weekly report**
 
-Show `C:\Users\samin\Documents\GitHub\macrocite-paper\reports\paper\<today>-weekly.md`. Do not commit it: reports are committed when reviewed (spec 07), by copying them into the main checkout's `reports/paper/` (never commit in the worktree).
+Show `C:\Users\<you>\Documents\GitHub\macrocite-paper\reports\paper\<today>-weekly.md`. Do not commit it: reports are committed when reviewed (spec 07), by copying them into the main checkout's `reports/paper/` (never commit in the worktree).
 
 ---
 
@@ -3875,7 +3875,7 @@ The task runs the worktree's own script against the worktree: the pinned code, i
 
 ```powershell
 git tag paper-v1
-git worktree add C:\Users\samin\Documents\GitHub\macrocite-paper paper-v1
+git worktree add C:\Users\<you>\Documents\GitHub\macrocite-paper paper-v1
 ```
 
 - [ ] **Step 1: Show the owner the command**
@@ -3883,8 +3883,8 @@ git worktree add C:\Users\samin\Documents\GitHub\macrocite-paper paper-v1
 Run in a PowerShell window (as the owner, not elevated; if Windows answers "Access is denied", use an elevated window for the same user). `-At '15:00'` is local time; for 18:00 New York all year on this PC, use `'16:00'` instead (see Decisions, the run time):
 
 ```powershell
-$worktree = 'C:\Users\samin\Documents\GitHub\macrocite-paper'
-$envFile = 'C:\Users\samin\Documents\GitHub\macrocite\.env'
+$worktree = 'C:\Users\<you>\Documents\GitHub\macrocite-paper'
+$envFile = 'C:\Users\<you>\Documents\GitHub\macrocite\.env'
 $action = New-ScheduledTaskAction -Execute 'powershell.exe' -WorkingDirectory $worktree `
     -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$worktree\scripts\paper_nightly.ps1`" -RepoRoot `"$worktree`" -EnvFile `"$envFile`""
 $triggers = @(
@@ -3897,7 +3897,7 @@ Register-ScheduledTask -TaskName 'SignalBench paper run' -Action $action -Trigge
     -Settings $settings -Description 'Nightly forward paper run (spec 07): the paper-v1 worktree, scripts\paper_nightly.ps1'
 ```
 
-The task runs as the owner, only while logged on (toasts need the desktop); `-StartWhenAvailable` runs a missed 15:00 when the PC wakes. The script loads `-EnvFile` into its own process (a variable already set in the environment wins; values are never logged) and runs `uv run --frozen`, which never rewrites the worktree's `uv.lock`. Its log is `C:\Users\samin\Documents\GitHub\macrocite-paper\logs\paper-<yyyy-MM>.log`; a failure before that folder exists (a wrong `-RepoRoot`) is logged to `%TEMP%\signalbench-paper-nightly.log`. To remove the task later: `Unregister-ScheduledTask -TaskName 'SignalBench paper run' -Confirm:$false`.
+The task runs as the owner, only while logged on (toasts need the desktop); `-StartWhenAvailable` runs a missed 15:00 when the PC wakes. The script loads `-EnvFile` into its own process (a variable already set in the environment wins; values are never logged) and runs `uv run --frozen`, which never rewrites the worktree's `uv.lock`. Its log is `C:\Users\<you>\Documents\GitHub\macrocite-paper\logs\paper-<yyyy-MM>.log`; a failure before that folder exists (a wrong `-RepoRoot`) is logged to `%TEMP%\signalbench-paper-nightly.log`. To remove the task later: `Unregister-ScheduledTask -TaskName 'SignalBench paper run' -Confirm:$false`.
 
 - [ ] **Step 2: Check it**
 
@@ -3909,9 +3909,9 @@ Expected: `NextRunTime` at the next 15:00 (or 16:00) local; `LastTaskResult` 267
 In the same PowerShell window (the variable lasts only for this window, and wins over the `.env` value; the owner's `.env` is not touched):
 
 ```powershell
-$worktree = 'C:\Users\samin\Documents\GitHub\macrocite-paper'
+$worktree = 'C:\Users\<you>\Documents\GitHub\macrocite-paper'
 $env:DATABASE_URL = 'postgresql+psycopg://nobody:nothing@nohost.invalid:5432/none'
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$worktree\scripts\paper_nightly.ps1" -RepoRoot $worktree -EnvFile 'C:\Users\samin\Documents\GitHub\macrocite\.env'
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$worktree\scripts\paper_nightly.ps1" -RepoRoot $worktree -EnvFile 'C:\Users\<you>\Documents\GitHub\macrocite\.env'
 "exit $LASTEXITCODE"
 Remove-Item Env:DATABASE_URL
 Get-Content "$worktree\logs\paper-$(Get-Date -Format yyyy-MM).log" -Tail 6
@@ -3920,8 +3920,8 @@ Get-Content "$worktree\logs\paper-$(Get-Date -Format yyyy-MM).log" -Tail 6
 Expected: a Windows toast from "Windows PowerShell" titled **SignalBench paper run failed**, reading `OperationalError: (psycopg.OperationalError) failed to resolve host 'nohost.invalid': [Errno 11001] getaddrinfo failed`; `exit 1`; and the log's last six lines, each stamped with the local time:
 
 ```text
-repo: C:\Users\samin\Documents\GitHub\macrocite-paper
-env: <n> variables loaded from C:\Users\samin\Documents\GitHub\macrocite\.env, 1 already set in the environment kept
+repo: C:\Users\<you>\Documents\GitHub\macrocite-paper
+env: <n> variables loaded from C:\Users\<you>\Documents\GitHub\macrocite\.env, 1 already set in the environment kept
 > signalbench paper status --stale-after-days 3  (exit 1)
 ERROR: OperationalError: (psycopg.OperationalError) failed to resolve host 'nohost.invalid': [Errno 11001] getaddrinfo failed
 > signalbench paper run  (exit 1)
@@ -3936,8 +3936,8 @@ The worktree never follows the branch. A fix is committed and tested in the main
 
 ```powershell
 git tag paper-v2
-git -C C:\Users\samin\Documents\GitHub\macrocite-paper checkout paper-v2
-uv sync --frozen --directory C:\Users\samin\Documents\GitHub\macrocite-paper
+git -C C:\Users\<you>\Documents\GitHub\macrocite-paper checkout paper-v2
+uv sync --frozen --directory C:\Users\<you>\Documents\GitHub\macrocite-paper
 ```
 
 A different commit does not refuse a run (fixes must stay possible): the next run records the new `git_sha`, and that week's report lists both commits and flags the change. Configs and `data/paper_v1.yaml` must not change in the new tag: a changed config is refused by its `config_sha256`.

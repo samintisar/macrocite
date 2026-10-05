@@ -263,5 +263,5 @@ git commit -m "docs: retire spec 07 and record the removal of the unused tables"
 
 ### After the tasks (controller, not an implementer)
 
-- Drop the one-off backup table on the real database (not created by any migration): `DROP TABLE backup_eight_k_text_20260928;` The same data is in `C:\Users\samin\Documents\signalbench-backups\signalbench-2026-09-28.dump`.
+- Drop the one-off backup table on the real database (not created by any migration): `DROP TABLE backup_eight_k_text_20260928;` The same data is in `C:\Users\<you>\Documents\signalbench-backups\signalbench-2026-09-28.dump`.
 - The real database is still at `0011`; migrating it to `0016` is go-live step 1 and waits for the owner.

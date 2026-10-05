@@ -5748,8 +5748,8 @@ Create `scripts/windows/register-tasks.ps1`:
     Run the printed commands. Without it, nothing is registered.
 #>
 param(
-    [string]$Worktree = 'C:\Users\samin\Documents\GitHub\macrocite-live',
-    [string]$EnvFile = 'C:\Users\samin\Documents\GitHub\macrocite\.env',
+    [string]$Worktree = 'C:\Users\<you>\Documents\GitHub\macrocite-live',
+    [string]$EnvFile = 'C:\Users\<you>\Documents\GitHub\macrocite\.env',
     [datetime]$From = (Get-Date),
     [string]$At = '',
     [switch]$Register
@@ -5859,7 +5859,7 @@ Scan time: 15:00 local, the earliest time that is 17:00 New York or later every 
 Nothing registered. Rerun with -Register to run the commands above.
 ```
 
-with the eleven commands between them: `-Daily -At '15:00'`, the log-on trigger with `.Delay = 'PT5M'` for the scan, `-RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)` for the bot, both running `C:\Users\samin\Documents\GitHub\macrocite-live\scripts\…` with `-EnvFile "C:\Users\samin\Documents\GitHub\macrocite\.env"`, and `-User '<DOMAIN>\samin'`. Nothing is registered.
+with the eleven commands between them: `-Daily -At '15:00'`, the log-on trigger with `.Delay = 'PT5M'` for the scan, `-RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)` for the bot, both running `C:\Users\<you>\Documents\GitHub\macrocite-live\scripts\…` with `-EnvFile "C:\Users\<you>\Documents\GitHub\macrocite\.env"`, and `-User '<DOMAIN>\samin'`. Nothing is registered.
 
 - [ ] **Step 9: Run the checks**
 
@@ -5965,7 +5965,7 @@ TELEGRAM_CHAT_ID=your-chat-id
 
 ### Task 14: ⛔ Migrate the real database to head
 
-**Files:** none (database only). Run from the main checkout, `C:\Users\samin\Documents\GitHub\macrocite`, which has `.env`.
+**Files:** none (database only). Run from the main checkout, `C:\Users\<you>\Documents\GitHub\macrocite`, which has `.env`.
 
 - [ ] **Step 1: Database up, migrations pending**
 
@@ -5994,17 +5994,17 @@ In the main checkout, on this plan's last commit:
 
 ```powershell
 git tag live-v1
-git worktree add C:\Users\samin\Documents\GitHub\macrocite-live live-v1
-cd C:\Users\samin\Documents\GitHub\macrocite-live
+git worktree add C:\Users\<you>\Documents\GitHub\macrocite-live live-v1
+cd C:\Users\<you>\Documents\GitHub\macrocite-live
 uv sync --frozen
 git status --short
 ```
 
-Expected: the worktree is created on a detached HEAD at `live-v1`, `uv sync` creates its own `.venv`, and `git status --short` prints nothing. The steps below run in this folder: in Git Bash, `cd /c/Users/samin/Documents/GitHub/macrocite-live`, with the env file's path quoted and in forward slashes (Git Bash drops unquoted backslashes).
+Expected: the worktree is created on a detached HEAD at `live-v1`, `uv sync` creates its own `.venv`, and `git status --short` prints nothing. The steps below run in this folder: in Git Bash, `cd /c/Users/<you>/Documents/GitHub/macrocite-live`, with the env file's path quoted and in forward slashes (Git Bash drops unquoted backslashes).
 
 - [ ] **Step 3: Freeze the live config**
 
-Run: `uv run --frozen --env-file 'C:/Users/samin/Documents/GitHub/macrocite/.env' signalbench live start`
+Run: `uv run --frozen --env-file 'C:/Users/<you>/Documents/GitHub/macrocite/.env' signalbench live start`
 Expected: `live config: data/strategy_v2-none-cash.yaml | config_sha256 a9579593cc7b | started <today, New York> | code <the first 12 characters of git rev-parse live-v1>`. `a9579593cc7b` is the `config_sha256` in the header of `reports/backtests/2026-09-28-v2-none-cash-breakout-off.md`; any other hash means the config changed: **stop and report**. A second run must refuse with `The live config is already recorded. …` and exit 1.
 
 ### Task 16: ⛔ The owner creates the bot; Docker's restart policy
@@ -6028,7 +6028,7 @@ Expected: one number, the owner's chat id (an empty result means step 2's messag
 
 - [ ] **Step 2: The settings load (without printing them)**
 
-Run (in the worktree): `uv run --frozen --env-file 'C:/Users/samin/Documents/GitHub/macrocite/.env' python -c "from signalbench.config import settings; print(bool(settings.telegram_bot_token), settings.telegram_chat_id is not None)"`
+Run (in the worktree): `uv run --frozen --env-file 'C:/Users/<you>/Documents/GitHub/macrocite/.env' python -c "from signalbench.config import settings; print(bool(settings.telegram_bot_token), settings.telegram_chat_id is not None)"`
 Expected: `True True`.
 
 - [ ] **Step 3: Postgres restarts with the PC**
@@ -6044,21 +6044,21 @@ Expected: the container is recreated with its data volume, then `unless-stopped`
 
 The dry run fetches nothing, so the prices must already be stored: this is the ordinary `ingest prices` of spec 01.
 
-Run: `uv run --frozen --env-file 'C:/Users/samin/Documents/GitHub/macrocite/.env' signalbench ingest prices`
+Run: `uv run --frozen --env-file 'C:/Users/<you>/Documents/GitHub/macrocite/.env' signalbench ingest prices`
 Expected: one line per ticker and a `liquidity:` line, exit 0 (a few failed tickers are listed and do not stop the dry run unless one is QQQ).
 
 - [ ] **Step 2: Print the scan of a recent session**
 
 Pick `<session>`, the last complete NYSE session (for example yesterday's date on a weekday evening, or today's after 16:15 New York). `PYTHONUTF8=1` lets Python print the messages' emoji to a pipe: Git Bash's default is cp1252, which has no 🟢 (the scheduled scripts set it themselves).
 
-Run: `PYTHONUTF8=1 uv run --frozen --env-file 'C:/Users/samin/Documents/GitHub/macrocite/.env' signalbench scan --dry-run --as-of <session>`
+Run: `PYTHONUTF8=1 uv run --frozen --env-file 'C:/Users/<you>/Documents/GitHub/macrocite/.env' signalbench scan --dry-run --as-of <session>`
 The worktree is at `live-v1`, so step 1's pinned-code check passes. From the main checkout (any other commit), add `--allow-any-commit`: without it the scan refuses code that is neither the `live start` commit nor a `live-v*` tag.
 
 Expected: `--- message N ---` blocks: any 🟢 entries, then the 📊 summary, then `scan <id>: ok for <session> (…)` and `(dry run: nothing was written or sent)` (the rolled-back row still used an id from Postgres's sequence). Before `/deposit 100` the ledger holds C$0, so every Breakout that fired is skipped as `no_cash` in the summary's `skipped:` list and no 🟢 message is printed; the summary shows `Positions: none`, `Cash C$0.00`, the QQQ regime line, and a ⚠️ that the bot has never checked in. Show the output to the owner. To see entry messages as they will look, rerun this step after Task 19's `/deposit 100`.
 
 - [ ] **Step 3: Nothing was written**
 
-Run: `uv run --frozen --env-file 'C:/Users/samin/Documents/GitHub/macrocite/.env' signalbench scan status`
+Run: `uv run --frozen --env-file 'C:/Users/<you>/Documents/GitHub/macrocite/.env' signalbench scan status`
 Expected: `Last scan: none yet` first (the dry run's rows were rolled back).
 
 ### Task 18: ⛔ The bot by hand, then the scheduled tasks on the owner's go-ahead
@@ -6070,15 +6070,15 @@ Expected: `Last scan: none yet` first (the dry run's rows were rolled back).
 In a separate PowerShell window, run the bot script once, in the foreground:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Users\samin\Documents\GitHub\macrocite-live\scripts\live_bot.ps1 -RepoRoot C:\Users\samin\Documents\GitHub\macrocite-live -EnvFile C:\Users\samin\Documents\GitHub\macrocite\.env -Once
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Users\<you>\Documents\GitHub\macrocite-live\scripts\live_bot.ps1 -RepoRoot C:\Users\<you>\Documents\GitHub\macrocite-live -EnvFile C:\Users\<you>\Documents\GitHub\macrocite\.env -Once
 ```
 
-The owner sends `/help` and then `/status` from the phone. Expected: the command list, then `Last scan: none yet`, `Next scheduled scan: unknown (the task is not registered)`, `Live config: data/strategy_v2-none-cash.yaml · sha256 a9579593 · code no scan yet`, and `New entries: not paused`. `C:\Users\samin\Documents\GitHub\macrocite-live\logs\bot-<yyyy-MM>.log` shows `bot: polling Telegram; only TELEGRAM_CHAT_ID is answered` and no token. Stop the bot with Ctrl+C.
+The owner sends `/help` and then `/status` from the phone. Expected: the command list, then `Last scan: none yet`, `Next scheduled scan: unknown (the task is not registered)`, `Live config: data/strategy_v2-none-cash.yaml · sha256 a9579593 · code no scan yet`, and `New entries: not paused`. `C:\Users\<you>\Documents\GitHub\macrocite-live\logs\bot-<yyyy-MM>.log` shows `bot: polling Telegram; only TELEGRAM_CHAT_ID is answered` and no token. Stop the bot with Ctrl+C.
 
 - [ ] **Step 2: Show the owner the registration commands**
 
 Run (in the worktree, Windows PowerShell): `powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\windows\register-tasks.ps1`
-Expected: `Scan time: 15:00 local, …(British Columbia Standard Time).`, `Retries: 17:00 local (2 hours later) and 05:30 local (07:30 New York or later, before the open).`, the commands for the two tasks (the scan task has four triggers: 15:00, 17:00, 05:30, and at log-on) with this worktree and `C:\Users\samin\Documents\GitHub\macrocite\.env` in them, and `Nothing registered. Rerun with -Register to run the commands above.` If the time is not 15:00, Windows' time-zone data differs from the spec's: ask the owner, and pass `-At HH:mm` for the time the owner chooses.
+Expected: `Scan time: 15:00 local, …(British Columbia Standard Time).`, `Retries: 17:00 local (2 hours later) and 05:30 local (07:30 New York or later, before the open).`, the commands for the two tasks (the scan task has four triggers: 15:00, 17:00, 05:30, and at log-on) with this worktree and `C:\Users\<you>\Documents\GitHub\macrocite\.env` in them, and `Nothing registered. Rerun with -Register to run the commands above.` If the time is not 15:00, Windows' time-zone data differs from the spec's: ask the owner, and pass `-At HH:mm` for the time the owner chooses.
 
 - [ ] **Step 3: Register, on the owner's go-ahead**
 
@@ -6097,19 +6097,19 @@ A forced failure: in a PowerShell window (the variable lasts only for this windo
 
 ```powershell
 $env:DATABASE_URL = 'postgresql+psycopg://nobody:nothing@127.0.0.1:1/none?connect_timeout=2'
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Users\samin\Documents\GitHub\macrocite-live\scripts\live_scan.ps1 -RepoRoot C:\Users\samin\Documents\GitHub\macrocite-live -EnvFile C:\Users\samin\Documents\GitHub\macrocite\.env
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Users\<you>\Documents\GitHub\macrocite-live\scripts\live_scan.ps1 -RepoRoot C:\Users\<you>\Documents\GitHub\macrocite-live -EnvFile C:\Users\<you>\Documents\GitHub\macrocite\.env
 "exit $LASTEXITCODE"
 Remove-Item Env:DATABASE_URL
 ```
 
 Expected: a toast from "Windows PowerShell" titled **SignalBench scan failed** with the `OperationalError` line, and `exit 1`. Nothing reaches the real database or Telegram.
 
-The stale toast, without scanning: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Users\samin\Documents\GitHub\macrocite-live\scripts\live_scan.ps1 -RepoRoot C:\Users\samin\Documents\GitHub\macrocite-live -EnvFile C:\Users\samin\Documents\GitHub\macrocite\.env -CheckOnly -StaleAfterDays 0`
+The stale toast, without scanning: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Users\<you>\Documents\GitHub\macrocite-live\scripts\live_scan.ps1 -RepoRoot C:\Users\<you>\Documents\GitHub\macrocite-live -EnvFile C:\Users\<you>\Documents\GitHub\macrocite\.env -CheckOnly -StaleAfterDays 0`
 Expected: a toast titled **SignalBench scans are stale** (`STALE: the last ok scan was never, more than 0 days ago.`); `scan status` only reads. If no toast appears, check Settings > System > Notifications (Windows PowerShell on, Do not disturb off).
 
 - [ ] **Updating the code later: a deliberate checkout of a new tag**
 
-A fix is committed and tested in the main checkout (a new migration is applied there first, Task 14's way), tagged, and checked out in the worktree between two evening scans. The tag is required: the scan refuses code that is neither the `live start` commit nor a `live-v*` tag. `git tag live-v2`, `git -C C:\Users\samin\Documents\GitHub\macrocite-live checkout live-v2`, `uv sync --frozen --directory C:\Users\samin\Documents\GitHub\macrocite-live`, then restart the bot task (`Stop-ScheduledTask` and `Start-ScheduledTask -TaskName 'SignalBench live bot'`). The config must not change in the new tag: the scan refuses a config whose sha256 differs from `live_config`'s.
+A fix is committed and tested in the main checkout (a new migration is applied there first, Task 14's way), tagged, and checked out in the worktree between two evening scans. The tag is required: the scan refuses code that is neither the `live start` commit nor a `live-v*` tag. `git tag live-v2`, `git -C C:\Users\<you>\Documents\GitHub\macrocite-live checkout live-v2`, `uv sync --frozen --directory C:\Users\<you>\Documents\GitHub\macrocite-live`, then restart the bot task (`Stop-ScheduledTask` and `Start-ScheduledTask -TaskName 'SignalBench live bot'`). The config must not change in the new tag: the scan refuses a config whose sha256 differs from `live_config`'s.
 
 ### Task 19: ⛔ The first scheduled scan, `/portfolio` from the phone, and `/deposit 100`
 
@@ -6117,7 +6117,7 @@ A fix is committed and tested in the main checkout (a new migration is applied t
 
 - [ ] **Step 1: The first scheduled scan delivers**
 
-After the first 15:00 run: the owner receives the 📊 summary on the phone. In the worktree, `logs\scan-<yyyy-MM>.log` ends with `scan <id>: ok for <session> (…)`, and `uv run --frozen --env-file 'C:/Users/samin/Documents/GitHub/macrocite/.env' signalbench scan status` starts with `Last scan: <session> ok`. A failure shows its toast and a ⚠️ message: fix the cause (Task 18's update steps for a code fix) and let the next run retry.
+After the first 15:00 run: the owner receives the 📊 summary on the phone. In the worktree, `logs\scan-<yyyy-MM>.log` ends with `scan <id>: ok for <session> (…)`, and `uv run --frozen --env-file 'C:/Users/<you>/Documents/GitHub/macrocite/.env' signalbench scan status` starts with `Last scan: <session> ok`. A failure shows its toast and a ⚠️ message: fix the cause (Task 18's update steps for a code fix) and let the next run retry.
 
 - [ ] **Step 2: `/portfolio` and `/deposit 100` from the phone**
 

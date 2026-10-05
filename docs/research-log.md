@@ -7,7 +7,7 @@ One entry per experiment, formal or rough, newest last. Each entry says what was
 - **Post-hoc:** run on data already seen; it can't overturn a formal result on its own.
 - **Rough:** a quick estimate to decide whether something is worth building; information only.
 
-Formal reports live in `reports/`; decisions in the owner's words live in the overview changelog (`docs/superpowers/specs/2026-09-22-swing-assistant-00-overview.md`). Stored runs and Jev readings are in the local database (backup: `C:\Users\samin\Documents\signalbench-backups\`).
+Formal reports live in `reports/`; decisions in the owner's words live in the overview changelog (`docs/superpowers/specs/2026-09-22-swing-assistant-00-overview.md`). Stored runs and Jev readings are in the local database (backup: `C:\Users\<you>\Documents\signalbench-backups\`).
 
 ---
 
