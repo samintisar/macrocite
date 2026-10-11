@@ -1,6 +1,7 @@
-"""NYSE sessions as plain dates. The only module that imports exchange_calendars."""
+"""Sessions as plain dates: NYSE and Cboe Canada (the only module that imports
+exchange_calendars), and every calendar day for crypto (spec 09)."""
 
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any, Protocol
 
 HISTORY_START = date(2010, 1, 1)
@@ -67,3 +68,27 @@ class CboeCanadaSessions(NyseSessions):
 
     CODE = "XTSE"
     NAME = "Cboe Canada"
+
+
+class DailySessions:
+    """Every calendar day is a session (spec 09: crypto trades all week). A session closes at
+    00:00 UTC the next day, when Kraken's daily candle for it is final."""
+
+    def __init__(self, start: date = HISTORY_START) -> None:
+        self._first = start
+
+    def sessions_between(self, start: date, end: date) -> list[date]:
+        start = max(start, self._first)
+        return [start + timedelta(days=i) for i in range((end - start).days + 1)]
+
+    def next_sessions(self, day: date, count: int) -> list[date]:
+        return [day + timedelta(days=i) for i in range(1, count + 1)]
+
+    def is_session(self, day: date) -> bool:
+        return day >= self._first
+
+    def session_closes(self, start: date, end: date) -> list[tuple[date, datetime]]:
+        return [
+            (day, datetime.combine(day + timedelta(days=1), time(0, 0), tzinfo=UTC))
+            for day in self.sessions_between(start, end)
+        ]

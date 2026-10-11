@@ -9,6 +9,8 @@ from signalbench.backtest.metrics import TradeStats, VehicleStats, run_metrics
 from signalbench.backtest.passbar import evaluate_pass_bar, passes
 from signalbench.backtest.report import (
     CAVEATS,
+    CRYPTO_CAVEATS,
+    CRYPTO_LABEL,
     JEV_CAVEATS,
     QQQ_CAVEATS,
     cash_vehicle_payload,
@@ -242,3 +244,42 @@ def test_reports_without_a_cash_vehicle_have_no_qqq_section() -> None:
     assert "Idle cash in" not in text and "Sensitivity" not in text
     for caveat in QQQ_CAVEATS:
         assert caveat not in text
+
+
+def test_crypto_run_has_its_label_benchmark_caveats_and_missing_days() -> None:
+    run = _run(version="crypto-v1")
+    run.metrics = {
+        **run.metrics,
+        "market": "crypto",
+        "benchmark": "BTC buy-and-hold",
+        "missing_days": {"ETHUSD": ["2018-01-12"], "XBTUSD": []},
+    }
+    text = render_report(run)
+    assert CRYPTO_LABEL in text
+    assert "POST-HOC" not in text
+    assert "| 4 | Sharpe vs BTC buy-and-hold |" in text
+    assert "| ETHUSD | 1 | 2018-01-12 |" in text
+    assert "| XBTUSD | 0 | none |" in text
+    for caveat in CRYPTO_CAVEATS:
+        assert f"- {caveat}" in text
+    for caveat in CAVEATS:
+        assert caveat not in text
+
+
+def test_a_later_crypto_version_is_post_hoc() -> None:
+    run = _run(version="crypto-v2")
+    run.metrics = {
+        **run.metrics,
+        "market": "crypto",
+        "benchmark": "BTC buy-and-hold",
+        "missing_days": {"ETHUSD": ["2018-01-12"], "XBTUSD": []},
+    }
+    text = render_report(run)
+    assert "**POST-HOC** (crypto-v2): cannot overturn the crypto-v1 result" in text
+    assert CRYPTO_LABEL not in text
+
+
+def test_stock_run_has_no_crypto_sections() -> None:
+    text = render_report(_run())
+    assert "## Missing days" not in text
+    assert CRYPTO_LABEL not in text

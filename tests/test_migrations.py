@@ -14,7 +14,13 @@ def _script() -> ScriptDirectory:
 
 
 def test_migrations_have_single_head() -> None:
-    assert _script().get_heads() == ["0016_bot_updates"]
+    assert _script().get_heads() == ["0017_crypto_ticker_kind"]
+
+
+def test_0017_adds_crypto_to_the_ticker_kind_enum() -> None:
+    text = (VERSIONS / "0017_crypto_ticker_kind.py").read_text(encoding="utf-8")
+    assert 'down_revision: str | None = "0016_bot_updates"' in text
+    assert "ALTER TYPE tickerkind ADD VALUE IF NOT EXISTS 'crypto'" in text
 
 
 def test_0007_drops_sentiment_tables_and_enum() -> None:

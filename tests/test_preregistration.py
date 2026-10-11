@@ -7,8 +7,10 @@ import pytest
 from sqlmodel import Session
 
 from signalbench.backtest.preregistration import (
+    KRAKEN_TOP_FEE,
     RunRefusedError,
     check_config_path,
+    check_cost_matches_kraken,
     check_cost_matches_survey,
     check_version_unchanged,
 )
@@ -67,3 +69,9 @@ def test_config_cost_must_equal_the_survey_cost() -> None:
         check_cost_matches_survey(0.002, 0.003)
     with pytest.raises(RunRefusedError):
         check_cost_matches_survey(0.003001, 0.003)
+
+
+def test_crypto_cost_must_be_krakens_top_fee() -> None:
+    check_cost_matches_kraken(KRAKEN_TOP_FEE)
+    with pytest.raises(RunRefusedError, match="Kraken's top published fee, 0.004"):
+        check_cost_matches_kraken(0.002)

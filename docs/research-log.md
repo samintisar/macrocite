@@ -119,6 +119,22 @@ Formal reports live in `reports/`; decisions in the owner's words live in the ov
 - **Reports:** `reports/backtests/2026-09-28-v2-{t30,t60,none}-{cash,qqq}-breakout-off.md`.
 - **Takeaway:** both ideas helped on the past. Dropping the time limit lifted mean R from 0.31 to 0.50 and Sharpe from 0.95 to 1.12 with no QQQ at all, and a smaller worst drop than QQQ (26% vs 35%), though with less total return (1,029% vs 1,376%). Idle cash in QQQ raised returns above QQQ's but also raised drawdowns to QQQ's level, so its Sharpe gain was smaller. v2-t60-cash passed by 0.001, which is noise. Five of six passing on data that suggested both ideas decides nothing: all six plus v1 Breakout go to forward paper trading.
 
+## 2026-10-11 — Crypto daily trend: Breakout on BTC and ETH (spec 09)
+
+- **Kind:** pre-registered, one try. `data/strategy_crypto-v1.yaml` committed on its own (commit `992fae0`) before any crypto data was loaded into a database. The rules are v2-none-cash's, none chosen on crypto data; the owner has seen crypto price charts.
+- **Test:** Breakout on Kraken XBT/USD and ETH/USD daily candles, every calendar day a session, BTC above its 200-day average gating entries, 0.40% per side (Kraken's top fee, no extra slippage), no liquidity floor. Days 2015-01-01 to 2026-10-10. Data: Kraken's OHLCVT files to 2026-06-30 plus the public API to 2026-10-10 (102 new days per pair; 0 rows changed where the two overlap). Run `aa650f01` at git `b88f0be` on a fresh local database.
+- **Result:**
+
+  | Series | Trades | Mean R (worse half) | Median R | Total return | CAGR | Sharpe | Max drawdown | Result |
+  | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+  | crypto-v1 Breakout | 63 | 3.581 (1.325) | 0.806 | 3,883.9% | 36.8% | 1.23 | 21.0% | PASS |
+  | BTC buy-and-hold | | | | 25,411.8% | 60.1% | 0.86 | 83.6% | |
+
+  Win rate 60.3%, exposure 37.4%, average hold 37.7 days, 7 drawdown pauses, one BTC position open at the end. Mean R by half: 5.386 on 35 entries to 2020-12-31, 1.325 on 28 entries from 2021-01-01. Both Sharpes use sqrt(252) over calendar days, so both are understated by about 1.2x; the comparison is unaffected.
+- **Missing days:** ETH 6 (2015-08-09, 2015-08-10, 2015-09-04, 2015-09-21, 2015-10-10, 2018-01-12); BTC none.
+- **Report:** `reports/backtests/2026-10-11-crypto-v1-breakout-off.md`.
+- **Takeaway:** the stock Breakout rules carried over to BTC and ETH without changes and passed every criterion on their first try. The pass comes from risk, not return: the strategy made far less than holding BTC (3,884% vs 25,412%) but with a quarter of the worst drop (21% vs 84%), so its Sharpe is higher. The edge is lopsided and fading: the mean R is carried by a few huge trends (six trades between +19.8 R and +26.5 R, all in 2016–2021), the median trade is +0.81 R, and the second half's mean R is a quarter of the first's. Caveats that could flatter it: BTC and ETH were picked because they survived; early ETH (2015–2016, prices around $1) traded thinly on Kraken, and with no liquidity floor those fills may not have been available; the fee is the only cost. A pass is the first evidence, not proof. Going live would be a separate spec, and the next real evidence would be forward results.
+
 ## Open questions (not yet tested)
 
 - **Idle cash and holding time:** tested post-hoc in spec 06 (entry above); five of six variants passed. Forward paper trading (spec 07) was built but never started, and its code was removed on 2026-09-30: on 2026-09-29 the owner chose v2-none-cash to use directly, with no out-of-sample test. Its real results are the first out-of-sample evidence and should be logged here.

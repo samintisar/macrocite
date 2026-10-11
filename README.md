@@ -183,6 +183,14 @@ The scheduled scan and bot run from a git worktree pinned to a `live-v*` tag, so
 | `uv run signalbench ledger split SYMBOL RATIO EX_DATE` | Record a split that yfinance missed |
 | `uv run signalbench ledger void-action ID REASON` | Void a wrong corporate action; its effects are recomputed |
 
+**Crypto research (spec 09)**
+
+| Command | Purpose |
+| --- | --- |
+| `uv run signalbench crypto ingest-file PATH --symbol {XBTUSD,ETHUSD}` | Load a Kraken OHLCVT daily file (e.g. `XBTUSD_1440.csv`); creates the crypto ticker on first use |
+| `uv run signalbench crypto ingest-recent` | Upsert the complete daily candles from Kraken's public OHLC endpoint (about 720 days; today's is never stored) |
+| `uv run signalbench crypto backtest [--config PATH]` | The pre-registered Breakout run on BTC and ETH against BTC buy-and-hold (`data/strategy_crypto-v1.yaml` by default) |
+
 **Telegram bot commands:** `/signals`, `/portfolio`, `/pnl`, `/buy`, `/sell`, `/void`, `/deposit`, `/withdraw`, `/resume`, `/status`, `/tax YEAR`, and `/help`. A fill at a price more than 10% from the latest CDR mark asks for confirmation first, and each recorded update is stored once even if Telegram redelivers it.
 
 ## Run the API locally
@@ -292,6 +300,7 @@ Specs in [`docs/superpowers/specs/`](docs/superpowers/specs/):
 - 05: Telegram bot and evening scan (done; running as `live-v2`)
 - 06: Breakout v2 (done; post-hoc, five of six variants passed; the owner chose `v2-none-cash`)
 - 07: forward paper trading (retired; built, never started, and removed on 2026-09-30)
+- 09: crypto daily trend, Breakout on BTC and ETH from Kraken (research only; see the spec)
 
 Open ideas, none tested yet: slower momentum rotation, fewer constraints on Breakout, and Jev on other horizons. Each reuses already-seen data, so a pass would need unseen data first.
 

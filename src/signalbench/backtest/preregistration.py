@@ -6,6 +6,11 @@ from sqlmodel import Session, col, select
 
 from signalbench.db.models import BacktestRun
 
+# Kraken's published fee per trade ranges from -0.02% to 0.40%, by 30-day volume and maker or
+# taker (read 2026-10-08). Spec 09 charges the top of the range: a starting account, taking.
+# https://support.kraken.com/ca/articles/201893638-How-trading-fees-work-on-Kraken
+KRAKEN_TOP_FEE = 0.004
+
 
 class RunRefusedError(ValueError):
     """A backtest run was refused before it touched real data. The message says why."""
@@ -44,4 +49,13 @@ def check_cost_matches_survey(config_cost: float, survey_cost: float) -> None:
             f"The config has cost_per_side {config_cost}, but the committed spread survey gives "
             f"{survey_cost}. Set cost_per_side from `signalbench backtest cost` "
             "(spec 02 pre-registration)."
+        )
+
+
+def check_cost_matches_kraken(config_cost: float) -> None:
+    """Spec 09: a crypto config's cost_per_side must be Kraken's top published fee."""
+    if config_cost != KRAKEN_TOP_FEE:
+        raise RunRefusedError(
+            f"The config has cost_per_side {config_cost}, but crypto runs use Kraken's top "
+            f"published fee, {KRAKEN_TOP_FEE} (spec 09 pre-registration)."
         )
