@@ -64,9 +64,9 @@ Unchanged: the config must be at `data/strategy_<version>.yaml` (`check_config_p
 
 `run_crypto_backtest(session, config, config_sha256, calendar, git_sha, run_date, reports_dir, now)`:
 
-1. Breakout only (`config.with_setups(("breakout",))`); `check_version_unchanged`; `check_cost_matches_kraken`.
+1. Breakout only (`config.with_setups(("breakout",))`); `check_cost_matches_kraken`; refuse a regime other than `XBTUSD` or any `cash_vehicle` (the rules gate on BTC and keep idle cash as cash); `check_version_unchanged`.
 2. Loads `XBTUSD` and `ETHUSD` bars from `prices` (refuses if either is not seeded or has no bars). BTC is both a universe symbol and the regime/benchmark series.
-3. Drops any candle dated on or after today in UTC (`now` must be timezone-aware). The last run day is yesterday (UTC). Refuses if either series does not end on it, or if a gap inside the run is longer than 3 days.
+3. Drops any candle dated on or after today in UTC (`now` must be timezone-aware). The last run day is yesterday (UTC). Refuses if either series does not end on it, if BTC has no bar on or before `backtest.start` (the gate and the benchmark need it from day one), or if a gap inside the run is longer than 3 days.
 4. `MarketView` over `DailySessions` from `backtest.start` to the last day, plus the earnings look-ahead days (harmless: no earnings dates).
 5. `simulate()` → `run_metrics()` → `evaluate_pass_bar()` against BTC buy-and-hold over the same days. No survivor benchmark: ETH has no bar on the first day, so it would just repeat BTC.
 6. Stores a `BacktestRun` (setup `breakout`, Jev mode `off`), with `"market": "crypto"`, `"benchmark": "BTC buy-and-hold"`, and the missing days in the stored metrics; writes the report to `reports/backtests/`.
@@ -97,7 +97,7 @@ All tests use in-memory SQLite or fixtures and make no network calls.
 - Kraken file parser: a fixture CSV gives rows dated by UTC day, `adj_close == close`, rounded volume, bad bars rejected, re-ingest idempotent.
 - `ingest-recent`: a fake HTTP client; today's candle is never stored; a rerun writes nothing; a pair with no history is refused; an API error stops with a clear message.
 - `DailySessions`: every day is a session; `next_sessions`; closes at 00:00 UTC the next day.
-- Runner guards: refuses a cost other than 0.004, an edited config, a gap over 3 days, a series that does not end yesterday, an unseeded symbol. A 1–3 day gap is allowed and listed.
+- Runner guards: refuses a cost other than 0.004, a regime other than XBTUSD, a cash vehicle, an edited config, BTC starting after the run's start, a gap over 3 days, a series that does not end yesterday, an unseeded symbol. A 1–3 day gap is allowed and listed; today's candle is never read.
 - Runner end to end: synthetic BTC and ETH bars with one clear breakout give exactly one trade with a hand-checked R; the benchmark is BTC buy-and-hold.
 - Report: a crypto run shows the crypto label, benchmark, caveats, and missing days; every existing report test still passes.
 - Migration: `crypto` is added to the ticker kind.
@@ -121,3 +121,4 @@ Kraken's trading API, order placement, live alerts, CAD pairs, coins other than 
 
 - 2026-10-10: written after brainstorming with the owner.
 - 2026-10-11: plan written ([plan](../plans/2026-10-11-swing-09-crypto-daily-trend.md)). `ingest-recent` upserts every complete candle the endpoint returns rather than only newer ones (the shared upsert skips unchanged rows) and refuses a pair with no history; `ingest-file` checks the file name and the 00:00 UTC start. The report notes that Sharpe's sqrt(252) understates both sides equally.
+- 2026-10-11: built (tasks 1–9). Review fixes: the runner also refuses a non-BTC regime, a cash vehicle, and a BTC series starting after the run's start; `ingest-recent` fails one pair cleanly (rolls back, names the error type, continues) and refuses a ticker with no stored prices; Kraken parse and response-shape errors become `KrakenError` with the file line or the pair. `data/strategy_crypto-v1.yaml` committed on its own (`992fae0`).
