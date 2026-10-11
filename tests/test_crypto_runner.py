@@ -138,7 +138,7 @@ def test_one_breakout_gives_one_hand_checked_trade_against_btc(
     assert seeded.exec(select(BacktestRun)).one().id == run.id
     assert path == tmp_path / "2014-10-28-crypto-test-breakout-off.md"
     text = path.read_text(encoding="utf-8")
-    assert "**First test on crypto.**" in text
+    assert "**POST-HOC** (crypto-test): cannot overturn the crypto-v1 result" in text
     assert "| 4 | Sharpe vs BTC buy-and-hold |" in text
 
 
@@ -154,6 +154,7 @@ def test_a_gap_longer_than_three_days_is_refused(seeded: Session, tmp_path: Path
     _drop_eth_days(seeded, DAYS[270:274])
     with pytest.raises(RunRefusedError, match="ETHUSD \\(4 days in a row\\)"):
         _run(seeded, tmp_path)
+    assert seeded.exec(select(BacktestRun)).all() == []
 
 
 def test_a_gap_before_the_run_starts_is_ignored(seeded: Session, tmp_path: Path) -> None:
@@ -165,22 +166,26 @@ def test_a_gap_before_the_run_starts_is_ignored(seeded: Session, tmp_path: Path)
 def test_series_must_end_on_the_last_complete_utc_day(seeded: Session, tmp_path: Path) -> None:
     with pytest.raises(RunRefusedError, match="do not end on 2014-10-28"):
         _run(seeded, tmp_path, now=NOW + timedelta(days=1))
+    assert seeded.exec(select(BacktestRun)).all() == []
 
 
 def test_cost_must_be_krakens_top_fee(seeded: Session, tmp_path: Path) -> None:
     with pytest.raises(RunRefusedError, match="Kraken's top published fee"):
         _run(seeded, tmp_path, config=replace(_config(), cost_per_side=0.002))
+    assert seeded.exec(select(BacktestRun)).all() == []
 
 
 def test_the_regime_must_be_btc(seeded: Session, tmp_path: Path) -> None:
     with pytest.raises(RunRefusedError, match="regime 'QQQ'"):
         _run(seeded, tmp_path, config=replace(_config(), regime_symbol="QQQ"))
+    assert seeded.exec(select(BacktestRun)).all() == []
 
 
 def test_idle_cash_must_stay_cash(seeded: Session, tmp_path: Path) -> None:
     vehicle = CashVehicle(symbol="XBTUSD", cost_per_side=0.004)
     with pytest.raises(RunRefusedError, match="keeps idle cash as cash"):
         _run(seeded, tmp_path, config=replace(_config(), cash_vehicle=vehicle))
+    assert seeded.exec(select(BacktestRun)).all() == []
 
 
 def test_btc_must_have_a_bar_on_the_first_day(seeded: Session, tmp_path: Path) -> None:
@@ -188,6 +193,7 @@ def test_btc_must_have_a_bar_on_the_first_day(seeded: Session, tmp_path: Path) -
     early = replace(config, backtest=replace(config.backtest, start=date(2013, 12, 1)))
     with pytest.raises(RunRefusedError, match="XBTUSD starts on 2014-01-01"):
         _run(seeded, tmp_path, config=early)
+    assert seeded.exec(select(BacktestRun)).all() == []
 
 
 def test_a_three_day_gap_is_the_longest_allowed(seeded: Session, tmp_path: Path) -> None:
@@ -222,12 +228,14 @@ def test_a_changed_config_is_a_new_version(seeded: Session, tmp_path: Path) -> N
     _run(seeded, tmp_path)
     with pytest.raises(RunRefusedError, match="already has runs"):
         _run(seeded, tmp_path, sha="e" * 64)
+    assert len(seeded.exec(select(BacktestRun)).all()) == 1
 
 
 def test_both_symbols_must_be_loaded(session: Session, tmp_path: Path) -> None:
     _store(session, "XBTUSD", _btc())
     with pytest.raises(RunRefusedError, match="Not loaded: ETHUSD"):
         _run(session, tmp_path)
+    assert session.exec(select(BacktestRun)).all() == []
 
 
 def test_missing_days_and_longest_gap() -> None:

@@ -266,6 +266,19 @@ def test_crypto_run_has_its_label_benchmark_caveats_and_missing_days() -> None:
         assert caveat not in text
 
 
+def test_a_later_crypto_version_is_post_hoc() -> None:
+    run = _run(version="crypto-v2")
+    run.metrics = {
+        **run.metrics,
+        "market": "crypto",
+        "benchmark": "BTC buy-and-hold",
+        "missing_days": {"ETHUSD": ["2018-01-12"], "XBTUSD": []},
+    }
+    text = render_report(run)
+    assert "**POST-HOC** (crypto-v2): cannot overturn the crypto-v1 result" in text
+    assert CRYPTO_LABEL not in text
+
+
 def test_stock_run_has_no_crypto_sections() -> None:
     text = render_report(_run())
     assert "## Missing days" not in text

@@ -45,6 +45,7 @@ QQQ_CAVEATS = (
         "Nasdaq-100 ETF, the same way US prices stand in for the hedged CDRs."
     ),
 )
+CRYPTO_FIRST_VERSION = "crypto-v1"
 CRYPTO_LABEL = (
     "**First test on crypto.** Rules carried over unchanged from v2-none-cash; the owner has "
     "seen crypto price charts, but no rule was chosen on them (spec 09)."
@@ -62,6 +63,11 @@ CRYPTO_CAVEATS = (
     (
         "Sharpe annualises with sqrt(252) over every calendar day, so this run's and BTC's are "
         "both understated by about sqrt(365/252), 1.2x; the comparison is unaffected."
+    ),
+    (
+        "Every calendar day is a session, so each lookback covers less time than on stocks: "
+        "the 200-day average is about 6.6 months, the 20-day high about 3 weeks, and the "
+        "10-session auto-resume 10 days."
     ),
     (
         "Taxes are not modeled; frequent trading can be business income in Canada. "
@@ -197,7 +203,17 @@ def _header(run: BacktestRun) -> list[str]:
     if jev is not None and run.setup == "sentiment":
         lines += [f"**Sentiment status:** {_sentiment_status(run, jev)}", "", _period(run), ""]
     if run.metrics.get("market") == "crypto":
-        lines += [CRYPTO_LABEL, ""]
+        if run.strategy_version == CRYPTO_FIRST_VERSION:
+            lines += [CRYPTO_LABEL, ""]
+        else:
+            lines += [
+                (
+                    f"**POST-HOC** ({run.strategy_version}): cannot overturn the crypto-v1 "
+                    "result on its own. A PASS only means the variant did not fail on the past; "
+                    "nothing goes live from it."
+                ),
+                "",
+            ]
     elif run.strategy_version != "v1":
         lines += [
             (
