@@ -68,10 +68,10 @@ A separate database in botbox's existing Postgres container. The live `signalben
 
 | Table | Columns | Notes |
 | --- | --- | --- |
-| `paper_portfolios` | id, name (unique), paper_file, strategy_sha256, start, created_at | One row for `crypto-v1-paper` |
-| `paper_days` | portfolio_id, day, equity, cash, positions (JSON), recorded_at, run_id | Unique on (portfolio_id, day). Never updated |
+| `paper_portfolios` | id, name (unique), paper_file (the file's name), strategy_sha256, start, created_at | One row for `crypto-v1-paper` |
+| `paper_days` | portfolio_id, day, equity, cash, state (JSON: the simulator state after the close, holding positions and orders), recorded_at, run_id | Primary key (portfolio_id, day). Never updated |
 | `paper_events` | id, portfolio_id, day, kind, payload (JSON), recorded_at, run_id | Append-only. Kinds are the simulator's (`entry`, `exit`, `skip`, `exit_deferred`, `stop_update`, `pause`, `resume`) plus `order_entry` and `order_exit` |
-| `paper_runs` | id, started_at, finished_at, status, error, git_sha, days_added, messages_failed | One row per run that gets the lock, including refused and failed ones |
+| `paper_runs` | id, started_at, finished_at, status (`running`, `ok`, `failed`, `mismatch`), error, git_sha, days_added, messages_failed, summary_sent | One row per run that gets the lock, including refused and failed ones |
 
 ## Messages
 
@@ -108,7 +108,7 @@ Sent with `TelegramMessenger` using the existing `telegram_bot_token` and `teleg
 
 ## Testing
 
-In-memory SQLite (the advisory lock is faked as in the live scan's tests), Kraken through `httpx.MockTransport`, Telegram through `FakeMessenger`.
+In-memory SQLite (the advisory lock is faked as in the live scan's tests), Kraken through an injected fetch function over fake candles (the real fetcher is already tested in spec 09), Telegram through `FakeMessenger`.
 
 - **Key invariant:** running `paper run` night by night over a stretch of fake candles stores exactly the trades, events, orders, and equity of one replay over the same days, and those match `simulate()` over the same days.
 - A second run on the same night adds nothing and sends nothing.
@@ -137,3 +137,4 @@ Real money and Kraken's trading API; spec 10; any change to the live bot, scan, 
 ## Changelog
 
 - 2026-10-11: written after the owner's decisions above.
+- 2026-10-11 (plan): `paper_days` stores the whole simulator state (`sim_state` JSON) rather than only positions, so the comparison covers orders and the pause state too; `paper_runs` gains `summary_sent` and a `mismatch` status (the review counts those runs); the portfolio stores the paper file's name; tests fake Kraken with an injected fetch function.
