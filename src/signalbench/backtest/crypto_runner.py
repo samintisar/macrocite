@@ -112,6 +112,11 @@ def _check_series(
             f"These series do not end on {last.isoformat()}, the last complete UTC day: "
             f"{', '.join(behind)}. Run `signalbench crypto ingest-recent` and try again."
         )
+    if bars[BTC][0].date > start:
+        raise RunRefusedError(
+            f"{BTC} starts on {bars[BTC][0].date.isoformat()}, after the run's start "
+            f"{start.isoformat()}: the regime gate and the benchmark need it from day one."
+        )
     gaps = {symbol: missing_days(series, start, last) for symbol, series in bars.items()}
     broken = [
         f"{symbol} ({longest_gap(days)} days in a row)"
@@ -140,12 +145,18 @@ def run_crypto_backtest(
     """Breakout on BTC and ETH from `backtest.start` to yesterday (UTC), judged against BTC
     buy-and-hold; store the run and write its report.
 
-    Refuses (RunRefusedError) a cost other than Kraken's top fee, a changed config for a
-    stored version, an unloaded symbol, a series that does not end yesterday, or a gap longer
-    than MAX_GAP_DAYS inside the run. `now` must be timezone-aware.
+    Refuses (RunRefusedError) a cost other than Kraken's top fee, a regime other than BTC, a
+    cash vehicle, a changed config for a stored version, an unloaded symbol, a series that does
+    not end yesterday, BTC starting after the run's start, or a gap longer than MAX_GAP_DAYS
+    inside the run. `now` must be timezone-aware.
     """
     check_cost_matches_kraken(config.cost_per_side)
-    config = config.with_setups(("breakout",))
+    if config.regime_symbol != BTC or config.cash_vehicle is not None:
+        raise RunRefusedError(
+            f"A crypto config gates on {BTC} and keeps idle cash as cash (spec 09); this one "
+            f"has regime {config.regime_symbol!r} and cash_vehicle {config.cash_vehicle!r}."
+        )
+    config =config.with_setups(("breakout",))
     check_version_unchanged(session, config.version, config_sha256)
     last = last_complete_day(now)
     start = config.backtest.start

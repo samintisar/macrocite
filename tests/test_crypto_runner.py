@@ -2,6 +2,7 @@ from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 from pytest import approx
@@ -17,7 +18,11 @@ from signalbench.backtest.preregistration import RunRefusedError
 from signalbench.db.models import BacktestRun, Price, Ticker, TickerKind
 from signalbench.market.bars import AdjustedBar
 from signalbench.market.calendar import DailySessions
-from signalbench.strategy.config import StrategyConfig, load_strategy_config
+from signalbench.strategy.config import (
+    CashVehicle,
+    StrategyConfig,
+    load_strategy_config,
+)
 from strategy_helpers import make_bar
 
 CONFIG_PATH = Path(__file__).parent / "fixtures" / "strategy_crypto_test.yaml"
@@ -126,6 +131,7 @@ def test_one_breakout_gives_one_hand_checked_trade_against_btc(
     assert trade["r"] == approx((100 * 0.996 - 110 * 1.004) / (37 / 7))
     assert run.metrics["market"] == "crypto"
     assert [b["name"] for b in run.metrics["benchmarks"]] == ["BTC buy-and-hold"]
+    assert run.metrics["benchmarks"][0]["total_return"] == approx(0.0)
     assert run.pass_bar["sharpe"]["threshold"] == run.metrics["benchmarks"][0]["sharpe"]
     assert run.metrics["missing_days"] == {"ETHUSD": [], "XBTUSD": []}
     assert run.passed is False  # one trade is far below 30
@@ -166,6 +172,52 @@ def test_cost_must_be_krakens_top_fee(seeded: Session, tmp_path: Path) -> None:
         _run(seeded, tmp_path, config=replace(_config(), cost_per_side=0.002))
 
 
+def test_the_regime_must_be_btc(seeded: Session, tmp_path: Path) -> None:
+    with pytest.raises(RunRefusedError, match="regime 'QQQ'"):
+        _run(seeded, tmp_path, config=replace(_config(), regime_symbol="QQQ"))
+
+
+def test_idle_cash_must_stay_cash(seeded: Session, tmp_path: Path) -> None:
+    vehicle = CashVehicle(symbol="XBTUSD", cost_per_side=0.004)
+    with pytest.raises(RunRefusedError, match="keeps idle cash as cash"):
+        _run(seeded, tmp_path, config=replace(_config(), cash_vehicle=vehicle))
+
+
+def test_btc_must_have_a_bar_on_the_first_day(seeded: Session, tmp_path: Path) -> None:
+    config = _config()
+    early = replace(config, backtest=replace(config.backtest, start=date(2013, 12, 1)))
+    with pytest.raises(RunRefusedError, match="XBTUSD starts on 2014-01-01"):
+        _run(seeded, tmp_path, config=early)
+
+
+def test_a_three_day_gap_is_the_longest_allowed(seeded: Session, tmp_path: Path) -> None:
+    _drop_eth_days(seeded, DAYS[270:273])
+    run, _path = _run(seeded, tmp_path)
+    assert len(run.metrics["missing_days"]["ETHUSD"]) == 3
+
+
+def test_todays_candle_is_never_read(seeded: Session, tmp_path: Path) -> None:
+    today = NOW.date()  # 2014-10-28, still trading at NOW
+    for symbol in ("XBTUSD", "ETHUSD"):
+        ticker = seeded.exec(select(Ticker).where(Ticker.symbol == symbol)).one()
+        price = Decimal("500.0")
+        seeded.add(
+            Price(
+                ticker_id=ticker.id,
+                date=today,
+                open=price,
+                high=price,
+                low=price,
+                close=price,
+                adj_close=price,
+                volume=1000,
+            )
+        )
+    seeded.commit()
+    run, _path = _run(seeded, tmp_path)
+    assert run.end_date == DAYS[-1]
+
+
 def test_a_changed_config_is_a_new_version(seeded: Session, tmp_path: Path) -> None:
     _run(seeded, tmp_path)
     with pytest.raises(RunRefusedError, match="already has runs"):
@@ -189,5 +241,7 @@ def test_missing_days_and_longest_gap() -> None:
 
 def test_last_complete_day_is_yesterday_in_utc() -> None:
     assert last_complete_day(datetime(2026, 10, 11, 0, 30, tzinfo=UTC)) == date(2026, 10, 10)
+    vancouver = datetime(2026, 10, 10, 20, 0, tzinfo=ZoneInfo("America/Vancouver"))
+    assert last_complete_day(vancouver) == date(2026, 10, 10)
     with pytest.raises(ValueError, match="timezone-aware"):
         last_complete_day(datetime(2026, 10, 11, 0, 30))  # noqa: DTZ001  # naive on purpose
