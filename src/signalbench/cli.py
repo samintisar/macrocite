@@ -16,6 +16,7 @@ import typer
 import yaml
 from sqlmodel import Session, col, select
 
+from signalbench.backtest.crypto_runner import run_crypto_backtest
 from signalbench.backtest.preregistration import (
     check_config_path,
     check_cost_matches_survey,
@@ -51,6 +52,15 @@ from signalbench.ingest.earnings import (
 )
 from signalbench.ingest.edgar import backfill_filing_text, ingest_eight_ks_for_symbol
 from signalbench.ingest.finnhub import FinnhubClient
+from signalbench.ingest.kraken import (
+    CRYPTO_NAMES,
+    KrakenError,
+    crypto_ticker,
+    fetch_kraken_daily,
+    find_crypto_ticker,
+    ingest_kraken_bars,
+    parse_ohlcvt_file,
+)
 from signalbench.ingest.liquidity import update_liquidity_flags
 from signalbench.ingest.news import ingest_company_news, last_news_date, news_windows
 from signalbench.ingest.prices import (
@@ -99,7 +109,12 @@ from signalbench.live.start import LIVE_CONFIG, start_live
 from signalbench.live.status import scan_stale_message, scan_status_lines
 from signalbench.live.tax import tax_csv, tax_text
 from signalbench.live.telegram_bot import build_application, redact_logs
-from signalbench.market.calendar import HISTORY_START, CboeCanadaSessions, NyseSessions
+from signalbench.market.calendar import (
+    HISTORY_START,
+    CboeCanadaSessions,
+    DailySessions,
+    NyseSessions,
+)
 from signalbench.market.legal_close import LegalCloses
 from signalbench.strategy.config import ConfigError, load_strategy_config
 from signalbench.strategy.readings import JevReadingsView
@@ -108,6 +123,7 @@ from signalbench.strategy.spread import SpreadSurveyError, load_spread_survey
 REPO_ROOT = Path(__file__).resolve().parents[2]
 UNIVERSE_PATH = REPO_ROOT / "data" / "cdr_universe.yaml"
 STRATEGY_V1_PATH = REPO_ROOT / "data" / "strategy_v1.yaml"
+CRYPTO_V1_PATH = REPO_ROOT / "data" / "strategy_crypto-v1.yaml"
 SPREAD_SURVEY_PATH = REPO_ROOT / "data" / "cdr_spread_survey.yaml"
 JEV_FILTER_PATH = REPO_ROOT / "data" / "jev_filter_v1.yaml"
 REPORTS_DIR = REPO_ROOT / "reports" / "backtests"
@@ -1020,3 +1036,112 @@ def bot_run() -> None:
     except Exception as error:  # noqa: BLE001  # one redacted line for the log and the toast
         typer.echo(f"ERROR: {type(error).__name__}: {redact(_first_line(error), token)}", err=True)
         raise typer.Exit(1) from None
+
+
+crypto_app = typer.Typer(help="Crypto research on Kraken daily candles (spec 09). Nothing trades.")
+app.add_typer(crypto_app, name="crypto")
+
+
+class CryptoPair(str, Enum):
+    XBTUSD = "XBTUSD"
+    ETHUSD = "ETHUSD"
+
+
+@crypto_app.command("ingest-file")
+def crypto_ingest_file(
+    path: Annotated[Path, typer.Argument(help="A Kraken OHLCVT daily file, e.g. XBTUSD_1440.csv.")],
+    symbol: Annotated[CryptoPair, typer.Option("--symbol", help="The Kraken pair in the file.")],
+) -> None:
+    if not path.exists():
+        typer.echo(f"{path} not found.", err=True)
+        raise typer.Exit(1)
+    if not path.name.upper().startswith(f"{symbol.value}_"):
+        typer.echo(
+            f"{path.name} is not a {symbol.value} file (Kraken names it {symbol.value}_1440.csv).",
+            err=True,
+        )
+        raise typer.Exit(1)
+    try:
+        bars = parse_ohlcvt_file(path)
+        if not bars:
+            raise KrakenError(f"{path.name} has no rows")
+        with get_session() as session:
+            result = ingest_kraken_bars(
+                session, crypto_ticker(session, symbol.value), bars, settings.price_history_start
+            )
+    except KrakenError as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(1) from None
+    typer.echo(
+        f"{symbol.value}: +{result.created} ~{result.updated} x{result.rejected} "
+        f"({bars[0].date} to {bars[-1].date})"
+    )
+
+
+@crypto_app.command("ingest-recent")
+def crypto_ingest_recent() -> None:
+    today = datetime.now(UTC).date()
+    failed: list[str] = []
+    with get_session() as session, httpx.Client(timeout=30.0) as client:
+        for symbol in CRYPTO_NAMES:
+            try:
+                ticker = find_crypto_ticker(session, symbol)
+                if ticker is None:
+                    raise KrakenError(
+                        f"{symbol} has no history yet. Run `signalbench crypto ingest-file` first."
+                    )
+                bars = fetch_kraken_daily(client, symbol, today)
+                result = ingest_kraken_bars(session, ticker, bars, settings.price_history_start)
+            except (KrakenError, httpx.HTTPError) as error:
+                session.rollback()
+                typer.echo(f"{symbol} FAILED: {error}", err=True)
+                failed.append(symbol)
+                continue
+            last = bars[-1].date.isoformat() if bars else "none"
+            typer.echo(
+                f"{symbol}: +{result.created} ~{result.updated} x{result.rejected} (to {last})"
+            )
+    if failed:
+        raise typer.Exit(1)
+
+
+@crypto_app.command("backtest")
+def crypto_backtest(
+    config: Annotated[
+        Path, typer.Option("--config", help="Pre-registered crypto parameters.")
+    ] = CRYPTO_V1_PATH,
+) -> None:
+    if not config.exists():
+        typer.echo(f"{config} not found (spec 09 pre-registration).", err=True)
+        raise typer.Exit(1)
+    if not committed_unchanged(REPO_ROOT, config):
+        typer.echo(
+            f"{config.name} must be committed, unchanged, before a backtest on real data "
+            "(spec 09 pre-registration).",
+            err=True,
+        )
+        raise typer.Exit(1)
+    try:
+        strategy, sha = load_strategy_config(config)
+    except (ConfigError, yaml.YAMLError) as error:
+        typer.echo(" ".join(f"{config.name}: {error}".split()), err=True)
+        raise typer.Exit(1) from None
+    try:
+        now = datetime.now(UTC)
+        check_config_path(REPO_ROOT, config, strategy.version)
+        with get_session() as session:
+            run, path = run_crypto_backtest(
+                session,
+                config=strategy,
+                config_sha256=sha,
+                calendar=DailySessions(),
+                git_sha=git_sha(REPO_ROOT),
+                run_date=now.date(),
+                reports_dir=REPORTS_DIR,
+                now=now,
+            )
+            _print_run(run)
+    except ValueError as error:  # RunRefusedError and data gaps
+        typer.echo(str(error), err=True)
+        raise typer.Exit(1) from None
+    typer.echo(f"report: {path}")
