@@ -45,6 +45,29 @@ QQQ_CAVEATS = (
         "Nasdaq-100 ETF, the same way US prices stand in for the hedged CDRs."
     ),
 )
+CRYPTO_LABEL = (
+    "**First test on crypto.** Rules carried over unchanged from v2-none-cash; the owner has "
+    "seen crypto price charts, but no rule was chosen on them (spec 09)."
+)
+CRYPTO_CAVEATS = (
+    "Kraken USD candles (XBT/USD, ETH/USD); a day runs from 00:00 to 00:00 UTC.",
+    (
+        "Orders fill at the next day's 00:00 UTC open. The 0.40% fee per side is the only cost; "
+        "no slippage beyond it is modeled."
+    ),
+    (
+        "BTC and ETH were chosen partly because they survived; a universe picked today "
+        "flatters the past."
+    ),
+    (
+        "Sharpe annualises with sqrt(252) over every calendar day, so this run's and BTC's are "
+        "both understated by about sqrt(365/252), 1.2x; the comparison is unaffected."
+    ),
+    (
+        "Taxes are not modeled; frequent trading can be business income in Canada. "
+        "Fractional coins are assumed."
+    ),
+)
 PASS_BAR_ROWS = (
     ("trades", "Trades", ">="),
     ("mean_r", "Mean R after costs", ">"),
@@ -173,7 +196,9 @@ def _header(run: BacktestRun) -> list[str]:
         ]
     if jev is not None and run.setup == "sentiment":
         lines += [f"**Sentiment status:** {_sentiment_status(run, jev)}", "", _period(run), ""]
-    if run.strategy_version != "v1":
+    if run.metrics.get("market") == "crypto":
+        lines += [CRYPTO_LABEL, ""]
+    elif run.strategy_version != "v1":
         lines += [
             (
                 f"**POST-HOC** ({run.strategy_version}): cannot overturn a v1 result on its own. "
@@ -247,8 +272,11 @@ def _pass_bar(run: BacktestRun) -> list[str]:
         "| # | Criterion | Value | Threshold | Passed |",
         "| --- | --- | --- | --- | --- |",
     ]
+    benchmark: str | None = run.metrics.get("benchmark")  # spec 09; stock runs compare to QQQ
     for number, (key, label, comparison) in enumerate(PASS_BAR_ROWS, start=1):
         row = run.pass_bar[key]
+        if key == "sharpe" and benchmark is not None:
+            label = f"Sharpe vs {benchmark}"
         passed = "yes" if row["passed"] else "no"
         lines.append(
             f"| {number} | {label} | {row['value']:.3f} "
@@ -348,8 +376,30 @@ def _cash_vehicle(m: dict[str, Any]) -> list[str]:
     ]
 
 
+def _missing_days(m: dict[str, Any]) -> list[str]:
+    missing: dict[str, list[str]] | None = m.get("missing_days")
+    if missing is None:
+        return []
+    return [
+        "## Missing days",
+        "",
+        (
+            "Days inside the run with no candle (no trades on Kraken): nothing filled, and "
+            "held coins waited."
+        ),
+        "",
+        "| Symbol | Days | Dates |",
+        "| --- | --- | --- |",
+        *[
+            f"| {symbol} | {len(days)} | {', '.join(days) or 'none'} |"
+            for symbol, days in missing.items()
+        ],
+    ]
+
+
 def _skips_and_caveats(m: dict[str, Any]) -> list[str]:
     skips: dict[str, int] = m["skips_by_reason"]
+    caveats = CRYPTO_CAVEATS if m.get("market") == "crypto" else CAVEATS
     rows = [f"| {reason} | {count} |" for reason, count in skips.items()] or ["| none | 0 |"]
     return [
         "## Skips by reason",
@@ -360,7 +410,7 @@ def _skips_and_caveats(m: dict[str, Any]) -> list[str]:
         "",
         "## Caveats",
         "",
-        *[f"- {caveat}" for caveat in CAVEATS],
+        *[f"- {caveat}" for caveat in caveats],
         *([f"- {caveat}" for caveat in JEV_CAVEATS] if "jev" in m else []),
         *([f"- {caveat}" for caveat in QQQ_CAVEATS] if "cash_vehicle" in m else []),
     ]
@@ -412,6 +462,7 @@ def render_report(run: BacktestRun) -> str:
         _metrics(run.metrics),
         _jev(run.metrics),
         _benchmarks(run.metrics),
+        _missing_days(run.metrics),
         _cash_vehicle(run.metrics),
         _skips_and_caveats(run.metrics),
         _trades(run),
