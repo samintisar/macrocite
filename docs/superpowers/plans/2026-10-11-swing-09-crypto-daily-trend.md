@@ -17,7 +17,7 @@
 - Run commands from the repo root with the Bash tool (Git Bash syntax). Use `uv run …` for every Python tool. Stay on the branch above; never push without asking the owner.
 - **Never edit an existing `data/strategy_*.yaml`** (their `config_sha256` values are in stored runs) **or any `.env*` file.** Stage explicit paths only; never `git add -A` or `git add .`.
 - **No real data before Task 10.** Tasks 1–9 use only fixtures and the in-memory SQLite `session` fixture from `tests/conftest.py`. Do not run any `signalbench crypto` command against a real database, and do not open one, until `data/strategy_crypto-v1.yaml` is committed (Task 9) and the controller gives the go-ahead in Task 10: the run is pre-registered, and seeing a crypto result before the config is committed breaks that.
-- **The research database, not the live one.** Task 10 runs against the Postgres the earlier backtests used (`DATABASE_URL` in `.env`). The live scan and bot run on the `ubuntuworker` server; never touch that database.
+- **A local database, never the live one.** Task 10 runs against a fresh Postgres on the owner's PC (`docker compose up -d`, the default `DATABASE_URL`). The crypto run needs only its own prices and the `backtest_runs` table. The live scan and bot run on the **botbox** server, and `ubuntuworker` is their stopped fallback: never connect to either database.
 - mypy runs strict on `src/` only. `tests/strategy_helpers.py` is imported as `from strategy_helpers import …`.
 - ruff 0.16 sorts imports (`I001`). Run `uv run ruff check --fix .` only **after** the module a test imports exists: before that, ruff files the missing `signalbench.*` name as third-party and moves the import.
 - After each task: `uv run pytest -q`, `uv run ruff check .`, and `uv run mypy src` all pass before committing.
@@ -1694,10 +1694,10 @@ Expected: `git show --stat HEAD` lists only `data/strategy_crypto-v1.yaml`.
 
 **Controller only. Stop and ask the owner for a go-ahead before Step 1.** Everything here touches the research database, and Step 4 produces the one result.
 
-- [ ] **Step 1: Migrate the research database**
+- [ ] **Step 1: Start and migrate the local database**
 
-Run: `uv run alembic upgrade head`
-Expected: `Running upgrade 0016_bot_updates -> 0017_crypto_ticker_kind`.
+Run: `docker compose up -d`, then `uv run alembic upgrade head`. Check first that `DATABASE_URL` (in `.env`, or the default in `src/signalbench/config.py`) points at `localhost`, not at botbox or ubuntuworker.
+Expected: the migrations run up to `0017_crypto_ticker_kind`.
 
 - [ ] **Step 2: Load the history files**
 
