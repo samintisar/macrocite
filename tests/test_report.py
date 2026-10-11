@@ -246,7 +246,6 @@ def test_reports_without_a_cash_vehicle_have_no_qqq_section() -> None:
         assert caveat not in text
 
 
-
 def test_crypto_run_has_its_label_benchmark_caveats_and_missing_days() -> None:
     run = _run(version="crypto-v1")
     run.metrics = {

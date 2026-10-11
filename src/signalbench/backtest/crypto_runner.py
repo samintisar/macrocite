@@ -156,7 +156,7 @@ def run_crypto_backtest(
             f"A crypto config gates on {BTC} and keeps idle cash as cash (spec 09); this one "
             f"has regime {config.regime_symbol!r} and cash_vehicle {config.cash_vehicle!r}."
         )
-    config =config.with_setups(("breakout",))
+    config = config.with_setups(("breakout",))
     check_version_unchanged(session, config.version, config_sha256)
     last = last_complete_day(now)
     start = config.backtest.start
