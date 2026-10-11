@@ -54,6 +54,7 @@ class TickerKind(str, Enum):
     us_stock = "us_stock"
     cdr = "cdr"
     benchmark = "benchmark"
+    crypto = "crypto"  # spec 09: a Kraken USD pair, research only
 
 
 class Ticker(SQLModel, table=True):
