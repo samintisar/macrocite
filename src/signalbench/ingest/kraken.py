@@ -56,15 +56,26 @@ def parse_ohlcvt_file(path: Path) -> list[DailyBar]:
         for number, row in enumerate(csv.reader(handle), start=1):
             if len(row) != 7:
                 raise KrakenError(f"{path.name} line {number}: expected 7 fields, got {len(row)}")
-            timestamp = int(row[0])
-            if timestamp % DAY_SECONDS != 0:
-                started = datetime.fromtimestamp(timestamp, tz=UTC).isoformat()
-                raise KrakenError(
-                    f"{path.name} line {number}: not a daily (1440) file, a candle starts at "
-                    f"{started}"
-                )
-            bars.append(_bar(timestamp, row[1], row[2], row[3], row[4], row[5]))
+            try:
+                timestamp = int(row[0])
+                if timestamp % DAY_SECONDS != 0:
+                    started = datetime.fromtimestamp(timestamp, tz=UTC).isoformat()
+                    raise KrakenError(
+                        f"{path.name} line {number}: not a daily (1440) file, a candle starts at "
+                        f"{started}"
+                    )
+                bars.append(_bar(timestamp, row[1], row[2], row[3], row[4], row[5]))
+            except KrakenError:
+                raise
+            except (ValueError, ArithmeticError) as error:
+                raise KrakenError(f"{path.name} line {number}: {error}") from error
     return bars
+
+
+def _unexpected(pair: str, error: Exception) -> KrakenError:
+    return KrakenError(
+        f"Kraken OHLC {pair}: unexpected response ({type(error).__name__}: {error})"
+    )
 
 
 def fetch_kraken_daily(client: httpx.Client, pair: str, today: date) -> list[DailyBar]:
@@ -77,12 +88,19 @@ def fetch_kraken_daily(client: httpx.Client, pair: str, today: date) -> list[Dai
         KRAKEN_OHLC_URL, params={"pair": pair, "interval": str(DAILY_INTERVAL)}
     )
     response.raise_for_status()
-    body: dict[str, Any] = response.json()
-    if body.get("error"):
-        raise KrakenError(f"Kraken OHLC {pair}: {', '.join(body['error'])}")
-    result: dict[str, Any] = body["result"]
-    rows: list[list[Any]] = next(value for key, value in result.items() if key != "last")
-    bars = [_bar(int(row[0]), row[1], row[2], row[3], row[4], row[6]) for row in rows]
+    try:
+        body: dict[str, Any] = response.json()
+        errors = body.get("error")
+    except (ValueError, AttributeError) as error:
+        raise _unexpected(pair, error) from error
+    if errors:
+        raise KrakenError(f"Kraken OHLC {pair}: {', '.join(errors)}")
+    try:
+        result: dict[str, Any] = body["result"]
+        rows: list[list[Any]] = next(value for key, value in result.items() if key != "last")
+        bars = [_bar(int(row[0]), row[1], row[2], row[3], row[4], row[6]) for row in rows]
+    except (KeyError, TypeError, AttributeError, StopIteration, IndexError, ValueError) as error:
+        raise _unexpected(pair, error) from error
     return [bar for bar in bars if bar.date < today]
 
 

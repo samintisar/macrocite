@@ -34,7 +34,7 @@ from signalbench.backtest.runner import (
 )
 from signalbench.config import settings
 from signalbench.db.lock import advisory_lock
-from signalbench.db.models import BacktestRun, Ticker, TickerKind
+from signalbench.db.models import BacktestRun, Price, Ticker, TickerKind
 from signalbench.db.session import engine, get_session
 from signalbench.ingest.cdr import (
     build_entries,
@@ -1057,7 +1057,8 @@ def crypto_ingest_file(
         raise typer.Exit(1)
     if not path.name.upper().startswith(f"{symbol.value}_"):
         typer.echo(
-            f"{path.name} is not a {symbol.value} file (Kraken names it {symbol.value}_1440.csv).",
+            f"{path.name} does not hold {symbol.value}: "
+            f"Kraken names that file {symbol.value}_1440.csv.",
             err=True,
         )
         raise typer.Exit(1)
@@ -1069,7 +1070,7 @@ def crypto_ingest_file(
             result = ingest_kraken_bars(
                 session, crypto_ticker(session, symbol.value), bars, settings.price_history_start
             )
-    except KrakenError as error:
+    except ValueError as error:  # KrakenError, or a file that is not UTF-8 text
         typer.echo(str(error), err=True)
         raise typer.Exit(1) from None
     typer.echo(
@@ -1086,15 +1087,19 @@ def crypto_ingest_recent() -> None:
         for symbol in CRYPTO_NAMES:
             try:
                 ticker = find_crypto_ticker(session, symbol)
-                if ticker is None:
+                has_prices = ticker is not None and (
+                    session.exec(select(Price.id).where(Price.ticker_id == ticker.id)).first()
+                    is not None
+                )
+                if ticker is None or not has_prices:
                     raise KrakenError(
                         f"{symbol} has no history yet. Run `signalbench crypto ingest-file` first."
                     )
                 bars = fetch_kraken_daily(client, symbol, today)
                 result = ingest_kraken_bars(session, ticker, bars, settings.price_history_start)
-            except (KrakenError, httpx.HTTPError) as error:
+            except Exception as error:  # noqa: BLE001  # report any per-pair failure and move on
                 session.rollback()
-                typer.echo(f"{symbol} FAILED: {error}", err=True)
+                typer.echo(f"{symbol} FAILED: {type(error).__name__}: {error}", err=True)
                 failed.append(symbol)
                 continue
             last = bars[-1].date.isoformat() if bars else "none"

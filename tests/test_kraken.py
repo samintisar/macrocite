@@ -73,6 +73,28 @@ def test_parse_refuses_a_row_with_the_wrong_field_count(tmp_path: Path) -> None:
         parse_ohlcvt_file(path)
 
 
+def test_parse_names_the_line_of_a_non_numeric_field(tmp_path: Path) -> None:
+    path = tmp_path / "XBTUSD_1440.csv"
+    path.write_text("1420070400,abc,1,1,1,1,1\n", encoding="utf-8")
+    with pytest.raises(KrakenError, match="line 1:"):
+        parse_ohlcvt_file(path)
+
+
+def test_fetch_wraps_a_body_that_is_not_json() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="<html>gateway</html>")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    with pytest.raises(KrakenError, match="unexpected response"):
+        fetch_kraken_daily(client, "XBTUSD", TODAY)
+
+
+def test_fetch_wraps_a_result_with_no_candles() -> None:
+    client = _client({"error": [], "result": {"last": 1}})
+    with pytest.raises(KrakenError, match="unexpected response"):
+        fetch_kraken_daily(client, "XBTUSD", TODAY)
+
+
 def test_ingest_creates_the_ticker_rejects_bad_bars_and_is_idempotent(session: Session) -> None:
     ticker = crypto_ticker(session, "XBTUSD")
     bars = parse_ohlcvt_file(FIXTURE)
