@@ -190,6 +190,9 @@ The scheduled scan and bot run from a git worktree pinned to a `live-v*` tag, so
 | `uv run signalbench crypto ingest-file PATH --symbol {XBTUSD,ETHUSD}` | Load a Kraken OHLCVT daily file (e.g. `XBTUSD_1440.csv`); creates the crypto ticker on first use |
 | `uv run signalbench crypto ingest-recent` | Upsert the complete daily candles from Kraken's public OHLC endpoint (about 720 days; today's is never stored) |
 | `uv run signalbench crypto backtest [--config PATH]` | The pre-registered Breakout run on BTC and ETH against BTC buy-and-hold (`data/strategy_crypto-v1.yaml` by default) |
+| `uv run signalbench crypto paper start [--file PATH]` | Create the spec 11 paper portfolio from `data/paper_crypto-v1.yaml` and load Kraken's recent candles (once, before the start day closes) |
+| `uv run signalbench crypto paper run [--file PATH]` | The nightly paper job: fetch, replay, compare with the saved days, append, and send PAPER messages |
+| `uv run signalbench crypto paper status` / `review` | The weekly summary now; the 12-month review (refused before the review date) |
 
 **Telegram bot commands:** `/signals`, `/portfolio`, `/pnl`, `/buy`, `/sell`, `/void`, `/deposit`, `/withdraw`, `/resume`, `/status`, `/tax YEAR`, and `/help`. A fill at a price more than 10% from the latest CDR mark asks for confirmation first, and each recorded update is stored once even if Telegram redelivers it.
 
@@ -301,6 +304,7 @@ Specs in [`docs/superpowers/specs/`](docs/superpowers/specs/):
 - 06: Breakout v2 (done; post-hoc, five of six variants passed; the owner chose `v2-none-cash`)
 - 07: forward paper trading (retired; built, never started, and removed on 2026-09-30)
 - 09: crypto daily trend, Breakout on BTC and ETH from Kraken (research only; see the spec)
+- 11: crypto paper trading, crypto-v1 forward on botbox (no money; see the spec)
 
 Open ideas, none tested yet: slower momentum rotation, fewer constraints on Breakout, and Jev on other horizons. Each reuses already-seen data, so a pass would need unseen data first.
 

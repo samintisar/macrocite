@@ -1,0 +1,9 @@
+[Unit]
+Description=SignalBench crypto paper run (spec 11)
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/paper/macrocite
+EnvironmentFile=%h/paper/config/paper.env
+ExecStart=%h/.local/bin/uv run --frozen signalbench crypto paper run
