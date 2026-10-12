@@ -34,7 +34,7 @@ from signalbench.backtest.runner import (
 )
 from signalbench.config import settings
 from signalbench.db.lock import advisory_lock
-from signalbench.db.models import BacktestRun, Price, Ticker, TickerKind
+from signalbench.db.models import BacktestRun, PaperPortfolio, Price, Ticker, TickerKind
 from signalbench.db.session import engine, get_session
 from signalbench.ingest.cdr import (
     build_entries,
@@ -116,6 +116,10 @@ from signalbench.market.calendar import (
     NyseSessions,
 )
 from signalbench.market.legal_close import LegalCloses
+from signalbench.paper.paper_file import PaperError, PaperFile, load_paper_file
+from signalbench.paper.run import PAPER_LOCK, Fetch, run_paper, start_paper
+from signalbench.paper.store import find_portfolio
+from signalbench.paper.summary import paper_review, paper_summary, summary_text
 from signalbench.strategy.config import ConfigError, load_strategy_config
 from signalbench.strategy.readings import JevReadingsView
 from signalbench.strategy.spread import SpreadSurveyError, load_spread_survey
@@ -124,6 +128,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 UNIVERSE_PATH = REPO_ROOT / "data" / "cdr_universe.yaml"
 STRATEGY_V1_PATH = REPO_ROOT / "data" / "strategy_v1.yaml"
 CRYPTO_V1_PATH = REPO_ROOT / "data" / "strategy_crypto-v1.yaml"
+PAPER_CRYPTO_V1_PATH = REPO_ROOT / "data" / "paper_crypto-v1.yaml"
 SPREAD_SURVEY_PATH = REPO_ROOT / "data" / "cdr_spread_survey.yaml"
 JEV_FILTER_PATH = REPO_ROOT / "data" / "jev_filter_v1.yaml"
 REPORTS_DIR = REPO_ROOT / "reports" / "backtests"
@@ -1150,3 +1155,120 @@ def crypto_backtest(
         typer.echo(str(error), err=True)
         raise typer.Exit(1) from None
     typer.echo(f"report: {path}")
+
+
+paper_app = typer.Typer(help="Forward paper trading on Kraken daily candles (spec 11). No money.")
+crypto_app.add_typer(paper_app, name="paper")
+
+
+def _kraken_fetch(client: httpx.Client) -> Fetch:
+    return lambda pair, today: fetch_kraken_daily(client, pair, today)
+
+
+def _committed(path: Path) -> bool:
+    return committed_unchanged(REPO_ROOT, path)
+
+
+def _paper(file: Path) -> tuple[PaperFile, float]:
+    """The paper file and its strategy's start equity; exits 1 with the reason."""
+    try:
+        paper = load_paper_file(file)
+        strategy, _sha = load_strategy_config(REPO_ROOT / paper.strategy)
+    except (OSError, ValueError, yaml.YAMLError) as error:  # PaperError, ConfigError
+        typer.echo(f"ERROR: {error}", err=True)
+        raise typer.Exit(1) from None
+    return paper, strategy.start_equity
+
+
+def _paper_portfolio(session: Session, paper: PaperFile) -> PaperPortfolio:
+    portfolio = find_portfolio(session, paper.name)
+    if portfolio is None:
+        typer.echo(
+            f"No portfolio {paper.name}: run `signalbench crypto paper start` first.", err=True
+        )
+        raise typer.Exit(1)
+    return portfolio
+
+
+@paper_app.command("start")
+def paper_start(
+    file: Annotated[
+        Path, typer.Option("--file", help="The pre-registered paper file.")
+    ] = PAPER_CRYPTO_V1_PATH,
+) -> None:
+    """Create the paper portfolio and load Kraken's recent daily candles (once)."""
+    try:
+        with get_session() as session, httpx.Client(timeout=30.0) as client:
+            portfolio = start_paper(
+                session, repo=REPO_ROOT, paper_path=file, now=datetime.now(UTC),
+                fetch=_kraken_fetch(client), committed=_committed,
+            )
+    except (ValueError, httpx.HTTPError) as error:  # PaperError, KrakenError, refused data
+        typer.echo(f"ERROR: {error}", err=True)
+        raise typer.Exit(1) from None
+    typer.echo(
+        f"{portfolio.name}: starts {portfolio.start}, strategy {portfolio.strategy_sha256[:12]}"
+    )
+
+
+@paper_app.command("run")
+def paper_run(
+    file: Annotated[
+        Path, typer.Option("--file", help="The pre-registered paper file.")
+    ] = PAPER_CRYPTO_V1_PATH,
+) -> None:
+    """The nightly job: fetch, replay, compare, append, and message (spec 11)."""
+    token, chat = _telegram()
+    messenger = TelegramMessenger(token, chat)
+    try:
+        with get_session() as session, httpx.Client(timeout=30.0) as client:
+            outcome = run_paper(
+                session, lock=advisory_lock(engine, PAPER_LOCK), repo=REPO_ROOT,
+                paper_path=file, clock=_now, fetch=_kraken_fetch(client),
+                committed=_committed, git_sha=git_sha(REPO_ROOT), messenger=messenger,
+                echo=typer.echo,
+            )
+    except Exception as error:  # noqa: BLE001  # e.g. the database is down: no run row to mark
+        typer.echo(f"ERROR: {type(error).__name__}: {redact(_first_line(error), token)}", err=True)
+        raise typer.Exit(1) from None
+    finally:
+        messenger.close()
+    if outcome.status in ("failed", "mismatch"):
+        raise typer.Exit(1)  # run_paper printed the ERROR line
+    if outcome.status == "ok":
+        typer.echo(f"paper run {outcome.run_id}: ok, {outcome.days_added} days added")
+
+
+@paper_app.command("status")
+def paper_status(
+    file: Annotated[
+        Path, typer.Option("--file", help="The pre-registered paper file.")
+    ] = PAPER_CRYPTO_V1_PATH,
+) -> None:
+    """The weekly summary, now, and the last successful run."""
+    paper, start_equity = _paper(file)
+    with get_session() as session:
+        portfolio = _paper_portfolio(session, paper)
+        summary = paper_summary(session, portfolio, paper, start_equity, datetime.now(UTC))
+    typer.echo(summary_text(paper, summary))
+    last = "never" if summary.last_ok_run is None else summary.last_ok_run.isoformat()
+    typer.echo(f"Last ok run: {last}")
+
+
+@paper_app.command("review")
+def paper_review_command(
+    file: Annotated[
+        Path, typer.Option("--file", help="The pre-registered paper file.")
+    ] = PAPER_CRYPTO_V1_PATH,
+) -> None:
+    """The 12-month review: on track or off track (refused before the review date)."""
+    paper, start_equity = _paper(file)
+    with get_session() as session:
+        portfolio = _paper_portfolio(session, paper)
+        try:
+            review = paper_review(session, portfolio, paper, start_equity, datetime.now(UTC).date())
+        except PaperError as error:
+            typer.echo(str(error), err=True)
+            raise typer.Exit(1) from None
+    for line in review.lines:
+        typer.echo(line)
