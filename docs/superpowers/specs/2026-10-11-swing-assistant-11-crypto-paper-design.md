@@ -60,7 +60,7 @@ A systemd user timer on botbox runs it at 00:30, 06:30, and 12:30 UTC (`Persiste
 9. **Messages.** For the days just added: one message per fill, closed trade, and new order. On the first successful run of each ISO week (UTC), the weekly summary. A Telegram failure does not undo step 8; the run counts it in `messages_failed`.
 10. **Finish.** Set the run row's `finished_at`, `status` (`ok` or `failed`), `error`, and `days_added`. A failed run sends `PAPER ALERT: <error>` (best effort) and exits 1.
 
-A run that finds nothing new (step 8 adds no days) is `ok` with `days_added = 0` and sends nothing.
+A run that finds nothing new (step 8 adds no days) is `ok` with `days_added = 0` and sends no trade messages; it still sends the weekly summary if none has gone out this ISO week (so a failed summary send is retried by the next run).
 
 ## Database: `signalbench_paper` on botbox
 
@@ -79,7 +79,7 @@ Sent with `TelegramMessenger` using the existing `telegram_bot_token` and `teleg
 
 - **Order:** `PAPER crypto-v1: BUY XBTUSD at the next open (breakout). Signal close 62,410.00, stop 58,900.00.` Exits: `PAPER crypto-v1: SELL ETHUSD at the next open (trail).`
 - **Fill:** `PAPER filled: BUY XBTUSD 0.000527 at 62,661.65 (open 62,412.00 + 0.4%), 33.02 spent.`
-- **Closed trade:** `PAPER closed: XBTUSD +2.31R (+8.4%), held 18 days.`
+- **Closed trade:** `PAPER closed: XBTUSD +2.31R (+8.4%), held 18 days (stop).`
 - **Weekly summary:** equity vs the start's 100, BTC buy-and-hold over the same days (bought at the start day's close), open positions, closed trades so far, worst drawdown so far vs `max_drawdown`, late days so far vs `max_late_days`, failed runs in the last 7 days, and days until the review.
 - **Alert:** `PAPER ALERT: <error>` for a failed run, including a replay mismatch or a changed strategy file.
 
@@ -88,12 +88,12 @@ Sent with `TelegramMessenger` using the existing `telegram_bot_token` and `teleg
 - `start`: reads the paper file (committed and unchanged), checks the strategy fingerprint, creates the `paper_portfolios` row, creates the two crypto tickers if missing, and loads Kraken's last ~720 daily candles for both. Refuses if the portfolio already exists, or if `last_complete_day(now)` is on or after `start` (the start day must not have closed yet).
 - `run`: the nightly job above.
 - `status`: prints the weekly summary and the last successful run's time.
-- `review`: refuses before the review date. On or after it, prints the three checks and **on track** or **off track** with reasons.
+- `review`: refuses until the day after the review date (once the period's last day is recorded). Then prints the three checks, an information line (profit, closed trades, win rate, mean R, BTC buy-and-hold), and **ON TRACK** or **OFF TRACK**.
 
 ## On botbox
 
 - Checkout at `~/paper/macrocite` on tag `paper-crypto-v1` (pushed to GitHub so botbox can fetch it), with its own uv venv. The live checkout `~/macrocite` on `live-v2` is not changed.
-- `~/paper/config/.env`: `DATABASE_URL` pointing at `signalbench_paper`, plus the existing Telegram token and chat id.
+- `~/paper/config/paper.env` (loaded by the unit's `EnvironmentFile`): `DATABASE_URL` pointing at `signalbench_paper`, plus the existing Telegram token and chat id. `crypto paper start` and `run` refuse any database whose name does not end in `_paper`, so a wrong URL can never write to the live database.
 - `CREATE DATABASE signalbench_paper` in `signalbench-postgres-1`, then `alembic upgrade head` from the paper checkout.
 - Systemd user units: `signalbench-paper.service` + `signalbench-paper.timer` (00:30, 06:30, 12:30 UTC, `Persistent=true`), and `signalbench-paper-backup.service` + `.timer` (daily `pg_dump` of `signalbench_paper` to `~/paper/backups/`, 14 days kept). The live bot, scan, and backup units are not edited or restarted.
 - Code updates: move the paper checkout to a new tag only after the change is merged; the next run's replay check proves the saved history still comes out the same.
@@ -137,4 +137,5 @@ Real money and Kraken's trading API; spec 10; any change to the live bot, scan, 
 ## Changelog
 
 - 2026-10-11: written after the owner's decisions above.
-- 2026-10-11 (plan): `paper_days` stores the whole simulator state (`sim_state` JSON) rather than only positions, so the comparison covers orders and the pause state too; `paper_runs` gains `summary_sent` and a `mismatch` status (the review counts those runs); the portfolio stores the paper file's name; tests fake Kraken with an injected fetch function.
+- 2026-10-11 (plan): `paper_days` stores the whole simulator state (`sim_state` JSON) (column `state`) rather than only positions, so the comparison covers orders and the pause state too; `paper_runs` gains `summary_sent` and a `mismatch` status (the review counts those runs); the portfolio stores the paper file's name; tests fake Kraken with an injected fetch function.
+- 2026-10-12 (final review): the review prints an information line and runs from the day after the review date; the paper commands refuse a non-`_paper` database; a run that dies outside the job still alerts; the stored paper file name is checked; the backup writes to a temporary file first.
