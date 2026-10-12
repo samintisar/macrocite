@@ -219,7 +219,11 @@ def _night(
     portfolio = find_portfolio(session, paper.name)
     if portfolio is None:
         raise PaperError(f"No portfolio {paper.name}: run `signalbench crypto paper start` first.")
-    if portfolio.strategy_sha256 != rules.sha or portfolio.start != paper.start:
+    if (
+        portfolio.strategy_sha256 != rules.sha
+        or portfolio.start != paper.start
+        or portfolio.paper_file != paper_path.name
+    ):
         raise PaperError(
             f"{paper_path.name} no longer matches the portfolio {paper.name} was started with."
         )

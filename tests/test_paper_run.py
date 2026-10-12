@@ -274,6 +274,48 @@ def test_a_portfolio_that_no_longer_matches_the_paper_file_fails_the_run(
     assert outcome.error is not None and "no longer matches" in outcome.error
 
 
+def test_a_changed_stored_strategy_hash_fails_the_run(session: Session, paper: Path) -> None:
+    portfolio = session.exec(select(PaperPortfolio)).one()
+    portfolio.strategy_sha256 = "0" * 64
+    session.add(portfolio)
+    session.commit()
+    outcome = _run(session, paper, DAYS[START])
+    assert outcome.status == "failed"
+    assert outcome.error is not None and "no longer matches" in outcome.error
+
+
+def test_a_paper_file_with_another_name_fails_the_run(
+    session: Session, paper: Path, tmp_path: Path
+) -> None:
+    copy = tmp_path / "paper_copy.yaml"
+    copy.write_text(paper.read_text(encoding="utf-8"), encoding="utf-8")
+    outcome = _run(session, copy, DAYS[START])
+    assert outcome.status == "failed"
+    assert outcome.error is not None and "no longer matches" in outcome.error
+
+
+def test_a_gap_of_four_days_fails_the_run(session: Session, paper: Path) -> None:
+    series = all_bars()
+    gap = set(DAYS[START + 10 : START + 14])
+    series["ETHUSD"] = [bar for bar in series["ETHUSD"] if bar.date not in gap]
+    outcome = _run(session, paper, DAYS[START + 30], fetch=fake_fetch(series))
+    assert outcome.status == "failed"
+    assert outcome.error is not None
+    assert "Gaps longer than 3 days" in outcome.error
+    assert "ETHUSD (4 days in a row)" in outcome.error
+    assert session.exec(select(PaperDay)).all() == []
+
+
+def test_a_run_that_adds_no_days_still_sends_the_weekly_summary_once(
+    session: Session, paper: Path
+) -> None:
+    messenger = FakeMessenger()
+    outcome = _run(session, paper, DAYS[START - 1], messenger=messenger)
+    assert (outcome.status, outcome.days_added) == ("ok", 0)
+    assert len(messenger.texts()) == 1
+    assert messenger.texts()[0].startswith(SUMMARY)
+
+
 def test_the_weekly_summary_is_sent_again_after_a_failed_send(
     session: Session, paper: Path
 ) -> None:
