@@ -62,7 +62,7 @@ def write_paper_file(
     path.write_text(
         "name: crypto-test-paper\n"
         f"strategy: {STRATEGY}\n"
-        f"strategy_sha256: {sha or strategy_sha()}\n"
+        f"strategy_sha256: '{sha or strategy_sha()}'\n"  # quoted: all digits would be a YAML int
         "setup: breakout\n"
         f"start: {start.isoformat()}\n"
         "review:\n  months: 12\n  max_late_days: 7\n  max_drawdown: 0.35\n",
