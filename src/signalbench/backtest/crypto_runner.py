@@ -53,8 +53,11 @@ def missing_days(bars: Sequence[AdjustedBar], start: date, end: date) -> list[da
     """Days from max(start, the first bar) to `end` with no candle."""
     if not bars:
         return []
-    have = {bar.date for bar in bars}
-    first = max(start, bars[0].date)
+    return days_without(max(start, bars[0].date), end, {bar.date for bar in bars})
+
+
+def days_without(first: date, end: date, have: set[date]) -> list[date]:
+    """Every calendar day from `first` to `end` that is not in `have`."""
     return [
         first + timedelta(days=i)
         for i in range((end - first).days + 1)
@@ -97,7 +100,7 @@ def load_crypto_bars(session: Session, end: date) -> dict[str, list[AdjustedBar]
     return bars
 
 
-def _check_series(
+def check_crypto_series(
     bars: dict[str, list[AdjustedBar]], start: date, last: date
 ) -> dict[str, list[date]]:
     """Every series ends on `last` and has no gap longer than MAX_GAP_DAYS inside the run.
@@ -131,6 +134,40 @@ def _check_series(
     return gaps
 
 
+def check_crypto_config(config: StrategyConfig) -> None:
+    """Kraken's top fee, BTC as the regime, and idle cash kept as cash (spec 09)."""
+    check_cost_matches_kraken(config.cost_per_side)
+    if config.regime_symbol != BTC or config.cash_vehicle is not None:
+        raise RunRefusedError(
+            f"A crypto config gates on {BTC} and keeps idle cash as cash (spec 09); this one "
+            f"has regime {config.regime_symbol!r} and cash_vehicle {config.cash_vehicle!r}."
+        )
+
+
+def crypto_market(
+    bars: dict[str, list[AdjustedBar]],
+    config: StrategyConfig,
+    calendar: Sessions,
+    start: date,
+    last: date,
+) -> MarketView:
+    """The market the crypto backtest and the paper replay both run on: every day from `start`
+    to `last`, plus the earnings lookahead (crypto has no earnings, so it never fires)."""
+    run_sessions = calendar.sessions_between(start, last)
+    if not run_sessions:
+        raise RunRefusedError(f"No sessions between {start} and {last}.")
+    lookahead = max(config.earnings_blackout_sessions, config.earnings_exit_sessions)
+    return MarketView(
+        [
+            SymbolInput(symbol=symbol, sector=CRYPTO_SECTOR, bars=series, earnings=[])
+            for symbol, series in bars.items()
+        ],
+        bars[BTC],
+        run_sessions + calendar.next_sessions(last, lookahead),
+        config,
+    )
+
+
 def run_crypto_backtest(
     session: Session,
     *,
@@ -150,31 +187,14 @@ def run_crypto_backtest(
     not end yesterday, BTC starting after the run's start, or a gap longer than MAX_GAP_DAYS
     inside the run. `now` must be timezone-aware.
     """
-    check_cost_matches_kraken(config.cost_per_side)
-    if config.regime_symbol != BTC or config.cash_vehicle is not None:
-        raise RunRefusedError(
-            f"A crypto config gates on {BTC} and keeps idle cash as cash (spec 09); this one "
-            f"has regime {config.regime_symbol!r} and cash_vehicle {config.cash_vehicle!r}."
-        )
+    check_crypto_config(config)
     config = config.with_setups(("breakout",))
     check_version_unchanged(session, config.version, config_sha256)
     last = last_complete_day(now)
     start = config.backtest.start
     bars = load_crypto_bars(session, last)
-    gaps = _check_series(bars, start, last)
-    run_sessions = calendar.sessions_between(start, last)
-    if not run_sessions:
-        raise RunRefusedError(f"No sessions between {start} and {last}.")
-    lookahead = max(config.earnings_blackout_sessions, config.earnings_exit_sessions)
-    market = MarketView(
-        [
-            SymbolInput(symbol=symbol, sector=CRYPTO_SECTOR, bars=series, earnings=[])
-            for symbol, series in bars.items()
-        ],
-        bars[BTC],
-        run_sessions + calendar.next_sessions(last, lookahead),
-        config,
-    )
+    gaps = check_crypto_series(bars, start, last)
+    market = crypto_market(bars, config, calendar, start, last)
     result = simulate(market, NullReadingsView(), config, start, last)
     metrics = run_metrics(result, config.backtest)
     simulated = market.sessions_between(result.start, result.end)

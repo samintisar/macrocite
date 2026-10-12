@@ -1,0 +1,6 @@
+[Unit]
+Description=SignalBench paper database backup (spec 11)
+
+[Service]
+Type=oneshot
+ExecStart=%h/paper/macrocite/scripts/botbox/paper_backup.sh

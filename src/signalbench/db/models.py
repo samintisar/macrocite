@@ -473,3 +473,66 @@ class BotHeartbeat(SQLModel, table=True):
 
     id: int = Field(default=1, primary_key=True, sa_column_kwargs={"autoincrement": False})
     beat_at: datetime = Field(sa_column=Column(UTCDateTime(), nullable=False))
+
+
+class PaperRun(SQLModel, table=True):
+    """One `signalbench crypto paper run` that got the lock (spec 11)."""
+
+    __tablename__ = "paper_runs"
+
+    id: int | None = Field(default=None, primary_key=True)
+    started_at: datetime = Field(sa_column=Column(UTCDateTime(), nullable=False))
+    finished_at: datetime | None = Field(
+        default=None, sa_column=Column(UTCDateTime(), nullable=True)
+    )
+    status: str  # running | ok | failed | mismatch
+    error: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    git_sha: str
+    days_added: int = 0
+    messages_failed: int = 0  # Telegram sends that failed; the days are saved anyway
+    summary_sent: bool = False  # this run sent the week's summary
+
+
+class PaperPortfolio(SQLModel, table=True):
+    """The portfolio of one pre-registered paper file (spec 11), made by `crypto paper start`."""
+
+    __tablename__ = "paper_portfolios"
+    __table_args__ = (UniqueConstraint("name", name="uq_paper_portfolios_name"),)
+
+    id: int | None = Field(default=None, primary_key=True)
+    name: str
+    paper_file: str  # the file's name, e.g. paper_crypto-v1.yaml
+    strategy_sha256: str
+    start: date
+    created_at: datetime = _created_at()
+
+
+class PaperDay(SQLModel, table=True):
+    """One replayed day of a paper portfolio (spec 11). Written once, never updated."""
+
+    __tablename__ = "paper_days"
+    __table_args__ = (PrimaryKeyConstraint("portfolio_id", "day"),)
+
+    portfolio_id: int = Field(foreign_key="paper_portfolios.id", ondelete="RESTRICT")
+    day: date
+    equity: float
+    cash: float
+    state: dict[str, Any] = Field(sa_column=Column(JSON, nullable=False))  # SimState after the close
+    recorded_at: datetime = Field(sa_column=Column(UTCDateTime(), nullable=False))
+    run_id: int = Field(foreign_key="paper_runs.id", ondelete="RESTRICT")
+
+
+class PaperEvent(SQLModel, table=True):
+    """One event of a paper day (spec 11): a simulator event, or an order decided at its close
+    (`order_entry`, `order_exit`). Append-only; read back in id order."""
+
+    __tablename__ = "paper_events"
+    __table_args__ = (Index("ix_paper_events_portfolio_day", "portfolio_id", "day"),)
+
+    id: int | None = Field(default=None, primary_key=True)
+    portfolio_id: int = Field(foreign_key="paper_portfolios.id", ondelete="RESTRICT")
+    day: date
+    kind: str
+    payload: dict[str, Any] = Field(sa_column=Column(JSON, nullable=False))
+    recorded_at: datetime = Field(sa_column=Column(UTCDateTime(), nullable=False))
+    run_id: int = Field(foreign_key="paper_runs.id", ondelete="RESTRICT")

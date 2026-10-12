@@ -14,7 +14,17 @@ def _script() -> ScriptDirectory:
 
 
 def test_migrations_have_single_head() -> None:
-    assert _script().get_heads() == ["0017_crypto_ticker_kind"]
+    assert _script().get_heads() == ["0018_paper_crypto"]
+
+
+def test_0018_creates_the_four_paper_tables() -> None:
+    text = (VERSIONS / "0018_paper_crypto.py").read_text(encoding="utf-8")
+    assert 'down_revision: str | None = "0017_crypto_ticker_kind"' in text
+    for table in ("paper_runs", "paper_portfolios", "paper_days", "paper_events"):
+        assert f'op.create_table(\n        "{table}"' in text
+    assert 'sa.PrimaryKeyConstraint("portfolio_id", "day")' in text
+    assert 'sa.Column("state", sa.JSON(), nullable=False)' in text
+    assert 'sa.UniqueConstraint("name", name="uq_paper_portfolios_name")' in text
 
 
 def test_0017_adds_crypto_to_the_ticker_kind_enum() -> None:

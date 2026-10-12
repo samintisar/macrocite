@@ -1,0 +1,9 @@
+[Unit]
+Description=SignalBench paper database backup at 01:15 UTC (spec 11)
+
+[Timer]
+OnCalendar=*-*-* 01:15:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

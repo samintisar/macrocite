@@ -1,0 +1,9 @@
+[Unit]
+Description=SignalBench crypto paper run at 00:30, 06:30, 12:30 UTC (spec 11)
+
+[Timer]
+OnCalendar=*-*-* 00,06,12:30:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

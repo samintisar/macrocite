@@ -9,6 +9,8 @@ from pytest import approx
 from sqlmodel import Session, col, select
 
 from signalbench.backtest.crypto_runner import (
+    check_crypto_config,
+    crypto_market,
     last_complete_day,
     longest_gap,
     missing_days,
@@ -253,3 +255,25 @@ def test_last_complete_day_is_yesterday_in_utc() -> None:
     assert last_complete_day(vancouver) == date(2026, 10, 10)
     with pytest.raises(ValueError, match="timezone-aware"):
         last_complete_day(datetime(2026, 10, 11, 0, 30))  # noqa: DTZ001  # naive on purpose
+
+
+def test_check_crypto_config_refuses_another_regime() -> None:
+    with pytest.raises(RunRefusedError, match="gates on XBTUSD"):
+        check_crypto_config(replace(_config(), regime_symbol="QQQ"))
+
+
+def test_check_crypto_config_refuses_another_cost() -> None:
+    with pytest.raises(RunRefusedError):
+        check_crypto_config(replace(_config(), cost_per_side=0.002))
+
+
+def test_crypto_market_holds_the_run_days() -> None:
+    bars = {"ETHUSD": _eth(), "XBTUSD": _btc()}
+    market = crypto_market(bars, _config(), DailySessions(), DAYS[250], DAYS[260])
+    assert market.sessions_between(DAYS[250], DAYS[260]) == DAYS[250:261]
+
+
+def test_crypto_market_refuses_an_empty_run() -> None:
+    bars = {"ETHUSD": _eth(), "XBTUSD": _btc()}
+    with pytest.raises(RunRefusedError, match="No sessions"):
+        crypto_market(bars, _config(), DailySessions(), DAYS[260], DAYS[250])

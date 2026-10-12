@@ -14,6 +14,7 @@ Start at the [overview spec](specs/2026-09-22-swing-assistant-00-overview.md). S
 | 06 | [Breakout v2: idle cash in QQQ and holding time](specs/2026-09-28-swing-assistant-06-breakout-v2-design.md) · plan: [2026-09-28-swing-06-breakout-v2.md](plans/2026-09-28-swing-06-breakout-v2.md) | Six post-hoc variant reports committed and logged; `v2-t30-cash` reproduces v1 Breakout |
 | 07 | [Forward paper trading](specs/2026-09-29-swing-assistant-07-paper-trading-design.md) · plan: [2026-09-29-swing-07-paper-trading.md](plans/2026-09-29-swing-07-paper-trading.md) | Built, not started: the owner dropped paper trading on 2026-09-29 and chose v2-none-cash to trade directly |
 | 09 | [Crypto daily trend: Breakout on BTC and ETH](specs/2026-10-10-swing-assistant-09-crypto-daily-trend-design.md) (research only) · plan: [2026-10-11-swing-09-crypto-daily-trend.md](plans/2026-10-11-swing-09-crypto-daily-trend.md) | `crypto-v1` committed alone, run once on Kraken data, report and research-log entry committed |
+| 11 | [Crypto paper trading: crypto-v1 forward on botbox](specs/2026-10-11-swing-assistant-11-crypto-paper-design.md) · plan: [2026-10-11-swing-11-crypto-paper.md](plans/2026-10-11-swing-11-crypto-paper.md) | `paper_crypto-v1.yaml` committed alone, running nightly on botbox; 12-month review logged |
 
 ## History: original phases (2026-08-19)
 
