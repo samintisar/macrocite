@@ -116,6 +116,7 @@ from signalbench.market.calendar import (
     NyseSessions,
 )
 from signalbench.market.legal_close import LegalCloses
+from signalbench.paper.messages import alert_text
 from signalbench.paper.paper_file import PaperError, PaperFile, load_paper_file
 from signalbench.paper.run import PAPER_LOCK, Fetch, run_paper, start_paper
 from signalbench.paper.store import find_portfolio
@@ -1180,6 +1181,19 @@ def _paper(file: Path) -> tuple[PaperFile, float]:
     return paper, strategy.start_equity
 
 
+def _paper_database() -> None:
+    """Refuse to write unless DATABASE_URL names a *_paper database: a wrong URL must never
+    put paper rows in the live database."""
+    name = engine.url.database
+    if not (name or "").endswith("_paper"):
+        typer.echo(
+            "ERROR: the paper commands need a database whose name ends in _paper (spec 11); "
+            f"DATABASE_URL points at {name!r}.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+
 def _paper_portfolio(session: Session, paper: PaperFile) -> PaperPortfolio:
     portfolio = find_portfolio(session, paper.name)
     if portfolio is None:
@@ -1197,6 +1211,7 @@ def paper_start(
     ] = PAPER_CRYPTO_V1_PATH,
 ) -> None:
     """Create the paper portfolio and load Kraken's recent daily candles (once)."""
+    _paper_database()
     try:
         with get_session() as session, httpx.Client(timeout=30.0) as client:
             portfolio = start_paper(
@@ -1218,18 +1233,24 @@ def paper_run(
     ] = PAPER_CRYPTO_V1_PATH,
 ) -> None:
     """The nightly job: fetch, replay, compare, append, and message (spec 11)."""
+    _paper_database()
     token, chat = _telegram()
     messenger = TelegramMessenger(token, chat)
     try:
         with get_session() as session, httpx.Client(timeout=30.0) as client:
             outcome = run_paper(
                 session, lock=advisory_lock(engine, PAPER_LOCK), repo=REPO_ROOT,
-                paper_path=file, clock=_now, fetch=_kraken_fetch(client),
+                paper_path=file, clock=lambda: datetime.now(UTC), fetch=_kraken_fetch(client),
                 committed=_committed, git_sha=git_sha(REPO_ROOT), messenger=messenger,
                 echo=typer.echo,
             )
     except Exception as error:  # noqa: BLE001  # e.g. the database is down: no run row to mark
-        typer.echo(f"ERROR: {type(error).__name__}: {redact(_first_line(error), token)}", err=True)
+        text = f"{type(error).__name__}: {redact(_first_line(error), token)}"
+        typer.echo(f"ERROR: {text}", err=True)
+        try:
+            messenger.send(alert_text(text))
+        except Exception as send_error:  # noqa: BLE001  # best effort: Telegram may be down too
+            typer.echo(f"Telegram alert failed: {type(send_error).__name__}", err=True)
         raise typer.Exit(1) from None
     finally:
         messenger.close()

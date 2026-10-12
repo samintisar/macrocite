@@ -12,7 +12,7 @@ from typing import Any
 
 from sqlmodel import Session, col, select
 
-from signalbench.backtest.crypto_runner import BTC
+from signalbench.backtest.crypto_runner import BTC, days_without
 from signalbench.db.models import PaperDay, PaperEvent, PaperPortfolio, PaperRun
 from signalbench.ingest.kraken import find_crypto_ticker
 from signalbench.market.bars import adjusted_bars
@@ -39,7 +39,7 @@ class PaperSummary:
 @dataclass(frozen=True)
 class Review:
     on_track: bool
-    lines: list[str]  # one per check, then ON TRACK or OFF TRACK
+    lines: list[str]  # one per check, an information line, then ON TRACK or OFF TRACK
 
 
 def close_deadline(day: date) -> datetime:
@@ -127,17 +127,18 @@ def paper_review(
     start_equity: float,
     today: date,
 ) -> Review:
-    """The three checks over every day from the start to the day before the review date."""
-    if today < paper.review_date:
-        raise PaperError(f"The review is on {paper.review_date.isoformat()}; today is {today}.")
+    """The three checks over every day from the start to the day before the review date. Run
+    from the day after the review date: the night's run records the last day."""
+    if today <= paper.review_date:
+        raise PaperError(
+            f"The review is on {paper.review_date.isoformat()}; run it from "
+            f"{(paper.review_date + timedelta(days=1)).isoformat()}, once the last day is "
+            f"recorded (today is {today})."
+        )
     end = paper.review_date - timedelta(days=1)
     days = [day for day in _days(session, portfolio) if paper.start <= day.day <= end]
     have = {day.day for day in days}
-    missing = [
-        paper.start + timedelta(days=i)
-        for i in range((end - paper.start).days + 1)
-        if paper.start + timedelta(days=i) not in have
-    ]
+    missing = days_without(paper.start, end, have)
     late = sum(_late(day) for day in days)
     mismatches = session.exec(
         select(PaperRun.id).where(
@@ -149,6 +150,9 @@ def paper_review(
     on_time = not missing and late <= rules.max_late_days
     matches = not mismatches
     shallow = drawdown < rules.max_drawdown
+    trades = _exit_rs(session, portfolio, paper.start, end)
+    profit = (days[-1].equity / start_equity - 1.0) if days else 0.0
+    btc = _btc_equity(session, paper.start, end, start_equity)
     first_missing = f", first {missing[0].isoformat()}" if missing else ""
     lines = [
         (
@@ -157,9 +161,36 @@ def paper_review(
         ),
         f"2. Matches the backtest code: {_verdict(matches)}: {len(mismatches)} replay mismatches",
         f"3. Drawdown: {_verdict(shallow)}: worst {drawdown:.1%} (limit {rules.max_drawdown:.0%})",
+        _information_line(profit, trades, btc),
     ]
     on_track = on_time and matches and shallow
     return Review(on_track, [*lines, "ON TRACK" if on_track else "OFF TRACK"])
+
+
+def _exit_rs(session: Session, portfolio: PaperPortfolio, start: date, end: date) -> list[float]:
+    """The R of each trade closed from `start` to `end`."""
+    events = session.exec(
+        select(PaperEvent).where(
+            PaperEvent.portfolio_id == portfolio.id,
+            PaperEvent.kind == "exit",
+            col(PaperEvent.day) >= start,
+            col(PaperEvent.day) <= end,
+        )
+    ).all()
+    return [float(event.payload["r"]) for event in events]
+
+
+def _information_line(profit: float, rs: list[float], btc_equity: float | None) -> str:
+    if rs:
+        wins = sum(r > 0.0 for r in rs)
+        results = f"win rate {wins / len(rs):.0%}, mean R {sum(rs) / len(rs):+.2f}"
+    else:
+        results = "win rate n/a, mean R n/a"
+    btc = "n/a" if btc_equity is None else f"{btc_equity:,.2f}"
+    return (
+        f"For information: profit {profit:+.1%}, {len(rs)} closed trades, {results}, "
+        f"BTC buy-and-hold {btc}"
+    )
 
 
 def _days(session: Session, portfolio: PaperPortfolio) -> list[PaperDay]:

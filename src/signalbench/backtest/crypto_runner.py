@@ -53,8 +53,11 @@ def missing_days(bars: Sequence[AdjustedBar], start: date, end: date) -> list[da
     """Days from max(start, the first bar) to `end` with no candle."""
     if not bars:
         return []
-    have = {bar.date for bar in bars}
-    first = max(start, bars[0].date)
+    return days_without(max(start, bars[0].date), end, {bar.date for bar in bars})
+
+
+def days_without(first: date, end: date, have: set[date]) -> list[date]:
+    """Every calendar day from `first` to `end` that is not in `have`."""
     return [
         first + timedelta(days=i)
         for i in range((end - first).days + 1)

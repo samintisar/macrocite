@@ -1,3 +1,4 @@
+import re
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -19,6 +20,7 @@ from signalbench.paper.summary import (
 
 START = date(2026, 10, 13)
 REVIEW = date(2027, 10, 13)
+AFTER = REVIEW + timedelta(days=1)  # the first day the review may run
 PAPER = PaperFile(
     name="crypto-v1-paper", strategy="data/strategy_crypto-v1.yaml", strategy_sha256="f" * 64,
     setup="breakout", start=START, review=ReviewRules(months=12, max_late_days=7, max_drawdown=0.35),
@@ -152,10 +154,68 @@ def test_review_refuses_before_the_review_date(session: Session) -> None:
         paper_review(session, portfolio, PAPER, 100.0, REVIEW - timedelta(days=1))
 
 
+def test_review_refuses_on_the_review_date_itself(session: Session) -> None:
+    portfolio, _run = _setup(session)
+    message = (
+        "The review is on 2027-10-13; run it from 2027-10-14, once the last day is "
+        "recorded (today is 2027-10-13)."
+    )
+    with pytest.raises(PaperError, match=re.escape(message)):
+        paper_review(session, portfolio, PAPER, 100.0, REVIEW)
+
+
+def _exit(portfolio: PaperPortfolio, run: PaperRun, r: float, day: date) -> PaperEvent:
+    assert portfolio.id is not None and run.id is not None
+    return PaperEvent(
+        portfolio_id=portfolio.id, day=day, kind="exit",
+        payload={"event": "exit", "symbol": "XBTUSD", "r": r},
+        recorded_at=run.started_at, run_id=run.id,
+    )
+
+
+def _info_line(lines: list[str]) -> str:
+    return next(line for line in lines if line.startswith("For information:"))
+
+
+def test_review_reports_profit_trades_and_btc_for_information(session: Session) -> None:
+    portfolio, run = _setup(session)
+    _days(session, portfolio, run, 365, equity=lambda i: 100.0 + i * 10.0 / 364)
+    session.add(_exit(portfolio, run, 2.0, START + timedelta(days=10)))
+    session.add(_exit(portfolio, run, -1.0, START + timedelta(days=20)))
+    session.add(_exit(portfolio, run, 5.0, REVIEW))  # outside the period: not counted
+    ticker = crypto_ticker(session, "XBTUSD")
+    for day, close in ((START, "60000"), (REVIEW - timedelta(days=1), "90000")):
+        price = Decimal(close)
+        session.add(
+            Price(
+                ticker_id=ticker.id, date=day, open=price, high=price, low=price, close=price,
+                adj_close=price, volume=1,
+            )
+        )
+    session.commit()
+    review = paper_review(session, portfolio, PAPER, 100.0, AFTER)
+    assert _info_line(review.lines) == (
+        "For information: profit +10.0%, 2 closed trades, win rate 50%, mean R +0.50, "
+        "BTC buy-and-hold 150.00"
+    )
+    assert review.lines[-1] in ("ON TRACK", "OFF TRACK")
+    assert review.lines.index(_info_line(review.lines)) == len(review.lines) - 2
+
+
+def test_review_information_line_with_no_trades(session: Session) -> None:
+    portfolio, run = _setup(session)
+    _days(session, portfolio, run, 365)
+    review = paper_review(session, portfolio, PAPER, 100.0, AFTER)
+    assert _info_line(review.lines) == (
+        "For information: profit +0.0%, 0 closed trades, win rate n/a, mean R n/a, "
+        "BTC buy-and-hold n/a"
+    )
+
+
 def test_review_on_track(session: Session) -> None:
     portfolio, run = _setup(session)
     _days(session, portfolio, run, 365, late=set(range(7)))
-    review = paper_review(session, portfolio, PAPER, 100.0, REVIEW)
+    review = paper_review(session, portfolio, PAPER, 100.0, AFTER)
     assert review.on_track
     assert review.lines[-1] == "ON TRACK"
 
@@ -177,7 +237,7 @@ def test_review_off_track(
 ) -> None:
     portfolio, run = _setup(session)
     _days(session, portfolio, run, 365, equity=equity, late=late, skip=skip)
-    review = paper_review(session, portfolio, PAPER, 100.0, REVIEW)
+    review = paper_review(session, portfolio, PAPER, 100.0, AFTER)
     assert not review.on_track
     assert any(line.startswith(failing) for line in review.lines)
     assert review.lines[-1] == "OFF TRACK"
@@ -193,6 +253,6 @@ def test_review_off_track_after_a_replay_mismatch(session: Session) -> None:
         )
     )
     session.commit()
-    review = paper_review(session, portfolio, PAPER, 100.0, REVIEW)
+    review = paper_review(session, portfolio, PAPER, 100.0, AFTER)
     assert not review.on_track
     assert any(line.startswith("2. Matches the backtest code: FAIL") for line in review.lines)
