@@ -166,21 +166,38 @@ def run_paper(
         except Exception as error:  # noqa: BLE001  # every failure is recorded and alerted
             session.rollback()
             status = "mismatch" if isinstance(error, ReplayMismatch) else "failed"
-            text = str(error) if isinstance(error, PaperError) else f"{type(error).__name__}: {error}"
-            sent = _send(messenger, alert_text(text))
+            text = _error_text(error)
+            sent = _send(messenger, alert_text(text), echo)
             _finish(session, run_id, clock(), status=status, error=text, messages_failed=int(not sent))
             echo(f"ERROR: {text}")
             return PaperOutcome(status, run_id, error=text)
-        config = night.rules.config
-        texts = [
-            text for day in night.new for text in day_texts(config.version, day, config.cost_per_side)
-        ]
-        failed = sum(not _send(messenger, text) for text in texts)
-        summary_sent = False
-        if not _summary_sent_this_week(session, now):
-            summary = paper_summary(session, night.portfolio, night.rules.paper, config.start_equity, now)
-            summary_sent = _send(messenger, summary_text(night.rules.paper, summary))
-            failed += int(not summary_sent)
+        failed = 0
+        try:
+            config = night.rules.config
+            texts = [
+                text
+                for day in night.new
+                for text in day_texts(config.version, day, config.cost_per_side)
+            ]
+            for text in texts:
+                failed += int(not _send(messenger, text, echo))
+            summary_sent = False
+            if not _summary_sent_this_week(session, now):
+                summary = paper_summary(
+                    session, night.portfolio, night.rules.paper, config.start_equity, now
+                )
+                summary_sent = _send(messenger, summary_text(night.rules.paper, summary), echo)
+                failed += int(not summary_sent)
+        except Exception as error:  # noqa: BLE001  # the days are saved; still finish and alert
+            session.rollback()
+            text = _error_text(error)
+            failed += int(not _send(messenger, alert_text(text), echo))
+            _finish(
+                session, run_id, clock(), status="failed", error=text,
+                days_added=len(night.new), messages_failed=failed,
+            )
+            echo(f"ERROR: {text}")
+            return PaperOutcome("failed", run_id, len(night.new), text)
         _finish(
             session, run_id, clock(), status="ok", days_added=len(night.new),
             messages_failed=failed, summary_sent=summary_sent,
@@ -242,12 +259,17 @@ def _summary_sent_this_week(session: Session, now: datetime) -> bool:
     return found is not None
 
 
-def _send(messenger: Messenger, text: str) -> bool:
+def _send(messenger: Messenger, text: str, echo: Callable[[str], None]) -> bool:
     try:
         messenger.send(text)
-    except Exception:  # noqa: BLE001  # Telegram down: the days are saved; the run counts it
+    except Exception as error:  # noqa: BLE001  # Telegram down: the days are saved; the run counts it
+        echo(f"Telegram send failed: {type(error).__name__}: {error}")
         return False
     return True
+
+
+def _error_text(error: Exception) -> str:
+    return str(error) if isinstance(error, PaperError) else f"{type(error).__name__}: {error}"
 
 
 def _finish(

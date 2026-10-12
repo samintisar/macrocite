@@ -28,7 +28,9 @@ from signalbench.ingest.prices import DailyBar
 from signalbench.live.messenger import FakeMessenger
 from signalbench.market.calendar import DailySessions
 from signalbench.paper.paper_file import PaperError
+from signalbench.paper.replay import replay
 from signalbench.paper.run import PaperOutcome, run_paper, start_paper
+from signalbench.paper.store import load_saved, row_values
 from signalbench.strategy.readings import NullReadingsView
 
 SUMMARY = "PAPER crypto-test-paper: weekly summary"
@@ -55,11 +57,12 @@ def _run(
     fetch: Fetch | None = None,
     committed: Callable[[Path], bool] = _yes,
     held: bool = True,
+    echo: Callable[[str], None] = lambda _text: None,
 ) -> PaperOutcome:
     return run_paper(
         session, lock=nullcontext(held), repo=REPO, paper_path=paper,
         clock=lambda: night(day), fetch=fetch or fake_fetch(all_bars()), committed=committed,
-        git_sha="abc123", messenger=messenger or FakeMessenger(), echo=lambda _text: None,
+        git_sha="abc123", messenger=messenger or FakeMessenger(), echo=echo,
     )
 
 
@@ -121,6 +124,11 @@ def test_nightly_runs_store_exactly_what_one_backtest_gives(session: Session, pa
     simulated = [e.payload for e in events if not e.kind.startswith("order_")]
     assert simulated == json.loads(json.dumps(result.events))
     assert [e.payload["symbol"] for e in events if e.kind == "exit"] == ["XBTUSD"]
+    # every saved day (day, equity, cash, state, events) is exactly what one replay gives
+    portfolio = session.exec(select(PaperPortfolio)).one()
+    assert portfolio.id is not None
+    replayed = replay(market, config(), DAYS[START], last)
+    assert load_saved(session, portfolio.id) == [row_values(d) for d in replayed]
 
 
 def test_the_trade_is_messaged_as_order_fill_and_close(session: Session, paper: Path) -> None:
@@ -233,3 +241,55 @@ def test_the_weekly_summary_is_sent_once_per_iso_week(session: Session, paper: P
 
 def test_crash_and_breakout_days_are_inside_the_fixture() -> None:
     assert START < BREAKOUT < CRASH < len(DAYS) - 1
+
+
+def test_a_failure_after_the_days_are_saved_still_finishes_and_alerts(
+    session: Session, paper: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def boom(*_args: object) -> str:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("signalbench.paper.run.summary_text", boom)
+    messenger = FakeMessenger()
+    outcome = _run(session, paper, DAYS[START], messenger=messenger)
+    assert (outcome.status, outcome.days_added, outcome.error) == (
+        "failed", 1, "RuntimeError: boom",
+    )
+    assert len(session.exec(select(PaperDay)).all()) == 1
+    assert messenger.texts()[-1] == "PAPER ALERT: RuntimeError: boom"
+    run = session.get(PaperRun, outcome.run_id)
+    assert run is not None and run.finished_at is not None
+    assert (run.status, run.days_added, run.error) == ("failed", 1, "RuntimeError: boom")
+
+
+def test_a_portfolio_that_no_longer_matches_the_paper_file_fails_the_run(
+    session: Session, paper: Path
+) -> None:
+    portfolio = session.exec(select(PaperPortfolio)).one()
+    portfolio.start = DAYS[START + 1]
+    session.add(portfolio)
+    session.commit()
+    outcome = _run(session, paper, DAYS[START])
+    assert outcome.status == "failed"
+    assert outcome.error is not None and "no longer matches" in outcome.error
+
+
+def test_the_weekly_summary_is_sent_again_after_a_failed_send(
+    session: Session, paper: Path
+) -> None:
+    first, second = DAYS[START], DAYS[START + 1]
+    assert night(first).isocalendar()[:2] == night(second).isocalendar()[:2]
+    assert _run(session, paper, first, messenger=FakeMessenger(fail=True)).status == "ok"
+    messenger = FakeMessenger()
+    _run(session, paper, second, messenger=messenger)
+    assert sum(t.startswith(SUMMARY) for t in messenger.texts()) == 1
+    # now it is sent, so a third run the same week does not repeat it
+    again = FakeMessenger()
+    _run(session, paper, DAYS[START + 2], messenger=again)
+    assert not any(t.startswith(SUMMARY) for t in again.texts())
+
+
+def test_a_failed_send_is_echoed(session: Session, paper: Path) -> None:
+    lines: list[str] = []
+    _run(session, paper, DAYS[START], messenger=FakeMessenger(fail=True), echo=lines.append)
+    assert any(line.startswith("Telegram send failed: ConnectionError") for line in lines)

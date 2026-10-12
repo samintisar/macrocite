@@ -31,7 +31,8 @@ class SavedDay:
 
 def as_json(value: Any) -> Any:
     """`value` as it reads back from a JSON column."""
-    return json.loads(json.dumps(value))
+    # allow_nan=False: a NaN or infinity must fail here, not break the Postgres json column
+    return json.loads(json.dumps(value, allow_nan=False))
 
 
 def row_values(day: ReplayDay) -> SavedDay:
