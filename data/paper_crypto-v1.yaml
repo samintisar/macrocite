@@ -1,0 +1,15 @@
+# Spec 11: forward paper trading of crypto-v1 (Breakout on Kraken BTC and ETH). No money.
+# Pre-registered: committed on its own before `signalbench crypto paper start`. Do not edit:
+# a new idea is a new paper file with a new name. strategy_sha256 is the SHA-256 of
+# data/strategy_crypto-v1.yaml (CRLF normalised to LF); runs refuse if it no longer matches.
+# The review on start + 12 months gives on track or off track from the three checks in the
+# spec (on time, replay matches, drawdown); it is not a decision to use real money.
+name: crypto-v1-paper
+strategy: data/strategy_crypto-v1.yaml
+strategy_sha256: '8a1069b92ec7b279716ec67311a6f8265d9ed24eafa3e074f4d537e49b3bf82c'
+setup: breakout
+start: 2026-10-15
+review:
+  months: 12
+  max_late_days: 7
+  max_drawdown: 0.35
