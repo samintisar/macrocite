@@ -143,6 +143,14 @@ Formal reports live in `reports/`; decisions in the owner's words live in the ov
 - **Setup check (2026-10-14):** `crypto paper start` loaded 720 daily candles per pair (2024-10-24 to 2026-10-13). A manual run through the systemd unit returned `ok, 0 days added` (the start day has not closed) and sent the first PAPER weekly summary. The first backup was written.
 - **Review (fixed in the spec):** from 2027-10-16, `crypto paper review` checks the period 2026-10-15 to 2027-10-14. It is on track if no day is missing and at most 7 were recorded late, no run ever hit a replay mismatch, and the worst drawdown stayed under 35%. Profit and the BTC comparison are information only: at about 6 trades a year, one year cannot prove an edge. The verdict goes here, and real money stays a separate decision.
 
+## 2026-10-18 — Crypto paper trading restarted on ubuntuworker (spec 11)
+
+- **What happened:** botbox's SSD failed on 2026-10-17 and the machine was rebuilt empty. The first paper record (`crypto-v1-paper`, start 2026-10-15) was lost with it: at most two days (Oct 15 and 16), no trades. The live bot's database lost Oct 11 to 17 as well; it runs on ubuntuworker again from the Oct 11 state.
+- **Restart:** `data/paper_crypto-v1-2.yaml` was committed on its own (commit `2494af8`, tag `paper-crypto-v1-2`). It is the same strategy (`8a1069b9…`), the same setup and the same review rules, with a new name, `crypto-v1-paper-2`, and a new start, 2026-10-20. The old paper file stays in the repo as history. The pre-registration rule (a start day that has closed cannot be started) is why a new file was needed rather than resuming the old one.
+- **Where:** ubuntuworker, user `signalbench`: `~/paper/macrocite` at `paper-crypto-v1-2`, database `signalbench_paper` in the live Postgres container, and the timers `signalbench-paper.timer` and `signalbench-paper-backup.timer`. The service passes `--file data/paper_crypto-v1-2.yaml`. The live bot, its database (migration 0016) and its timers were not changed.
+- **Setup check (2026-10-18):** `crypto paper start` loaded 720 daily candles per pair (2024-10-28 to 2026-10-17). A manual run through the unit returned `ok, 0 days added` and sent the PAPER weekly summary. The first backup was written.
+- **Review:** from 2027-10-21, over 2026-10-20 to 2027-10-19, with the same three checks as above.
+
 ## Open questions (not yet tested)
 
 - **Idle cash and holding time:** tested post-hoc in spec 06 (entry above); five of six variants passed. Forward paper trading (spec 07) was built but never started, and its code was removed on 2026-09-30: on 2026-09-29 the owner chose v2-none-cash to use directly, with no out-of-sample test. Its real results are the first out-of-sample evidence and should be logged here.
