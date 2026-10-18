@@ -13,7 +13,7 @@ def test_the_paper_service_runs_from_the_paper_checkout() -> None:
     text = (BOTBOX / "signalbench-paper.service").read_text(encoding="utf-8")
     assert "WorkingDirectory=%h/paper/macrocite" in text
     assert "EnvironmentFile=%h/paper/config/paper.env" in text
-    assert "ExecStart=%h/.local/bin/uv run --frozen signalbench crypto paper run" in text
+    assert "ExecStart=%h/.local/bin/uv run --frozen signalbench crypto paper run --file data/paper_crypto-v1-2.yaml" in text
 
 
 def test_the_backup_dumps_only_the_paper_database() -> None:

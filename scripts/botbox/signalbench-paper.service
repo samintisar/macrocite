@@ -6,4 +6,5 @@ After=network-online.target
 Type=oneshot
 WorkingDirectory=%h/paper/macrocite
 EnvironmentFile=%h/paper/config/paper.env
-ExecStart=%h/.local/bin/uv run --frozen signalbench crypto paper run
+# The paper file in use: crypto-v1-paper-2 since botbox's SSD failed on 2026-10-17 (spec 11).
+ExecStart=%h/.local/bin/uv run --frozen signalbench crypto paper run --file data/paper_crypto-v1-2.yaml

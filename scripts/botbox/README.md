@@ -1,4 +1,8 @@
-# Paper trading on botbox (spec 11)
+# Paper trading on the server (spec 11)
+
+The directory is named after botbox, where it first ran. Since botbox's SSD failed on
+2026-10-17 it runs on ubuntuworker (user `signalbench`) with `data/paper_crypto-v1-2.yaml`;
+pass that file with `--file` to every `crypto paper` command.
 
 The paper job runs from its own checkout and database. The live bot (`~/macrocite` on
 `live-v2`, database `signalbench`) is not touched.
@@ -15,7 +19,7 @@ chmod 600 ~/paper/config/paper.env   # then fill in the password, token, and cha
 set -a && . ~/paper/config/paper.env && set +a
 case "$DATABASE_URL" in */signalbench_paper) ;; *) echo "DATABASE_URL is not the paper database"; exit 1;; esac
 ~/.local/bin/uv run --frozen alembic upgrade head
-~/.local/bin/uv run --frozen signalbench crypto paper start
+~/.local/bin/uv run --frozen signalbench crypto paper start --file data/paper_crypto-v1-2.yaml
 mkdir -p ~/.config/systemd/user
 cp scripts/botbox/signalbench-paper*.service scripts/botbox/signalbench-paper*.timer ~/.config/systemd/user/
 systemctl --user daemon-reload
@@ -30,10 +34,10 @@ file differently, so a password with other characters can read differently in ea
 ```bash
 systemctl --user list-timers 'signalbench-paper*'
 journalctl --user -u signalbench-paper.service -n 50
-cd ~/paper/macrocite && set -a && . ~/paper/config/paper.env && set +a && ~/.local/bin/uv run --frozen signalbench crypto paper status
+cd ~/paper/macrocite && set -a && . ~/paper/config/paper.env && set +a && ~/.local/bin/uv run --frozen signalbench crypto paper status --file data/paper_crypto-v1-2.yaml
 ```
 
-After the first nightly run, run `signalbench crypto paper run` once more by hand: it must
+After the first nightly run, run `signalbench crypto paper run --file data/paper_crypto-v1-2.yaml` once more by hand: it must
 print `ok, 0 days added`. This is the first exact compare against rows saved in Postgres.
 
 ## Update the code
