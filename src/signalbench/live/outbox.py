@@ -243,7 +243,9 @@ def send_unsent(
         mark(action, cdr_split_text(session, ledger, action))
     signals = session.exec(
         select(TradeSignal)
-        .where(col(TradeSignal.telegram_message_id).is_(None))
+        .where(  # an adopted signal is the stop set for a buy, never a message
+            col(TradeSignal.telegram_message_id).is_(None), TradeSignal.source == "scan",
+        )
         .order_by(col(TradeSignal.id))
     ).all()
     for signal in signals:

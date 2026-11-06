@@ -228,13 +228,18 @@ class Ledger(LedgerLevels):
     # --- The scale-up check ----------------------------------------------------------------
 
     def scale_up_check(self) -> ScaleUpResult:
-        """The four checks over every signal, signal-linked buy, and exit alert (spec 04)."""
+        """The four checks over every scan signal, the buys linked to them, and every exit alert
+        (spec 04). Adopted signals were never sent, so they and their buys are left out of the
+        take rate, slippage, and limit checks; their exit alerts count like any other."""
         closed = sum(1 for trade in self.closed_trades() if trade.episode.managed)
-        signals = {s.id: s for s in self._session.exec(select(TradeSignal)).all()}
+        signals = {
+            s.id: s
+            for s in self._session.exec(select(TradeSignal).where(TradeSignal.source == "scan"))
+        }
         buys = [
             SignalBuy(f.id, f.price_cad, signals[f.signal_id].cdr_signal_close)
             for f in self._fills()
-            if f.side == "buy" and f.signal_id is not None and f.id is not None
+            if f.side == "buy" and f.signal_id in signals and f.id is not None
         ]
         alerts = self._session.exec(select(ExitAlert).order_by(col(ExitAlert.id))).all()
         return scale_up(

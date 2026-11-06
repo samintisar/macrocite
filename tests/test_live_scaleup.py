@@ -106,3 +106,22 @@ def test_ten_closed_trades_that_followed_the_signals_pass_and_are_recorded(
     ledger.record_scale_up(result)
     [record] = ledger.risk_state().scale_up_history
     assert (record["passed"], record["take_rate"], record["closed_managed"]) == (True, "1", 10)
+
+
+def test_adopted_signals_and_their_buys_are_left_out_of_the_scale_up_check(
+    session: Session,
+) -> None:
+    add_pair(session)
+    ledger = make_ledger(session, today=WED)
+    ledger.record_cash(Decimal("100"), DAYS[0], "deposit")
+    adopted = ledger.record_signal(
+        as_of=MON, us_symbol="NVDA", cdr_symbol="ZNVD", us_signal_close=Decimal("200"),
+        us_stop=Decimal("188"), cdr_signal_close=Decimal("40"), suggested_units=Decimal("1"),
+        order_type="market", risk_amount_cad=Decimal("2.40"), explanation="Adopted.",
+        expires_at=datetime(2026, 6, 9, 20, 0, tzinfo=UTC), source="adopted",
+    )
+    ledger.record_fill(cdr_symbol="ZNVD", side="buy", quantity=Decimal("1"),
+                       price_cad=Decimal("45"), trade_date=TUE,
+                       signal_id=adopted.id)  # 12.5% above its reference
+    result = ledger.scale_up_check()
+    assert (result.taken, result.declined, result.buys, result.violations) == (0, 0, (), ())
