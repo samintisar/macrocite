@@ -279,6 +279,10 @@ class TradeSignal(SQLModel, table=True):
     telegram_message_id: int | None = _telegram_id()
     expires_at: datetime = Field(sa_column=Column(UTCDateTime(), nullable=False))
     created_at: datetime = _created_at()
+    # scan | adopted (last, as migration 0019 added it): an adopted signal is the Breakout stop
+    # the ledger set for a buy with no signal; it is never sent and the scale-up check leaves it
+    # out
+    source: str = Field(default="scan", sa_column_kwargs={"server_default": "scan"})
 
 
 class ExitAlert(SQLModel, table=True):

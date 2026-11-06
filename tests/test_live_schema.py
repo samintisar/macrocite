@@ -13,6 +13,7 @@ from sqlalchemy import create_engine, inspect
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, SQLModel, select
 
+from live_helpers import add_pair, make_ledger, send_signal
 from signalbench.db.models import (
     CorporateAction,
     EquitySnapshot,
@@ -26,7 +27,8 @@ from signalbench.db.models import (
     TradeSignal,
 )
 
-MIGRATION = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "0013_live_ledger.py"
+VERSIONS = Path(__file__).resolve().parents[1] / "alembic" / "versions"
+MIGRATIONS = (VERSIONS / "0013_live_ledger.py", VERSIONS / "0019_signal_source.py")
 TABLES = (
     "live_config", "cash_movements", "trade_signals", "exit_alerts", "corporate_actions",
     "stop_updates", "fills", "equity_snapshots", "risk_state",
@@ -162,17 +164,21 @@ def test_exit_alerts_and_snapshots_store_their_values(session: Session) -> None:
 def _upgrade_and_downgrade() -> tuple[
     dict[str, list[tuple[str, bool]]], dict[str, dict[str, list[str]]], list[str]
 ]:
-    spec = importlib.util.spec_from_file_location("migration_0013", MIGRATION)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    modules = []
+    for migration in MIGRATIONS:
+        spec = importlib.util.spec_from_file_location(migration.stem, migration)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        modules.append(module)
     engine = create_engine("sqlite://")
     with engine.begin() as connection:
         connection.exec_driver_sql(
             "CREATE TABLE tickers (id CHAR(32) PRIMARY KEY)"  # the one table 0013 points at
         )
         with Operations.context(MigrationContext.configure(connection)):
-            module.upgrade()
+            for module in modules:
+                module.upgrade()
         inspector = inspect(connection)
         columns = {
             table: [(c["name"], bool(c["nullable"])) for c in inspector.get_columns(table)]
@@ -187,12 +193,13 @@ def _upgrade_and_downgrade() -> tuple[
             for table in PARTIAL_UNIQUE
         }
         with Operations.context(MigrationContext.configure(connection)):
-            module.downgrade()
+            for module in reversed(modules):
+                module.downgrade()
         left = inspect(connection).get_table_names()
     return columns, unique, left
 
 
-def test_migration_0013_creates_the_model_columns_and_drops_them_again() -> None:
+def test_migrations_0013_and_0019_create_the_model_columns_and_drop_them_again() -> None:
     created, unique, left = _upgrade_and_downgrade()
     for table in TABLES:
         model = SQLModel.metadata.tables[table]
@@ -206,3 +213,9 @@ def test_migration_0013_creates_the_model_columns_and_drops_them_again() -> None
         }
         assert model_indexes == indexes
     assert left == ["tickers"]
+
+
+def test_a_signal_is_from_the_scan_unless_adopted(session: Session) -> None:
+    add_pair(session)
+    signal = send_signal(make_ledger(session), date(2026, 10, 5))
+    assert signal.source == "scan"
