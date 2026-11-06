@@ -152,8 +152,8 @@ def test_trade_r_is_pnl_over_planned_risk_in_cad_and_in_us_terms(ledger: Ledger)
 
 def test_an_adopted_signal_is_recorded_with_its_source(ledger: Ledger) -> None:
     signal = ledger.record_signal(
-        as_of=D, us_symbol="NVDA", cdr_symbol="ZNVD", us_signal_close=Decimal("200"),
-        us_stop=Decimal("188"), cdr_signal_close=Decimal("40"), suggested_units=Decimal("3"),
+        as_of=D, us_symbol="NVDA", cdr_symbol="ZNVD", us_signal_close=Decimal(200),
+        us_stop=Decimal(188), cdr_signal_close=Decimal(40), suggested_units=Decimal(3),
         order_type="market", risk_amount_cad=Decimal("7.20"), explanation="Adopted.",
         expires_at=evening(E, 16), source="adopted",
     )
@@ -179,8 +179,8 @@ def test_skipped_withdrawn_taken_and_adopted_signals_are_never_matched(ledger: L
     ledger.mark_signal(skipped.id, "skipped", "disagree")
     assert ledger.matching_signal("ZNVD", E) is None
     ledger.record_signal(
-        as_of=E, us_symbol="NVDA", cdr_symbol="ZNVD", us_signal_close=Decimal("200"),
-        us_stop=Decimal("188"), cdr_signal_close=Decimal("40"), suggested_units=Decimal("1"),
+        as_of=E, us_symbol="NVDA", cdr_symbol="ZNVD", us_signal_close=Decimal(200),
+        us_stop=Decimal(188), cdr_signal_close=Decimal(40), suggested_units=Decimal(1),
         order_type="market", risk_amount_cad=Decimal("2.40"), explanation="Adopted.",
         expires_at=evening(E, 16), source="adopted",
     )

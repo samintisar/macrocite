@@ -8,9 +8,9 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
-from scan_helpers import B, DAYS, LIVE, NVDA, UNIVERSE, World, make_world
+from scan_helpers import DAYS, LIVE, NVDA, UNIVERSE, B, World, make_world
 from signalbench.db.models import Fill, TradeSignal
 from signalbench.live.adopt import Adopter, adopt_fill
 from signalbench.live.book import LedgerError
@@ -25,7 +25,7 @@ def adopter(world: World) -> Adopter:
 
 def manual_buy(world: World, index: int, cdr: str = "ZXOM", today: int = B + 1) -> Fill:
     return world.ledger(today).record_fill(
-        cdr_symbol=cdr, side="buy", quantity=Decimal("3"), price_cad=Decimal("10.20"),
+        cdr_symbol=cdr, side="buy", quantity=Decimal(3), price_cad=Decimal("10.20"),
         trade_date=DAYS[index],
     )
 
@@ -35,7 +35,7 @@ def test_an_unsignalled_buy_gets_close_minus_2_atr_at_the_session_before(
 ) -> None:
     world = make_world(session, tmp_path)
     signal = adopter(world).signal_for_buy(
-        session, world.ledger(B + 1), "ZXOM", DAYS[B + 1], Decimal("3")
+        session, world.ledger(B + 1), "ZXOM", DAYS[B + 1], Decimal(3)
     )
     assert (signal.source, signal.status, signal.as_of) == ("adopted", "sent", DAYS[B])
     assert (signal.us_signal_close, signal.us_stop) == (Decimal("100.0000"), Decimal("96.0000"))
@@ -48,7 +48,7 @@ def test_a_buy_with_a_recent_scan_signal_links_to_it(session: Session, tmp_path:
     world.scan(B)  # the NVDA entry
     scan_signal = session.exec(select(TradeSignal)).one()
     found = adopter(world).signal_for_buy(
-        session, world.ledger(B + 1), "ZNVD", DAYS[B + 1], Decimal("3")
+        session, world.ledger(B + 1), "ZNVD", DAYS[B + 1], Decimal(3)
     )
     assert found.id == scan_signal.id
     assert len(session.exec(select(TradeSignal)).all()) == 1
@@ -58,7 +58,7 @@ def test_a_stock_outside_the_universe_gets_no_stop(session: Session, tmp_path: P
     world = make_world(session, tmp_path)
     small = Adopter(config=adopter(world).config, universe=UNIVERSE[:1], calendar=WeekdaySessions())
     with pytest.raises(LedgerError, match="ZXOM is not in the universe"):
-        small.signal_for_buy(session, world.ledger(B + 1), "ZXOM", DAYS[B + 1], Decimal("3"))
+        small.signal_for_buy(session, world.ledger(B + 1), "ZXOM", DAYS[B + 1], Decimal(3))
 
 
 def test_adopt_fill_voids_a_manual_opening_buy_and_records_it_linked(
@@ -109,13 +109,13 @@ def test_only_a_held_manual_opening_buy_can_be_adopted(session: Session, tmp_pat
     adopt_fill(session, ledger, adopter(world), manual.id)
     with pytest.raises(LedgerError, match=f"fill {manual.id} is not a manual buy"):
         adopt_fill(session, ledger, adopter(world), manual.id)  # now voided
-    linked = session.exec(select(Fill).where(Fill.voided == False)).one()  # noqa: E712
+    linked = session.exec(select(Fill).where(col(Fill.voided).is_(False))).one()
     assert linked.id is not None
     with pytest.raises(LedgerError, match="is not a manual buy"):
         adopt_fill(session, ledger, adopter(world), linked.id)
 
 
-def test_a_failed_adoption_puts_the_original_buy_back_and_withdraws_the_signal(
+def test_a_failed_adoption_puts_the_original_buy_back_and_discards_the_signal(
     session: Session, tmp_path: Path
 ) -> None:
     world = make_world(session, tmp_path)
@@ -125,6 +125,25 @@ def test_a_failed_adoption_puts_the_original_buy_back_and_withdraws_the_signal(
     with pytest.raises(LedgerError, match="after today"):
         adopt_fill(session, ledger, adopter(world), manual.id, trade_date=DAYS[B + 5])
     [position] = ledger.positions(DAYS[B + 1])
-    assert (position.managed, position.units) == (False, Decimal("3"))
+    assert (position.managed, position.units) == (False, Decimal(3))
     assert position.episode.opening.trade_date == DAYS[B - 3]
-    assert session.exec(select(TradeSignal)).one().status == "withdrawn"
+    assert session.exec(select(TradeSignal)).all() == []
+    # nothing is left behind, so the corrected retry works
+    adopt_fill(session, ledger, adopter(world), position.episode.opening.id or 0,
+               trade_date=DAYS[B - 2])
+    [position] = ledger.positions(DAYS[B + 1])
+    assert position.managed
+
+
+def test_only_an_unused_adopted_signal_can_be_discarded(session: Session, tmp_path: Path) -> None:
+    world = make_world(session, tmp_path)
+    world.scan(B)
+    ledger = world.ledger(B + 1)
+    scan_signal = session.exec(select(TradeSignal)).one()
+    assert scan_signal.id is not None
+    with pytest.raises(LedgerError, match="is not an unused adopted signal"):
+        ledger.discard_adopted(scan_signal.id)
+    manual = manual_buy(world, B - 3)
+    taken = adopt_fill(session, ledger, adopter(world), manual.id or 0).signal
+    with pytest.raises(LedgerError, match="is not an unused adopted signal"):
+        ledger.discard_adopted(taken.id or 0)

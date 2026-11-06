@@ -251,8 +251,8 @@ def test_exits_and_raises_can_go_out_on_their_own_before_the_entries(
 
 def test_an_adopted_signal_is_never_sent(session: Session, ledger: Ledger) -> None:
     adopted = ledger.record_signal(
-        as_of=D0, us_symbol="XOM", cdr_symbol="ZXOM", us_signal_close=Decimal("50"),
-        us_stop=Decimal("46"), cdr_signal_close=Decimal("10"), suggested_units=Decimal("1"),
+        as_of=D0, us_symbol="XOM", cdr_symbol="ZXOM", us_signal_close=Decimal(50),
+        us_stop=Decimal(46), cdr_signal_close=Decimal(10), suggested_units=Decimal(1),
         order_type="market", risk_amount_cad=Decimal("0.80"), explanation="Adopted.",
         expires_at=evening(D1, 16), source="adopted",
     )

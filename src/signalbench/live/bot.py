@@ -42,6 +42,7 @@ from signalbench.db.models import (
     TradeSignal,
 )
 from signalbench.live.acb import Side
+from signalbench.live.adopt import Adopter
 from signalbench.live.book import NEW_YORK, LedgerError, SignalSkip
 from signalbench.live.ledger import Ledger
 from signalbench.live.messages import cad, signed_cad, skip_buttons, units_text, usd
@@ -69,7 +70,7 @@ HELP = """SignalBench commands (symbols are CDR symbols, like ZNVD):
 /signals: today's open signals
 /portfolio: positions with their stops, cash, equity, drawdown
 /pnl: realized and unrealized P&L, win rate, live R vs the backtest
-/buy SYMBOL QTY PRICE [YYYY-MM-DD] [force]: a manual or unsignalled buy
+/buy SYMBOL QTY PRICE [YYYY-MM-DD] [force]: a buy; a new holding gets a recent signal's stop, or the Breakout stop
 /sell SYMBOL QTY|all PRICE [YYYY-MM-DD]: a sale (linked to an open exit alert)
 /void FILL_ID REASON: void a fill
 /deposit AMOUNT, /withdraw AMOUNT [force]: cash movements
@@ -115,6 +116,9 @@ class FillRequest:
     exit_alert_id: int | None = None
     message_id: int | None = None  # the entry or exit message to edit once it is recorded
     message_text: str = ""
+    adopt: bool = False  # an opening /buy with no recent signal: adopt the Breakout stop
+    adopted: bool = False  # signal_id is the adopted signal written for it
+    note: str = ""  # why an opening buy got no stop
 
 
 @dataclass(frozen=True)
@@ -204,12 +208,14 @@ class BotBrain:
         calendar: Sessions,
         clock: Callable[[], datetime],
         next_run: Callable[[], str | None],
+        adopter: Adopter | None = None,
     ) -> None:
         self.chat_id = chat_id
         self._sessions = sessions
         self._calendar = calendar
         self._clock = clock
         self._next_run = next_run
+        self._adopter = adopter
         self.awaiting: Awaiting | None = None
         self.confirming: Confirming | None = None
         self._tokens = 0
@@ -495,16 +501,47 @@ class BotBrain:
         self, session: Session, ledger: Ledger, request: FillRequest, update_id: int | None
     ) -> tuple[list[Reply], int]:
         self._claim(session, update_id)
-        fill = ledger.record_fill(
-            cdr_symbol=request.cdr_symbol, side=request.side, quantity=request.quantity,
-            price_cad=request.price, trade_date=request.trade_date,
-            signal_id=request.signal_id, exit_alert_id=request.exit_alert_id,
-            force=request.force,
-        )
+        request = self._adopt(session, ledger, request)
+        try:
+            fill = ledger.record_fill(
+                cdr_symbol=request.cdr_symbol, side=request.side, quantity=request.quantity,
+                price_cad=request.price, trade_date=request.trade_date,
+                signal_id=request.signal_id, exit_alert_id=request.exit_alert_id,
+                force=request.force,
+            )
+        except LedgerError:
+            if request.adopted and request.signal_id is not None:
+                ledger.discard_adopted(request.signal_id)  # a retry adopts afresh
+            raise
         assert fill.id is not None
         self.awaiting = self.confirming = None
         did = f"{units_text(fill.quantity)} @ {cad(fill.price_cad)} (fill {fill.id})"
-        if request.side == "buy" and request.signal_id is not None:
+        position = next(
+            (p for p in ledger.positions(fill.trade_date) if p.cdr_symbol == request.cdr_symbol),
+            None,
+        )
+        if request.side == "buy" and request.adopted and request.signal_id is not None:
+            stop = ledger.current_stop(request.signal_id)
+            text = (
+                f"✅ Bought {units_text(fill.quantity)} {request.cdr_symbol} @ "
+                f"{cad(fill.price_cad)} on {fill.trade_date} (fill {fill.id}), stop "
+                f"{cad(stop.cdr)} / {usd(stop.us)} (the Breakout stop: no signal); the evening "
+                "scan manages it from here."
+            )
+            done = f"Bought {did}"
+        elif (
+            request.side == "buy" and request.signal_id is None and position is not None
+            and position.managed and position.episode.opening.id != fill.id
+        ):
+            assert position.episode.signal_id is not None
+            stop = ledger.current_stop(position.episode.signal_id)
+            text = (
+                f"✅ Bought {units_text(fill.quantity)} {request.cdr_symbol} @ "
+                f"{cad(fill.price_cad)} on {fill.trade_date} (fill {fill.id}), added to the "
+                f"position: its stop stays {cad(stop.cdr)} / {usd(stop.us)}."
+            )
+            done = f"Bought {did}"
+        elif request.side == "buy" and request.signal_id is not None:
             stop = ledger.current_stop(request.signal_id)
             text = (
                 f"✅ Bought {units_text(fill.quantity)} {request.cdr_symbol} @ "
@@ -517,7 +554,7 @@ class BotBrain:
             text = (
                 f"✅ Bought {units_text(fill.quantity)} {request.cdr_symbol} @ "
                 f"{cad(fill.price_cad)} on {fill.trade_date} (fill {fill.id}), manual: no stop "
-                "or exit alerts."
+                "or exit alerts" + (f" ({request.note})." if request.note else ".")
             )
             done = f"Bought {did}"
         else:
@@ -529,6 +566,21 @@ class BotBrain:
                 Reply(f"{request.message_text}\n✅ {done}", edit=request.message_id)
             )
         return replies, fill.id
+
+    def _adopt(self, session: Session, ledger: Ledger, request: FillRequest) -> FillRequest:
+        """An opening /buy with no recent signal gets the Breakout stop, written now, in the
+        same update as its fill (an unanswered confirm leaves nothing behind)."""
+        if not request.adopt:
+            return request
+        if self._adopter is None:
+            return replace(request, note="no stop rule is loaded")
+        try:
+            signal = self._adopter.signal_for_buy(
+                session, ledger, request.cdr_symbol, request.trade_date, request.quantity
+            )
+        except LedgerError as error:
+            return replace(request, note=str(error))
+        return replace(request, signal_id=signal.id, adopted=signal.source == "adopted")
 
     def _sold_text(self, ledger: Ledger, cdr_symbol: str, fill: Fill) -> str:
         text = (
@@ -657,4 +709,11 @@ class BotBrain:
         )
         mark = ledger.cdr_mark(cdr, self._today())
         checks = [c for c in (_away(request.price, mark, "the latest CDR mark"),) if c is not None]
+        held = ledger.books().get(cdr.symbol)
+        if held is None or held.units <= 0:  # it opens a position: give it a stop
+            found = ledger.matching_signal(cdr.symbol, request.trade_date)
+            request = (
+                replace(request, signal_id=found.id) if found is not None
+                else replace(request, adopt=True)
+            )
         return request, checks

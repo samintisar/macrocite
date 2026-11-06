@@ -25,6 +25,7 @@ from repo_helpers import evening, git
 from signalbench.db.models import LiveConfig, Price, Ticker
 from signalbench.ingest.cdr import CdrEntry
 from signalbench.ingest.prices import Split
+from signalbench.live.adopt import Adopter
 from signalbench.live.bot import BotBrain
 from signalbench.live.heartbeat import write_heartbeat
 from signalbench.live.ledger import Ledger
@@ -192,10 +193,17 @@ def rescale(session: Session, symbol: str, ratio: float) -> None:
 OWNER = 4242  # the owner's chat: TELEGRAM_CHAT_ID
 
 
-def bot_brain(world: World, index: int = B + 1, hour: int = 10) -> BotBrain:
-    """The bot's brain on `index`'s New York date (by default the session after the signal)."""
+def bot_brain(
+    world: World, index: int = B + 1, hour: int = 10, universe: list[CdrEntry] | None = None
+) -> BotBrain:
+    """The bot's brain on `index`'s New York date (by default the session after the signal),
+    adopting the Breakout stop for buys with no signal from `universe` (default UNIVERSE)."""
+    adopter = Adopter(
+        config=load_strategy_config(world.repo / LIVE)[0],
+        universe=UNIVERSE if universe is None else universe, calendar=WeekdaySessions(),
+    )
     return BotBrain(
         chat_id=OWNER, sessions=lambda: Session(world.session.get_bind()),
         calendar=WeekdaySessions(), clock=lambda: evening(DAYS[index], hour),
-        next_run=lambda: "2026-10-06 15:00 (local)",
+        next_run=lambda: "2026-10-06 15:00 (local)", adopter=adopter,
     )

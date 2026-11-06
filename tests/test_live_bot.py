@@ -311,8 +311,11 @@ def test_buy_and_sell_commands_and_their_errors(world: World) -> None:
     ]
     [refused] = texts(bot.handle_text(OWNER, "/buy XOM 10 10.20"))  # a US symbol, one CDR
     assert refused.startswith("⚠️ a buy of C$102.00 on 2026-10-06 takes cash to C$-2.00")
-    assert texts(bot.handle_text(OWNER, "/buy XOM 10 10.20 force")) == [
-        "✅ Bought 10 units ZXOM @ C$10.20 on 2026-10-06 (fill 1), manual: no stop or exit alerts."
+    assert texts(bot.handle_text(OWNER, "/buy XOM 10 10.20 force")) == [  # flat at US$100
+        (
+            "✅ Bought 10 units ZXOM @ C$10.20 on 2026-10-06 (fill 1), stop C$9.60 / US$96.00 (the "
+            "Breakout stop: no signal); the evening scan manages it from here."
+        )
     ]
     assert texts(bot.handle_text(OWNER, "/sell ZXOM 25 10.40")) == [
         "⚠️ ZXOM: a sale of 25 on 2026-10-06 is more than the 10 units held"
@@ -321,7 +324,10 @@ def test_buy_and_sell_commands_and_their_errors(world: World) -> None:
         "✅ Sold 5 units ZXOM @ C$10.40 on 2026-10-06 (fill 2). Still holding 5 units."
     ]
     assert texts(bot.handle_text(OWNER, "/sell ZXOM all 9.80 2026-10-06")) == [
-        "✅ Sold 5 units ZXOM @ C$9.80 on 2026-10-06 (fill 3). Position closed: P&L −C$1.00."
+        (
+            "✅ Sold 5 units ZXOM @ C$9.80 on 2026-10-06 (fill 3). Position closed: P&L −C$1.00 · "
+            "−0.25R on planned risk."
+        )  # adopted: 10 units x (C$10.00 - C$9.60) of planned risk
     ]
     assert texts(bot.handle_text(OWNER, "/sell ZXOM all 5.00")) == [
         "⚠️ no ZXOM units are held"
@@ -400,3 +406,42 @@ def test_a_date_token_backdates_a_reply(world: World) -> None:
     confirm, _ = bot.handle_text(OWNER, "3 10.45 2026-10-06")
     assert "on 2026-10-06 (fill 1)" in confirm.text
     assert world.session.exec(select(Fill)).one().trade_date == date(2026, 10, 6)
+
+
+def test_a_buy_command_for_a_signalled_stock_links_the_signal(world: World) -> None:
+    bot = bot_brain(world)
+    assert texts(bot.handle_text(OWNER, "/buy ZNVD 3 10.10")) == [
+        (
+            "✅ Bought 3 units ZNVD @ C$10.10 on 2026-10-06 (fill 1), for signal 1. Stop C$9.70 / "
+            "US$97.00; the evening scan manages it from here."
+        )
+    ]
+    assert world.session.exec(select(TradeSignal)).one().status == "taken"
+
+
+def test_a_refused_buy_leaves_no_adopted_signal_behind(world: World) -> None:
+    bot = bot_brain(world)
+    [refused] = texts(bot.handle_text(OWNER, "/buy XOM 10 10.20"))
+    assert refused.startswith("⚠️ a buy of C$102.00")
+    assert [s.source for s in world.session.exec(select(TradeSignal))] == ["scan"]
+
+
+def test_a_buy_that_adds_to_a_holding_keeps_its_stop(world: World) -> None:
+    bot = bot_brain(world)
+    bot.handle_text(OWNER, "/buy XOM 1 10.20")
+    [added] = texts(bot.handle_text(OWNER, "/buy XOM 1 10.30"))
+    assert added == (
+        "✅ Bought 1 unit ZXOM @ C$10.30 on 2026-10-06 (fill 2), added to the position: its stop "
+        "stays C$9.60 / US$96.00."
+    )
+    assert len(world.session.exec(select(TradeSignal)).all()) == 2  # NVDA's and XOM's first
+
+
+def test_a_buy_with_no_stop_available_is_recorded_manual_and_says_why(world: World) -> None:
+    bot = bot_brain(world, universe=[])
+    assert texts(bot.handle_text(OWNER, "/buy XOM 1 10.20")) == [
+        (
+            "✅ Bought 1 unit ZXOM @ C$10.20 on 2026-10-06 (fill 1), manual: no stop or exit alerts "
+            "(ZXOM is not in the universe, so no stop can be set)."
+        )
+    ]

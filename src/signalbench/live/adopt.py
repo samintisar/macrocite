@@ -97,7 +97,8 @@ def adopt_fill(
 ) -> Adopted:
     """Give an existing manual holding a stop: void its opening buy and record it again, linked
     (optionally on a corrected trade date). Fills are never edited, only voided. If the new
-    record fails, the original buy is recorded again unlinked, so the holding never vanishes."""
+    record fails, the original buy is recorded again unlinked, so the holding never vanishes,
+    and an adopted signal made for it is discarded."""
     old = session.get(Fill, fill_id)
     if old is None or old.voided or old.side != "buy" or old.signal_id is not None:
         raise LedgerError(f"fill {fill_id} is not a manual buy")
@@ -108,10 +109,10 @@ def adopt_fill(
         raise LedgerError(f"fill {fill_id} does not open a position that is still held")
     cdr = session.get(Ticker, old.cdr_ticker_id)
     assert cdr is not None and old.id is not None
-    original = dict(
-        cdr_symbol=cdr.symbol, side="buy", quantity=old.quantity, price_cad=old.price_cad,
-        trade_date=old.trade_date, fee_cad=old.fee_cad,
-    )
+    original = {
+        "cdr_symbol": cdr.symbol, "side": "buy", "quantity": old.quantity,
+        "price_cad": old.price_cad, "trade_date": old.trade_date, "fee_cad": old.fee_cad,
+    }
     day = old.trade_date if trade_date is None else trade_date
     signal = adopter.signal_for_buy(session, ledger, cdr.symbol, day, old.quantity)
     assert signal.id is not None
@@ -127,8 +128,8 @@ def adopt_fill(
         session.rollback()
         if voided:
             ledger.record_fill(**original, force=True)  # type: ignore[arg-type]
-        if signal.source == "adopted" and ledger.signal(signal.id).status == "sent":
-            ledger.mark_signal(signal.id, "withdrawn")
+        if signal.source == "adopted":
+            ledger.discard_adopted(signal.id)
         raise
     return Adopted(old.id, fill, signal, _breaches(session, ledger, signal.id, day))
 

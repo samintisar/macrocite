@@ -556,6 +556,16 @@ class LedgerBook:
         ).all()
         return [s for s in rows if s.expires_at >= close]
 
+    def discard_adopted(self, signal_id: int) -> None:
+        """Undo an adopted signal whose buy failed to record: delete it, as a rollback would.
+        Only an adopted, still-`sent` signal that no fill or alert points at can go."""
+        signal = self.signal(signal_id)
+        linked = self._session.exec(select(Fill.id).where(Fill.signal_id == signal_id)).first()
+        if signal.source != "adopted" or signal.status != "sent" or linked is not None:
+            raise LedgerError(f"signal {signal_id} is not an unused adopted signal")
+        self._session.delete(signal)
+        self._session.commit()
+
     def matching_signal(self, cdr_symbol: str, trade_date: date) -> TradeSignal | None:
         """The newest sent or expired scan signal for this CDR from `trade_date` or one of the
         MATCH_SESSIONS NYSE sessions before it: the signal a buy recorded with /buy belongs

@@ -99,6 +99,7 @@ from signalbench.jev.store import (
     reading_builds,
     resolved_builds,
 )
+from signalbench.live.adopt import Adopter
 from signalbench.live.book import LedgerError, SplitKind
 from signalbench.live.bot import BotBrain
 from signalbench.live.heartbeat import write_heartbeat
@@ -1019,6 +1020,12 @@ def scan_status(
         raise typer.Exit(STALE_EXIT)
 
 
+def _adopter() -> Adopter:
+    """The Breakout stop rule for buys with no signal: the live config and the universe."""
+    strategy, _sha = load_strategy_config(LIVE_CONFIG_PATH)
+    return Adopter(config=strategy, universe=load_universe(UNIVERSE_PATH), calendar=NyseSessions())
+
+
 @bot_app.command("run")
 def bot_run() -> None:
     """Poll Telegram for the owner's commands and button presses until stopped."""
@@ -1033,7 +1040,7 @@ def bot_run() -> None:
             write_heartbeat(session, datetime.now(UTC))
 
     brain = BotBrain(chat_id=chat, sessions=get_session, calendar=NyseSessions(), clock=_now,
-                     next_run=_next_scan_run)
+                     next_run=_next_scan_run, adopter=_adopter())
     typer.echo("bot: polling Telegram; only TELEGRAM_CHAT_ID is answered")
     try:
         build_application(token, brain, beat).run_polling(
