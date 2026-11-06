@@ -151,6 +151,14 @@ Formal reports live in `reports/`; decisions in the owner's words live in the ov
 - **Setup check (2026-10-18):** `crypto paper start` loaded 720 daily candles per pair (2024-10-28 to 2026-10-17). A manual run through the unit returned `ok, 0 days added` and sent the PAPER weekly summary. The first backup was written.
 - **Review:** from 2027-10-21, over 2026-10-20 to 2027-10-19, with the same three checks as above.
 
+## 2026-11-06 — Live: every holding gets a stop (live-v3)
+
+- **Kind:** an operations fix to the live v2-none-cash bot, not a test. The strategy rules and the live config are unchanged.
+- **Why:** after botbox's disk failed (Oct 11 to 17 lost), two of the three real holdings had been recorded with `/buy` and had no stop or exit alerts. ZUNH's buy was also saved with the wrong date (Oct 7; Wealthsimple: Oct 15).
+- **Change:** `live-v3` (migration `0019`, plan `2026-11-05-every-holding-gets-a-stop.md`). Every opening buy is linked to a recent scan signal, or gets the Breakout stop at the session before it (an adopted signal). Installed on ubuntuworker 2026-11-06 at about 06:50 UTC, after a verified backup (`~/backups/pre-live-v3-2026-11-06.dump`).
+- **Fixes:** ZUNH (fill 3 → fill 5, dated 2026-10-15) got an adopted stop of C$10.75 / US$373.23. It never closed below it. ZAMZ (fill 4 → fill 6, dated 2026-10-20, as Wealthsimple shows) was linked to its Oct 19 signal, stop C$11.24 / US$249.44. It closed at or below that stop on Oct 23, 26, 29, 30 and Nov 2, so the rules would have sold it at the Oct 26 open. It has closed above the stop since Nov 3. ZVST's Oct 22 stop alert is still unanswered (C$6.16 vs a C$8.14 stop).
+- **Takeaway:** the first live month shows that following the rules depends on the bot knowing every holding. Two of three positions went unwatched for weeks, and at least one rule-based exit was missed.
+
 ## Open questions (not yet tested)
 
 - **Idle cash and holding time:** tested post-hoc in spec 06 (entry above); five of six variants passed. Forward paper trading (spec 07) was built but never started, and its code was removed on 2026-09-30: on 2026-09-29 the owner chose v2-none-cash to use directly, with no out-of-sample test. Its real results are the first out-of-sample evidence and should be logged here.
