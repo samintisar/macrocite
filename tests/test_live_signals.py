@@ -7,6 +7,7 @@ import pytest
 from sqlmodel import Session
 
 from live_helpers import add_pair, make_ledger, send_signal
+from repo_helpers import evening
 from signalbench.live.ledger import Ledger, LedgerError
 
 D = date(2026, 6, 1)  # a Monday: the signal session
@@ -147,3 +148,43 @@ def test_trade_r_is_pnl_over_planned_risk_in_cad_and_in_us_terms(ledger: Ledger)
     us_r = managed.pnl * Decimal(200) / Decimal(40) / (2 * (Decimal(200) - Decimal(188)))
     assert us_r == managed.r
     assert (manual.episode.managed, manual.pnl, manual.r) == (False, Decimal("-1.00"), None)
+
+
+def test_an_adopted_signal_is_recorded_with_its_source(ledger: Ledger) -> None:
+    signal = ledger.record_signal(
+        as_of=D, us_symbol="NVDA", cdr_symbol="ZNVD", us_signal_close=Decimal("200"),
+        us_stop=Decimal("188"), cdr_signal_close=Decimal("40"), suggested_units=Decimal("3"),
+        order_type="market", risk_amount_cad=Decimal("7.20"), explanation="Adopted.",
+        expires_at=evening(E, 16), source="adopted",
+    )
+    assert (signal.source, signal.cdr_stop) == ("adopted", Decimal("37.6000"))
+
+
+def test_a_buy_matches_a_sent_or_expired_scan_signal_from_the_last_5_sessions(
+    ledger: Ledger,
+) -> None:
+    signal = send_signal(ledger, D)  # Monday 2026-06-01
+    assert signal.id is not None
+    assert ledger.matching_signal("ZNVD", D) == signal  # the same day
+    ledger.mark_signal(signal.id, "expired")
+    assert ledger.matching_signal("ZNVD", date(2026, 6, 8)) == signal  # 5 sessions after
+    assert ledger.matching_signal("ZNVD", date(2026, 6, 9)) is None  # 6 sessions after
+    assert ledger.matching_signal("ZNVD", date(2026, 5, 29)) is None  # before it
+    assert ledger.matching_signal("ZAMD", E) is None  # another CDR
+
+
+def test_skipped_withdrawn_taken_and_adopted_signals_are_never_matched(ledger: Ledger) -> None:
+    skipped = send_signal(ledger, D)
+    assert skipped.id is not None
+    ledger.mark_signal(skipped.id, "skipped", "disagree")
+    assert ledger.matching_signal("ZNVD", E) is None
+    ledger.record_signal(
+        as_of=E, us_symbol="NVDA", cdr_symbol="ZNVD", us_signal_close=Decimal("200"),
+        us_stop=Decimal("188"), cdr_signal_close=Decimal("40"), suggested_units=Decimal("1"),
+        order_type="market", risk_amount_cad=Decimal("2.40"), explanation="Adopted.",
+        expires_at=evening(E, 16), source="adopted",
+    )
+    assert ledger.matching_signal("ZNVD", E) is None
+    taken = send_signal(ledger, date(2026, 6, 3))
+    _fill(ledger, "buy", "1", "40", date(2026, 6, 4), signal_id=taken.id or 0)
+    assert ledger.matching_signal("ZNVD", date(2026, 6, 4)) is None

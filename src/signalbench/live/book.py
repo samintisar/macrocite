@@ -11,7 +11,7 @@ Ids are integers: the owner types `/void 12`, and Telegram button data is capped
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Literal, get_args
 from uuid import UUID
@@ -46,6 +46,8 @@ AlertStatus = Literal["sent", "done", "ignored"]
 SplitKind = Literal["us_split", "cdr_split"]
 SplitSource = Literal["yfinance", "owner"]
 OrderType = Literal["limit", "market"]
+SignalSource = Literal["scan", "adopted"]
+MATCH_SESSIONS = 5  # a buy links to a scan signal from up to this many sessions before it
 
 NEW_YORK = ZoneInfo("America/New_York")
 MARKET_OPEN = time(9, 30)  # New York: an entry sent after its session's open is late
@@ -482,13 +484,16 @@ class LedgerBook:
         risk_amount_cad: Decimal,
         explanation: str,
         expires_at: datetime,
+        source: SignalSource = "scan",
     ) -> TradeSignal:
-        """A sent entry signal. stop_pct and cdr_stop are derived here (signal_levels())."""
+        """A sent entry signal, or (`source` adopted) the Breakout stop set for a buy with no
+        signal (live/adopt.py). stop_pct and cdr_stop are derived here (signal_levels())."""
         us = self._ticker(us_symbol, TickerKind.us_stock)
         cdr = self._cdr(cdr_symbol)
         if cdr.us_ticker_id != us.id:
             raise LedgerError(f"{cdr_symbol} is not the CDR of {us_symbol}")
         check_choice(order_type, get_args(OrderType), "order type")
+        check_choice(source, get_args(SignalSource), "source")
         if not 0 < us_stop < us_signal_close or cdr_signal_close <= 0 or suggested_units <= 0:
             raise LedgerError("a signal needs 0 < stop < close, a CDR close, and units above 0")
         taken = self._session.exec(
@@ -506,6 +511,7 @@ class LedgerBook:
             cdr_signal_close=q4(cdr_signal_close), cdr_stop=cdr_stop,
             suggested_units=suggested_units.quantize(QUANTITY_STEP), order_type=order_type,
             risk_amount_cad=q4(risk_amount_cad), explanation=explanation, expires_at=expires_at,
+            source=source,
         )
         self._session.add(signal)
         self._session.commit()
@@ -549,6 +555,25 @@ class LedgerBook:
             .order_by(col(TradeSignal.id))
         ).all()
         return [s for s in rows if s.expires_at >= close]
+
+    def matching_signal(self, cdr_symbol: str, trade_date: date) -> TradeSignal | None:
+        """The newest sent or expired scan signal for this CDR from `trade_date` or one of the
+        MATCH_SESSIONS NYSE sessions before it: the signal a buy recorded with /buy belongs
+        to. Skipped, withdrawn, taken, and adopted signals are never matched."""
+        cdr = self._cdr(cdr_symbol)
+        before = self._calendar.sessions_between(
+            trade_date - timedelta(days=3 * MATCH_SESSIONS + 10), trade_date - timedelta(days=1)
+        )
+        earliest = before[-MATCH_SESSIONS] if len(before) >= MATCH_SESSIONS else trade_date
+        return self._session.exec(
+            select(TradeSignal)
+            .where(
+                TradeSignal.cdr_ticker_id == cdr.id, TradeSignal.source == "scan",
+                col(TradeSignal.status).in_(("sent", "expired")),
+                col(TradeSignal.as_of) >= earliest, col(TradeSignal.as_of) <= trade_date,
+            )
+            .order_by(col(TradeSignal.as_of).desc())
+        ).first()
 
     def record_exit_alert(
         self, *, signal_id: int, as_of: date, reason: AlertReason, late: bool = False
