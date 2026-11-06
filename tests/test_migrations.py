@@ -14,7 +14,7 @@ def _script() -> ScriptDirectory:
 
 
 def test_migrations_have_single_head() -> None:
-    assert _script().get_heads() == ["0018_paper_crypto"]
+    assert _script().get_heads() == ["0019_signal_source"]
 
 
 def test_0018_creates_the_four_paper_tables() -> None:

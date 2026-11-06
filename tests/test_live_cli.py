@@ -1,5 +1,6 @@
 """`signalbench live start` and `signalbench ledger tax|split|void-action` wiring (spec 04)."""
 
+from contextlib import nullcontext
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -10,10 +11,14 @@ from typer.testing import CliRunner
 
 from live_helpers import add_pair, load_example, make_ledger, record_example
 from repo_helpers import NEW_YORK, git
+from scan_helpers import DAYS, LIVE, NVDA, UNIVERSE, B, make_world
 from signalbench import cli
 from signalbench.cli import app
 from signalbench.db.models import LiveConfig
+from signalbench.live.adopt import Adopter
 from signalbench.live.start import LIVE_CONFIG
+from signalbench.strategy.config import load_strategy_config
+from strategy_helpers import WeekdaySessions
 
 runner = CliRunner()
 REPO = Path(__file__).resolve().parents[1]
@@ -31,7 +36,7 @@ def ledger_cli(session: Session, monkeypatch: pytest.MonkeyPatch) -> Session:
 def test_help_lists_the_live_and_ledger_commands() -> None:
     assert "start" in runner.invoke(app, ["live", "--help"]).stdout
     listed = runner.invoke(app, ["ledger", "--help"]).stdout
-    for command in ("tax", "split", "void-action"):
+    for command in ("tax", "split", "void-action", "adopt"):
         assert command in listed
 
 
@@ -104,3 +109,60 @@ def test_ledger_split_and_void_action_refuse_with_one_line(ledger_cli: Session) 
     assert refused.stderr.startswith("ZTST had no open position or sent signal on 2026-03-09")
     missing = runner.invoke(app, ["ledger", "void-action", "9", "no such row"])
     assert (missing.exit_code, missing.stderr) == (1, "no corporate action 9 to void\n")
+
+
+def _adopt_world(
+    session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, closes: dict | None = None
+) -> int:
+    """The scan world (XOM flat at US$100, ATR 2: an adopted stop of US$96 / C$9.60) with a
+    manual 3-unit ZXOM buy on DAYS[B - 3]; the CLI on its weekday calendar. Returns the fill id."""
+    world = make_world(session, tmp_path, closes=closes)
+    monkeypatch.setattr(cli, "get_session", lambda: nullcontext(session))
+    monkeypatch.setattr(cli, "_ledger", lambda s: make_ledger(s, today=DAYS[B + 1]))
+    monkeypatch.setattr(cli, "_adopter", lambda: Adopter(
+        config=load_strategy_config(world.repo / LIVE)[0], universe=UNIVERSE,
+        calendar=WeekdaySessions(),
+    ))
+    fill = world.ledger(B + 1).record_fill(
+        cdr_symbol="ZXOM", side="buy", quantity=Decimal(3), price_cad=Decimal("10.20"),
+        trade_date=DAYS[B - 3],
+    )
+    assert fill.id is not None
+    return fill.id
+
+
+def test_ledger_adopt_relinks_a_manual_buy_and_prints_its_stop(
+    session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fill_id = _adopt_world(session, monkeypatch, tmp_path)
+    result = runner.invoke(app, ["ledger", "adopt", str(fill_id), "--date", str(DAYS[B - 2])])
+    assert result.exit_code == 0, result.output
+    assert result.stdout.splitlines() == [(
+        f"adopted fill {fill_id} → fill {fill_id + 1} on {DAYS[B - 2]}: signal 1 (adopted), "
+        "stop C$9.60 / US$96.00"
+    )]
+
+
+def test_ledger_adopt_warns_when_the_stop_was_already_hit(
+    session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fill_id = _adopt_world(session, monkeypatch, tmp_path,
+                           closes={"NVDA": NVDA, "XOM": {B: 90.0}})
+    result = runner.invoke(app, ["ledger", "adopt", str(fill_id)])
+    assert result.exit_code == 0, result.output
+    assert result.stdout.splitlines()[1] == (
+        f"⚠️ closed at or below the stop on {DAYS[B]}, {DAYS[B + 1]}: by the rules it should "
+        "have been sold"
+    )
+
+
+def test_ledger_adopt_refuses_with_one_line(
+    session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _adopt_world(session, monkeypatch, tmp_path)
+    result = runner.invoke(app, ["ledger", "adopt", "99"])
+    assert result.exit_code == 1
+    assert result.stderr == "⚠️ fill 99 is not a manual buy\n"
+    bad = runner.invoke(app, ["ledger", "adopt", "1", "--date", "2026-13-01"])
+    assert bad.exit_code == 1
+    assert bad.stderr.startswith("⚠️ ")

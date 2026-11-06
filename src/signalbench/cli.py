@@ -99,11 +99,12 @@ from signalbench.jev.store import (
     reading_builds,
     resolved_builds,
 )
-from signalbench.live.adopt import Adopter
+from signalbench.live.adopt import Adopter, adopt_fill
 from signalbench.live.book import LedgerError, SplitKind
 from signalbench.live.bot import BotBrain
 from signalbench.live.heartbeat import write_heartbeat
 from signalbench.live.ledger import Ledger
+from signalbench.live.messages import cad, usd
 from signalbench.live.messenger import ConsoleMessenger, TelegramMessenger, redact
 from signalbench.live.scan import LIVE_SCAN_LOCK, ScanOutcome, dry_run_session, run_scan
 from signalbench.live.start import LIVE_CONFIG, start_live
@@ -854,6 +855,37 @@ def ledger_split(
         typer.echo(str(error), err=True)
         raise typer.Exit(1) from None
     typer.echo(line)
+
+
+@ledger_app.command("adopt")
+def ledger_adopt(
+    fill_id: Annotated[int, typer.Argument(help="A held manual position's opening buy (fill id).")],
+    day: Annotated[
+        str | None, typer.Option("--date", help="Correct the trade date (YYYY-MM-DD).")
+    ] = None,
+) -> None:
+    """Give a manual holding a stop: re-record its opening buy linked to a recent signal, or to
+    the Breakout stop (the old fill is voided, never edited)."""
+    try:
+        trade_date = None if day is None else date.fromisoformat(day)
+        adopter = _adopter()
+        with get_session() as session:
+            result = adopt_fill(session, _ledger(session), adopter, fill_id, trade_date=trade_date)
+            signal = result.signal
+            lines = [(
+                f"adopted fill {result.old_fill_id} → fill {result.fill.id} on "
+                f"{result.fill.trade_date}: signal {signal.id} ({signal.source}), stop "
+                f"{cad(signal.cdr_stop)} / {usd(signal.us_stop)}"
+            )]
+            if result.breaches:
+                dates = ", ".join(str(d) for d in result.breaches)
+                lines.append(f"⚠️ closed at or below the stop on {dates}: by the rules it "
+                             "should have been sold")
+    except (LedgerError, ValueError) as error:
+        typer.echo(f"⚠️ {' '.join(str(error).split())}", err=True)
+        raise typer.Exit(1) from None
+    for line in lines:
+        typer.echo(line)
 
 
 @ledger_app.command("void-action")
