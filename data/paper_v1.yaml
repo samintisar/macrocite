@@ -1,0 +1,26 @@
+# Pre-registered forward paper portfolios (spec 07). Committed on its own before
+# `signalbench paper start`. Do not edit: a new idea is a new portfolio in a new
+# data/paper_<n>.yaml. v1-breakout and v2-t30-cash have the same rules, so their trades
+# must match every night; any difference is a bug in the runner.
+portfolios:
+  - name: v1-breakout
+    config: data/strategy_v1.yaml
+    setup: breakout
+  - name: v2-t30-cash
+    config: data/strategy_v2-t30-cash.yaml
+    setup: breakout
+  - name: v2-t30-qqq
+    config: data/strategy_v2-t30-qqq.yaml
+    setup: breakout
+  - name: v2-t60-cash
+    config: data/strategy_v2-t60-cash.yaml
+    setup: breakout
+  - name: v2-t60-qqq
+    config: data/strategy_v2-t60-qqq.yaml
+    setup: breakout
+  - name: v2-none-cash
+    config: data/strategy_v2-none-cash.yaml
+    setup: breakout
+  - name: v2-none-qqq
+    config: data/strategy_v2-none-qqq.yaml
+    setup: breakout
